@@ -1,0 +1,17 @@
+tools::
+	cisco-torch
+	cisco-*
+	yersinia
+	nmap
+	websploit
+	routersploit
+	wireshark
+	metasploit-framework
+	netcat
+	Burp
+	***maltego***:need to confirm
+	scapy
+	impacket-*
+	netdiscover
+	blue*
+	

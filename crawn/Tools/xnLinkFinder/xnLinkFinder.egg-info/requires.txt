@@ -1,0 +1,10 @@
+argparse
+beautifulsoup4
+html5lib
+lxml
+psutil
+pyyaml
+requests
+termcolor
+urllib3
+urlparse3

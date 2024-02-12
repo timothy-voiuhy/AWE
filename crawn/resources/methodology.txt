@@ -1,0 +1,123 @@
+Location of server:
+	country/countries
+	:server hosting
+		:hosted locally
+		:AWS or other server hosting platforms
+														#TOOLS
+															:nmap
+															:legion
+Enumerate Server:
+	Implementation/flavour 
+		:nginx
+		:apache
+		:MIS
+	Software version of server:
+		:check for existing CVE's
+
+Enumerate Server defenses:
+	WAF
+	DMZ
+	Network firewall
+	AI solutions
+	Load Balancer and virtual servers
+		::how the load balancer handles sessions
+	Virtual(VM) Servers
+
+		for server_defense in server_defenses:
+			get software_version:
+				check with existing vulnerabilities and CVES		
+
+# By the end of the above ,you should be able to make a network map of the whole system
+
+OSINT
+							## TOOLS
+								:maltego
+								:reconspider
+								:set
+								:sherlock
+Developers:
+	info concerning the developers:
+		Name
+		Email
+		social network information (facebook,instagram,linkendin,youtube,etc)
+		Historical Information
+		coding conventions
+
+Employees:
+	info concerning the company employees:
+		Name
+		Email
+		social network information
+		personal information(family,history,etc)
+
+# Information obtained helps in username bruteforcing, gaining admin bruteforcing,and possible password bruteforcing
+
+# Go the main page / domain 
+what does the webapp do:
+	marketing
+	Banking
+	Transport
+	Trading, etc
+	## know what the application does in so doing :
+		Map the possible impact of an attacker on the applications and applications 
+		users:
+
+Client side software and libraries:
+	Get versions:
+		Check out for existing vulnerabilities and CVE's
+		
+Analyze the client side and server side technologies being used and notice out the vulnerabilities that are going to be tested or concentrated on for that specific js library for both the server end and the client end.
+
+including identifying the database at the backend being used and then focusing on given vulnerabilities forexample if an application is using mongo db then one can the focus on nosql injection and may be grapql injection: something of that kind.	
+
+POSSIBLE VULNS = analysis of the tech stack especially for the side attacks since they are more of being tech specific.
+rule out the different vulnerabilities depending on the tech stack.
+
+	
+	FOR LIBs:																###TOOLS
+																					:wapplyzer
+
+Get domains and subdomains:
+
+for subdomain in subdomains:
+	get all directories: (this is done by crawling and bruteforcing directories to get unknown endpoints)
+				using tools like atom , link finder , ffuf, dirb, dirbuseter and so on
+		for directory(page) in directories:
+			is the root directory and endpoint forexample a login page , something else
+			get all endpoints:(these include the previous pages found and also individual functionalities fo	
+				found on the page forexample it can a file upload, share functionality etc.
+				for endpoint in endpoints:
+					Test:
+						for POSSIBLE VULNS :
+						authentication
+							:password guessing 
+							:spoofing tokens with a cookie
+							:analysing existing defenses like security question , forgot password 
+							functionality.
+							:lookout policies
+						authorization 
+							:attacking access to resources like files folders and so on
+							:changing the user principle(eg altering from or cooke values)
+							:requsting hidden objects
+							:attempting caononicalisation attacks
+							:escalating priviledges
+							:tunneling commands to the sql server
+						server testing
+						client testing
+						session handling
+						Functional analysis
+							:testing individual functionalities in the application[involves analysing js 
+							code and testing out what it does and how it does it
+							:breaking such functionalities and combining withe the other vulnerabilities 
+							that are present in the web appliction.
+						attacking data connectivity
+							:attacking the back end database
+						attacking management interfaces
+						launcking a DOS(unlikely not in a bug bounty hunt)
+													
+													VULNERABILITIES:: 
+													FOR EACH TECH STACK(programming languages, Frameworks):
+														WHAT VUNERABILITIES NORMALLY AFFECT IT.
+
+for endpoint in enpoints:
+	get apis:(api testing)
