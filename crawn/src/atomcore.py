@@ -122,7 +122,7 @@ class MainRunner:
         self.main_domain_ips = []
         self.pg_failed_urls = []
         self.use_browser = use_browser
-        self.browser_logger = makelogger("FIREFOX_LOGGER", "firefox_logger", level=logging.ERROR)
+        self.browser_logger = makelogger("FIREFOX_LOGGER", "firefox_logger", level=logging.ERROR, projectDir=self.MAIN_DIR)
         Brw = Browser()
         if self.use_browser:
             print(cyan("\t\t Opening Browser ........"))
@@ -350,7 +350,7 @@ class MainRunner:
         it also does a manual redirect if session is false but if session is true \n
         it leaves the redirect handling to the session"""
 
-        get_logger = makelogger("ProcessGet", "get_requests.log", level=logging.INFO)
+        get_logger = makelogger("ProcessGet", "get_requests.log", level=logging.INFO, projectDir=self.MAIN_DIR)
         url, w_url = self.ProcessUrl(urll)
 
         def get_http_v(url, w_url):
@@ -562,7 +562,7 @@ class MainRunner:
         print(f"{cyan('getting the content from the js_src links in file js_srcs')}")
         print("\t\t\t-------------------------------------")
 
-        get_js_logger = makelogger("get_js_data", "get_js_data.log", level=logging.INFO)
+        get_js_logger = makelogger("get_js_data", "get_js_data.log", level=logging.INFO, projectDir=self.MAIN_DIR)
         try:
             # finished_links = []
             if file_path is not None:  # if file_path is not an empty string meaning that provide_file is True
@@ -933,7 +933,7 @@ class MainRunner:
     async def r_get_data(self, depth: int, directory=None):
         """description: recursively get the html and js files from the server\n
         for a given depth"""
-        recursive_logger = makelogger("recursive_logger", "recursive_logger.log", level=logging.INFO)
+        recursive_logger = makelogger("recursive_logger", "recursive_logger.log", level=logging.INFO,projectDir=self.MAIN_DIR)
         if self.recursive:
             if directory is None:
                 print(cyan("no directory specified, using main directory"))
@@ -1098,13 +1098,12 @@ class MainRunner:
     def ConstructUrlWithParameters(self, url, parameters_dict):
         pass
 
-
 async def RunMainAtomFunction(domain, dirr, u_http, use_browser):
     tracemalloc.start()
     url = str(domain)
     __url__ = str(domain)
     before_mem = tracemalloc.get_traced_memory()[0]
-    cwl = MainRunner(domain, dirr, recursive=False, use_http=u_http, use_browser=use_browser)
+    cwl = MainRunner(url, dirr, recursive=False, use_http=u_http, use_browser=use_browser)
     # await cwl.get_js_links()
     # if not use_browser:
     #     await cwl.get_js_content()
@@ -1112,7 +1111,6 @@ async def RunMainAtomFunction(domain, dirr, u_http, use_browser):
     await cwl.session.close()
     after_mem = tracemalloc.get_traced_memory()[0]
     print(f"MEMORY USED:: {((after_mem - before_mem) / (1024 * 1024)):.2f} MBS")
-
 
 async def main(args):  # main function processes the args
     if len(args.domains) != len(args.dirr):

@@ -5,7 +5,7 @@ from PySide6.QtCore import QThread
 from pathlib import Path
 import asyncio
 from atomcore import RunMainAtomFunction
-from concurrent.futures import ProcessPoolExecutor,ThreadPoolExecutor
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 import os
 import json
 import re
@@ -14,7 +14,7 @@ from PySide6.QtGui import QKeyEvent
 from utiliities import addHttpsScheme
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QWidget
-from utiliities import red, cyan, AmassSubdProcessor
+from utiliities import red, cyan, AmassSubdProcessor, SubDomainizerRunner
 
 """ functionalities so far:
 program output
@@ -34,22 +34,55 @@ git and github account setup
 
 """
 
-def atomGuiGetUrls(emcpfile_path, workingdir):
-    amassProcessor =AmassSubdProcessor(workingDir=workingdir)
-    amassProcessor.parseAmassData()
-    with open(emcpfile_path, "r") as file:
-        data = file.read()
-        jsonData = dict(json.loads(data))
-        emcpData = jsonData["data"]
-        subdomains = ""
-        sub_l = set()
-        len_subdomains = len(emcpData)
-        for domain in emcpData:
-            urlDomain = domain["subdomain"]
-            if urlDomain not in sub_l:
-                sub_l.add(urlDomain) 
-                subdomains = subdomains+urlDomain+"\n"
-    return subdomains, len_subdomains        
+
+class amassFailure(Exception):
+    pass
+
+
+def HighlightUrls():
+    pass
+
+
+def GetUrls(workingdir):
+    hrefLinksFile = os.path.join(workingdir, "href_links")
+    # read the index file and return the urls in it
+    urls = open(hrefLinksFile, "r").read()
+    return urls
+
+
+def atomGuiGetSubdomains(emcpfile_path, workingdir):
+    try:
+        amassProcessor = AmassSubdProcessor(workingDir=workingdir)
+        try:
+            amassProcessor.parseAmassData()
+        except:
+            raise amassFailure
+        with open(emcpfile_path, "r") as file:
+            data = file.read()
+            jsonData = dict(json.loads(data))
+            emcpData = jsonData["data"]
+            subdomains = ""
+            sub_l = set()
+            len_subdomains = len(emcpData)
+            for domain in emcpData:
+                urlDomain = domain["subdomain"]
+                if urlDomain not in sub_l:
+                    sub_l.add(urlDomain)
+                    subdomains = subdomains + urlDomain + "\n"
+
+        with open(workingdir + "subdomains.txt", "r") as file:
+            data = file.read()
+
+        subdomains = subdomains + data
+        return subdomains, len_subdomains, 1
+
+    except amassFailure:
+        with open(workingdir + "/subdomains.txt", "r") as file:
+            data = file.read()
+            len_subdomains = len(file.readlines())
+            return data, len_subdomains, 0
+    return None
+
 
 class Qterminal(QtWidgets.QTextEdit):
     def __init__(self) -> None:
@@ -57,95 +90,135 @@ class Qterminal(QtWidgets.QTextEdit):
         self.terminalDefaultText = ">>>"
         self.setPlainText(self.terminalDefaultText)
         self.placeCursorAtEnd()
-        self.currentWorkingDir = self.getCurrentWorkingDir().replace("\n","").strip()
+        font = self.font()
+        font.setPointSize(font.pointSize() + 1)
+        self.setFont(font)
+        self.currentWorkingDir = self.getCurrentWorkingDir().replace("\n", "").strip()
         self.acceptRichText()
         self.plainStringRegexPattern = "[a-zA-Z]+"
 
     def getCurrentWorkingDir(self):
-        output = subprocess.Popen("pwd",shell=True, stdout = subprocess.PIPE, stderr  = subprocess.PIPE)
+        output = subprocess.Popen(
+            "pwd", shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE
+        )
         pwd = output.communicate()[0].decode("utf-8")
         return pwd
+
     # def Initialize(self):
-        # self.TextEditTerminal = QtWidgets.QTextEdit()
-    
+    # self.TextEditTerminal = QtWidgets.QTextEdit()
+
     def keyPressEvent(self, e: QKeyEvent) -> None:
         if e.key() == Qt.Key_Return or e.key() == Qt.Key_Enter:
-            lines  = self.toPlainText()
+            lines = self.toPlainText()
             # self.doSetTextCursor(QtCore.Qmain)
-            Lines= lines.split("\n")
-            command = Lines[len(Lines)-1].replace(self.terminalDefaultText,"").strip()
+            Lines = lines.split("\n")
+            command = (
+                Lines[len(Lines) - 1].replace(self.terminalDefaultText, "").strip()
+            )
             if command != "":
                 if command == "clear":
                     self.clear()
                     self.setPlainText(self.terminalDefaultText)
                     self.placeCursorAtEnd()
                 elif command.startswith("cd "):
-                    precurrentWorkingDir =""
+                    precurrentWorkingDir = ""
                     UserSetWorkingDir = command.split(" ")[1]
                     if UserSetWorkingDir.startswith("/"):
-                        precurrentWorkingDir = self.currentWorkingDir + UserSetWorkingDir + "/"
+                        precurrentWorkingDir = (
+                            self.currentWorkingDir + UserSetWorkingDir + "/"
+                        )
                     elif UserSetWorkingDir == "..":
                         if not self.currentWorkingDir == "/":
-                            currentWorkingDirr = self.currentWorkingDir.split("/")
-                            [currentWorkingDirr.remove(dirr) for dirr in currentWorkingDirr if dirr == ""]
+                            currentWorkingDirr = self.currentWorkingDir.split(
+                                "/")
+                            [
+                                currentWorkingDirr.remove(dirr)
+                                for dirr in currentWorkingDirr
+                                if dirr == ""
+                            ]
                             currentWorkingDirr.remove(currentWorkingDirr[-1])
                             newCurrentWorkingDir = ""
                             for dirr in currentWorkingDirr:
-                                if currentWorkingDirr.index(dirr) == len(dirr)-1:
-                                    newCurrentWorkingDir= newCurrentWorkingDir + "/" + dirr + "/"
+                                if currentWorkingDirr.index(dirr) == len(dirr) - 1:
+                                    newCurrentWorkingDir = (
+                                        newCurrentWorkingDir + "/" + dirr + "/"
+                                    )
                                 else:
-                                    newCurrentWorkingDir = newCurrentWorkingDir + "/" +dirr
+                                    newCurrentWorkingDir = (
+                                        newCurrentWorkingDir + "/" + dirr
+                                    )
                             precurrentWorkingDir = newCurrentWorkingDir
                     elif UserSetWorkingDir == ".":
-                        self.currentWorkingDir = self.currentWorkingDir 
-                    elif re.match(self.plainStringRegexPattern,UserSetWorkingDir) is not None:
-                        UserSetWorkingDir = "/"+UserSetWorkingDir+"/"
-                        precurrentWorkingDir = self.currentWorkingDir+UserSetWorkingDir
+                        self.currentWorkingDir = self.currentWorkingDir
+                    elif (
+                        re.match(self.plainStringRegexPattern,
+                                 UserSetWorkingDir)
+                        is not None
+                    ):
+                        UserSetWorkingDir = "/" + UserSetWorkingDir + "/"
+                        precurrentWorkingDir = (
+                            self.currentWorkingDir + UserSetWorkingDir
+                        )
                     if os.path.isdir(precurrentWorkingDir):
                         self.currentWorkingDir = precurrentWorkingDir
-                    totalLines = lines+"\n"+self.terminalDefaultText
+                    totalLines = lines + "\n" + self.terminalDefaultText
                     # if totalLines[len(totalLines)-1] != self.terminalDefaultText[0]:
                     self.setPlainText(totalLines)
-                    self.placeCursorAtEnd()   
+                    self.placeCursorAtEnd()
                 else:
-                    commandResult = subprocess.Popen(command ,shell=True, stdout = subprocess.PIPE, stderr=subprocess.PIPE,cwd = self.currentWorkingDir)
+                    commandResult = subprocess.Popen(
+                        command,
+                        shell=True,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        cwd=self.currentWorkingDir,
+                    )
                     commandOutput_ = commandResult.communicate()
                     commandOutput = commandOutput_[0]
                     if commandOutput is not None:
                         commandOutput = commandOutput.decode("utf-8")
-                        totalLines = lines+"\n"+commandOutput+"\n"+self.terminalDefaultText
+                        totalLines = (
+                            lines
+                            + "\n"
+                            + commandOutput
+                            + "\n"
+                            + self.terminalDefaultText
+                        )
                     else:
                         commandError = commandOutput_[1].decode("utf-8")
-                        totalLines = lines+commandError+"\n"+self.terminalDefaultText
+                        totalLines = (
+                            lines + commandError + "\n" + self.terminalDefaultText
+                        )
                     self.setPlainText(totalLines)
                     self.placeCursorAtEnd()
-                    
-        elif e.key() == Qt.Key_Backspace:    
-            current_text  = self.toPlainText()
+
+        elif e.key() == Qt.Key_Backspace:
+            current_text = self.toPlainText()
             current_text_len = len(current_text)
-            if current_text[current_text_len-1] == self.terminalDefaultText[0]:
+            if current_text[current_text_len - 1] == self.terminalDefaultText[0]:
                 pass
             else:
                 super().keyPressEvent(e)
-        else:    
-            super().keyPressEvent(e)    
-    
+        else:
+            super().keyPressEvent(e)
+
     def placeCursorAtEnd(self):
         text_len = len(self.toPlainText())
-        cursor  = self.textCursor()
+        cursor = self.textCursor()
         cursor.setPosition(text_len)
         self.setTextCursor(cursor)
+
 
 # accessign default icons
 # pixmapi = QtWidgets.QStyle.SP_MessageBoxCritical
 # icon = self.style().standardIcon(pixmapi)
-class RightDock():
-    def __init__(self, MainWindow:QtWidgets.QMainWindow) -> None:
+class RightDock:
+    def __init__(self, MainWindow: QtWidgets.QMainWindow, projectsDir) -> None:
+        self.projectsDirPath = projectsDir
         self.MainWindow = MainWindow
         self.rightDockNotePadOpenfile = ""
 
     def InitializeDock(self):
-        
         # right dock
         self.RightDock = QtWidgets.QDockWidget("Take Your Notes, Edit Files")
         self.rightDockWidget = QtWidgets.QWidget()
@@ -155,7 +228,7 @@ class RightDock():
         self.rightDockWidget.setLayout(self.rightDockLayoutMain)
 
         self.rightDockUpperWidget = QtWidgets.QWidget()
-    
+
         self.AddMainMenu()
         self.AddSettingsMenu()
 
@@ -164,35 +237,69 @@ class RightDock():
         self.rightDockUpperLayout.addWidget(self.rightDockSettingsButton)
         self.rightDockUpperWidget.setLayout(self.rightDockUpperLayout)
         self.rightDockLayoutMain.addWidget(self.rightDockUpperWidget)
-        
+
         self.rightDockBottomLayout = QtWidgets.QGridLayout()
         self.rightDockLayoutMain.addLayout(self.rightDockBottomLayout)
-        #notepad
+        # notepad
         self.rightDockNotePad = QtWidgets.QTextEdit()
-        self.rightDockBottomLayout.addWidget(self.rightDockNotePad,1,0)
+        self.rightDockBottomLayout.addWidget(self.rightDockNotePad, 1, 0)
 
         self.rightDockArea = QtCore.Qt.DockWidgetArea()
-        self.MainWindow.addDockWidget(self.rightDockArea.RightDockWidgetArea ,self.RightDock)
+        self.MainWindow.addDockWidget(
+            self.rightDockArea.RightDockWidgetArea, self.RightDock
+        )
         return self.RightDock
 
+    def increaseFont(self):
+        Font = self.rightDockNotePad.font()
+
+        # get the factor of increment
+        # make a simple widget, add to it a lineEdit and an ok button
+        def setFontSize():
+            try:
+                fontincreament = int(self.rightDockFontWidgetLineEdit.text())
+                Font.setPointSize(Font.pointSize() + fontincreament)
+                self.rightDockNotePad.setFont(Font)
+                self.rightDockFontWidget.close()
+            except ValueError:
+                self.rightDockFontWidgetLineEdit.setStyleSheet(
+                    "QLineEdit{border: 2px solid red;}"
+                )
+
+        self.rightDockFontWidget = QtWidgets.QWidget()
+        self.rightDockFontWidgetLayout = QtWidgets.QHBoxLayout()
+        self.rightDockFontWidgetLineEdit = QtWidgets.QLineEdit()
+        self.rightDockFontWidgetOkButton = QtWidgets.QPushButton("Ok")
+        self.rightDockFontWidgetOkButton.clicked.connect(setFontSize)
+        self.rightDockFontWidgetLayout.addWidget(
+            self.rightDockFontWidgetOkButton)
+        self.rightDockFontWidgetLayout.addWidget(
+            self.rightDockFontWidgetLineEdit)
+        self.rightDockFontWidget.setWindowTitle("increase font")
+        self.rightDockFontWidget.setLayout(self.rightDockFontWidgetLayout)
+        self.rightDockFontWidget.show()
 
     def AddSettingsMenu(self):
-        
-        rightDockSettingsButtonIcon  = QtGui.QIcon.fromTheme("preferences-system")
+        rightDockSettingsButtonIcon = QtGui.QIcon.fromTheme(
+            "preferences-system")
         # settngs menu
         self.rightDockSettingsMenu = QtWidgets.QMenu()
         rightNotepadTheme = self.rightDockSettingsMenu.addAction("theme")
-        rightNotepadFont = self.rightDockSettingsMenu.addAction("font")
+        self.rightDockNotepadFont = self.rightDockSettingsMenu.addAction(
+            "font")
+        self.rightDockNotepadFont.triggered.connect(self.increaseFont)
         # settings button
         self.rightDockSettingsButton = QtWidgets.QPushButton()
         self.rightDockSettingsButton.setFixedWidth(28)
         self.rightDockSettingsButton.setIcon(rightDockSettingsButtonIcon)
         self.rightDockSettingsButton.clicked.connect(self.ShowSettings)
-    
+
     def AddMainMenu(self):
         def rightDockTextBroserOpenFile():
             rightDockFileDialog = QtWidgets.QFileDialog()
-            self.rightDockNotePadOpenfile = rightDockFileDialog.getOpenFileName(None,"Open File", "/", "Text Files (*.txt)")[0]
+            self.rightDockNotePadOpenfile = rightDockFileDialog.getOpenFileName(
+                None, "Open File", "/", "All Files (*.*)"
+            )[0]
             with open(self.rightDockNotePadOpenfile, "r") as file:
                 text = file.read()
                 file.close()
@@ -208,30 +315,64 @@ class RightDock():
                 saveMessageBox.setStandardButtons(QtWidgets.QMessageBox.Ok)
                 edited_text = self.rightDockNotePad.toPlainText()
                 ret = saveMessageBox.exec()
-                if ret == QtWidgets.QMessageBox.Ok: 
+                if ret == QtWidgets.QMessageBox.Ok:
                     with open(self.rightDockNotePadOpenfile, "w") as file:
                         file.write(edited_text)
-                return ret        
-            
+                return ret
+
         def rightDockTextBroserCloseFile():
-            if rightDockTextBroserSaveFile() == QtWidgets.QMessageBox.Ok:
-                self.rightDockNotePadOpenfile = ""
-                self.rightDockNotePad.clear()
+            if self.rightDockNotePadOpenfile is not None:
+                if rightDockTextBroserSaveFile() == QtWidgets.QMessageBox.Ok:
+                    self.rightDockNotePadOpenfile = None
+                    self.rightDockNotePad.clear()
+            else:
+                infoMessageBox = QtWidgets.QMessageBox()
+                infoMessageBox.setWindowTitle("Information")
+                infoMessageBox.setText("No open file")
+                infoMessageBox.setIcon(QtWidgets.QMessageBox.Information)
+                infoMessageBox.setStandardButtons(QtWidgets.QMessageBox.Ok)
+                ret = infoMessageBox.exec()
+                if ret == QtWidgets.QMessageBox.Ok:
+                    pass
 
         rightDockMenuButtonIcon = QtGui.QIcon.fromTheme("view-list")
         # right dock menu
         self.rightDockMenu = QtWidgets.QMenu()
-        self.rightDockOpenFileAction= self.rightDockMenu.addAction("Open Existing")
-        self.rightDockOpenFileAction.triggered.connect(rightDockTextBroserOpenFile)
-        self.rightDockOpenSaveAction=self.rightDockMenu.addAction("Save File")
-        self.rightDockOpenSaveAction.triggered.connect(rightDockTextBroserSaveFile)
+        self.rightDockOpenNotesFileAction = self.rightDockMenu.addAction(
+            "Open Notes File"
+        )
+        self.rightDockOpenNotesFileAction.triggered.connect(
+            self.rightDockOpenNotesFile)
+        self.rightDockOpenFileAction = self.rightDockMenu.addAction(
+            "Open Existing")
+        self.rightDockOpenFileAction.triggered.connect(
+            rightDockTextBroserOpenFile)
+        self.rightDockOpenSaveAction = self.rightDockMenu.addAction(
+            "Save File")
+        self.rightDockOpenSaveAction.triggered.connect(
+            rightDockTextBroserSaveFile)
         self.rightDockCloseAction = self.rightDockMenu.addAction("Close file")
-        self.rightDockCloseAction.triggered.connect(rightDockTextBroserCloseFile)
+        self.rightDockCloseAction.triggered.connect(
+            rightDockTextBroserCloseFile)
         # menu button
         self.rightDockMenuButton = QtWidgets.QPushButton()
         self.rightDockMenuButton.setFixedWidth(28)
         self.rightDockMenuButton.setIcon(rightDockMenuButtonIcon)
         self.rightDockMenuButton.clicked.connect(self.RightDockShowMenu)
+
+    def rightDockOpenNotesFile(self):
+        # make a file named target_notes if it does not exists
+        self.notesFile = "target_notes"
+        self.notesfilepath = os.path.join(self.projectsDirPath, self.notesFile)
+        if not Path(self.notesfilepath).exists():
+            # create the notesfile in the notesfilepath
+            with open(self.notesfilepath, "a") as file:
+                file.close()
+        # no need to first choose the file using the qtfiledialog
+        self.rightDockNotePadOpenfile = self.notesfilepath
+        # open the file and place its contents on the notepad
+        filecontents = open(self.notesfilepath, "r").read()
+        self.rightDockNotePad.setText(filecontents)
 
     # @classmethod
     def ShowSettings(self):
@@ -241,18 +382,21 @@ class RightDock():
     def RightDockShowMenu(self):
         self.rightDockMenuButton.setMenu(self.rightDockMenu)
 
-class LowerDock():
-    def __init__(self, MainWindow:QtWidgets.QMainWindow,projectDirPath) -> None:
+
+class LowerDock:
+    def __init__(self, MainWindow: QtWidgets.QMainWindow, projectDirPath) -> None:
         self.main_window = MainWindow
         self.projectDirPath = projectDirPath
-    
+
     def InitializeLowerDock(self):
         # lower dock
         self.lowerDock = QtWidgets.QDockWidget("Terminal")
         self.lowerDockWidget = QtWidgets.QWidget()
         self.lowerDockArea = QtCore.Qt.DockWidgetArea()
-        self.main_window.addDockWidget(self.lowerDockArea.BottomDockWidgetArea, self.lowerDock)
-        #layout
+        self.main_window.addDockWidget(
+            self.lowerDockArea.BottomDockWidgetArea, self.lowerDock
+        )
+        # layout
         self.lowerDockLayout = QtWidgets.QVBoxLayout()
         # self.lowerDock.setMaximumHeight(200)
         # text edit terminal
@@ -263,21 +407,28 @@ class LowerDock():
 
         return self.lowerDock
 
-class LeftDock():
-    def __init__(self, mainWindow:QtWidgets.QMainWindow, projectDirPath) -> None:
+
+class LeftDock:
+    def __init__(self, mainWindow: QtWidgets.QMainWindow, projectDirPath) -> None:
         self.main_window = mainWindow
         self.projectDirPath = projectDirPath
-    
+
     def InitializeLeftDock(self):
         def showUrls():
-            self.textBrowser.setText("urls go here")   
+            urls = GetUrls(self.projectDirPath)
+            nUrls = len(urls.split("\n"))
+            self.nUrls.setText(str(nUrls))
+            self.textBrowser.setText(urls)
+
         # lower dock
         self.leftDock = QtWidgets.QDockWidget("Target Information")
         self.leftDockWidget = QtWidgets.QWidget()
         self.leftDock.setWidget(self.leftDockWidget)
         self.leftDockArea = QtCore.Qt.DockWidgetArea()
-        self.main_window.addDockWidget(self.leftDockArea.LeftDockWidgetArea, self.leftDock)
-        #layout
+        self.main_window.addDockWidget(
+            self.leftDockArea.LeftDockWidgetArea, self.leftDock
+        )
+        # layout
         self.leftDockLayout = QtWidgets.QVBoxLayout()
         self.leftDockWidget.setLayout(self.leftDockLayout)
         # general information layout
@@ -289,9 +440,10 @@ class LeftDock():
         self.generalInformationLayout.addRow(self.urlTargetName, self.urlName)
         self.numberOfSubdomains = QtWidgets.QLabel("nSubdomains")
         self.nSubd = QtWidgets.QLabel("0")
-        self.generalInformationLayout.addRow(self.numberOfSubdomains, self.nSubd)
+        self.generalInformationLayout.addRow(
+            self.numberOfSubdomains, self.nSubd)
         self.numberOfUrls = QtWidgets.QLabel("nUrls")
-        self.nUrls = QtWidgets.QLabel("5")
+        self.nUrls = QtWidgets.QLabel("0")
         self.generalInformationLayout.addRow(self.numberOfUrls, self.nUrls)
         # dynamic information
         self.USlayout = QtWidgets.QHBoxLayout()
@@ -308,18 +460,50 @@ class LeftDock():
         self.textBrowserLayout = QtWidgets.QGridLayout()
         self.leftDockLayout.addLayout(self.textBrowserLayout)
         self.textBrowser = QtWidgets.QTextBrowser()
+        self.textBrowser.setOpenExternalLinks(True)
+        self.textBrowser.anchorClicked.connect(self.openClickedUrl)
         # self.textBrowser.setFixedHeight(600)
-        self.textBrowserLayout.addWidget(self.textBrowser,0,0)
+        self.textBrowserLayout.addWidget(self.textBrowser, 0, 0)
 
         return self.leftDock
 
+    def openClickedUrl(self, url: QtCore.QUrl):
+        urll = url.toString()
+        print(f"clicked {urll}")
+
     def showSubDomains(self):
         emcpFilePath = os.path.join(self.projectDirPath, "emcpData.json")
-        subdomains = atomGuiGetUrls(emcpFilePath, self.projectDirPath)
-        self.textBrowser.setText(subdomains[0])
-        self.nSubd.setText(str(subdomains[1]))
+        subdomains = atomGuiGetSubdomains(emcpFilePath, self.projectDirPath)
 
-class BrowserWindow():
+        if subdomains is not None:
+            self.textBrowser.setText(subdomains[0])
+            self.nSubd.setText(str(subdomains[1]))
+        else:
+            self.noSubdomainsAlert = QtWidgets.QMessageBox()
+            self.noSubdomainsAlert.setWindowTitle("Information")
+                                           self.noSubdomainsAlert.setText("It seems no domain finding tool has been run on the target"
+                                           )
+            self.noSubdomainsAlert.setIcon(QtWidgets.QMessageBox.Information)
+            self.noSubdomainsAlert.setStandardButtons(QtWidgets.QMessageBox.Ok)
+            ret = self.noSubdomainsAlert.exec()
+            if ret == QtWidgets.QMessageBox.Ok:
+                pass
+
+        if (
+            subdomains[2] == 0
+        ):  # this show that only subdomainizer has been run on the target.
+            self.amassNotYetRunAlert = QtWidgets.QMessageBox()
+            self.amassNotYetRunAlert.setWindowTitle("Information")
+            self.amassNotYetRunAlert.setText(
+                "Amass has not yet been run on the target,\nThe results shown are from subdomainizer only\nDo you want to run amass"
+            )
+            self.amassNotYetRunAlert.setIcon(QtWidgets.QMessageBox.Information)
+            self.amassNotYetRunAlert.setStandardButtons(
+                QtWidgets.QMessageBox.Ok)
+            ret = self.amassNotYetRunAlert.exec()
+
+
+class BrowserWindow:
     def __init__(self) -> None:
         pass
 
@@ -339,11 +523,13 @@ class NetworkWindow(QtWidgets.QMainWindow):
         self.NetworkWindow_ = QtWidgets.QWidget()
         self.setCentralWidget(self.NetworkWindow_)
         self.setWindowTitle("Network")
-        self.NetworkWindowLayoutMain  = QtWidgets.QVBoxLayout()
+        self.NetworkWindowLayoutMain = QtWidgets.QVBoxLayout()
         # network dock
         self.NetworkMapDock = QtWidgets.QDockWidget()
         self.NetworkMapDockArea = QtCore.Qt.DockWidgetArea()
-        self.addDockWidget(self.NetworkMapDockArea.RightDockWidgetArea,self.NetworkMapDock)
+        self.addDockWidget(
+            self.NetworkMapDockArea.RightDockWidgetArea, self.NetworkMapDock
+        )
 
         self.test_button = QtWidgets.QPushButton()
         self.test_button.setText("button")
@@ -355,28 +541,33 @@ class NetworkWindow(QtWidgets.QMainWindow):
         self.NetworkDockLayout.addWidget(self.test_button)
         self.NetworkWindow_.setLayout(self.NetworkWindowLayoutMain)
 
-        return  self.NetworkWindow_
+        return self.NetworkWindow_
+
 
 class NetworkMap(QtWidgets.QWidget):
     def __init__(self) -> None:
         super().__init__()
 
     def InitializeNetworkMapWidget(self):
-        self.NetworkMapWidget = QtWidgets.QWidget()    
+        self.NetworkMapWidget = QtWidgets.QWidget()
+
 
 class AmassThreadRunner(QThread):
     def __init__(self, amassUrlTarget, projectDirPath):
         super().__init__()
-        self.amassUrlTarget  = amassUrlTarget
+        self.amassUrlTarget = amassUrlTarget
         self.projectDirPath = projectDirPath
 
     def amassRun(self):
-        amassProcessor = AmassSubdProcessor(domain=self.amassUrlTarget, workingDir=self.projectDirPath)
-        amassProcessor.Run()  
+        amassProcessor = AmassSubdProcessor(
+            domain=self.amassUrlTarget, workingDir=self.projectDirPath
+        )
+        amassProcessor.Run()
 
     def run(self) -> None:
         self.amassRun()
-        # return super().run()    
+        # return super().run()
+
 
 class TestTargetWindow(QtWidgets.QMainWindow):
     def __init__(self, projectDirPath) -> None:
@@ -385,12 +576,21 @@ class TestTargetWindow(QtWidgets.QMainWindow):
         self.useBrowser = False
         self.runAmass = False
         self.projectDirPath = projectDirPath
-    
+
     def Initialize(self):
+        def runsubDomainizer():
+            self.subDomainizerRunner = SubDomainizerRunner(
+                self.subDomainizerUrlTarget.text(), self.projectDirPath
+            )
+            self.subDomainizerRunner.Run()
+
         def runAmass():
-            self.amassRunner = AmassThreadRunner(self.amassUrlTarget.text(), self.projectDirPath)
+            self.amassRunner = AmassThreadRunner(
+                self.amassUrlTarget.text(), self.projectDirPath
+            )
             self.amassRunner.start()
             # amassRunner.run()
+
         self.centralWidget = QtWidgets.QWidget()
         self.setCentralWidget(self.centralWidget)
 
@@ -405,24 +605,28 @@ class TestTargetWindow(QtWidgets.QMainWindow):
         # options layout
         self.atomRunnerOptionsLayout = QtWidgets.QFormLayout()
         self.atomUrlTarget = QtWidgets.QLineEdit()
-        self.atomUrlLabel  = QtWidgets.QLabel("Target url: ")
-        self.atomWorkingDirectory = QtWidgets.QLineEdit()
-        self.atomWorkingDirectoryLabel = QtWidgets.QLabel("Working Directory: ")
+        self.atomUrlLabel = QtWidgets.QLabel("Target url: ")
         self.atomUseHttp = QtWidgets.QLabel("Use Http: ")
         self.atomUseHttpCheckBox = QtWidgets.QCheckBox()
         self.atomUseHttpCheckBox.stateChanged.connect(self.registerUseHttp)
-        self.atomUseBrowser  = QtWidgets.QLabel("Use Browser: ")
+        self.atomUseBrowser = QtWidgets.QLabel("Use Browser: ")
         self.atomUseBrowserCheckBox = QtWidgets.QCheckBox()
-        self.atomUseBrowserCheckBox.stateChanged.connect(self.registerUseBrowser)
+        self.atomUseBrowserCheckBox.stateChanged.connect(
+            self.registerUseBrowser)
         self.atomRunAmass = QtWidgets.QLabel("Run Amass")
         self.atomRunAmassCheckBox = QtWidgets.QCheckBox()
         self.atomRunAmassCheckBox.stateChanged.connect(self.registerRunAmass)
         # add options to options layout
-        self.atomRunnerOptionsLayout.addRow(self.atomWorkingDirectoryLabel, self.atomWorkingDirectory)
-        self.atomRunnerOptionsLayout.addRow(self.atomUrlLabel, self.atomUrlTarget) 
-        self.atomRunnerOptionsLayout.addRow(self.atomUseBrowser, self.atomUseBrowserCheckBox)    
-        self.atomRunnerOptionsLayout.addRow(self.atomUseHttp, self.atomUseHttpCheckBox)
-        self.atomRunnerOptionsLayout.addRow(self.atomRunAmass, self.atomRunAmassCheckBox)
+        self.atomRunnerOptionsLayout.addRow(
+            self.atomUrlLabel, self.atomUrlTarget)
+        self.atomRunnerOptionsLayout.addRow(
+            self.atomUseBrowser, self.atomUseBrowserCheckBox
+        )
+        self.atomRunnerOptionsLayout.addRow(
+            self.atomUseHttp, self.atomUseHttpCheckBox)
+        self.atomRunnerOptionsLayout.addRow(
+            self.atomRunAmass, self.atomRunAmassCheckBox
+        )
         # add form layout to vbox layout
         self.atomRunnerLayout.addLayout(self.atomRunnerOptionsLayout)
         # run Button
@@ -431,7 +635,7 @@ class TestTargetWindow(QtWidgets.QMainWindow):
         self.atomRunButton.clicked.connect(self.runAtom)
         self.atomRunnerLayout.addWidget(self.atomRunButton)
         # add tab atom runner to testing window
-        self.tabManager.addTab(self.atomRunner,"Atom Runner")
+        self.tabManager.addTab(self.atomRunner, "Atom Runner")
 
         # amass tab
         self.amassRunner = QtWidgets.QWidget()
@@ -440,9 +644,10 @@ class TestTargetWindow(QtWidgets.QMainWindow):
         # # options layout
         self.amassRunnerOptionsLayout = QtWidgets.QFormLayout()
         self.amassUrlTarget = QtWidgets.QLineEdit()
-        self.amassUrlLabel  = QtWidgets.QLabel("Target domain: ")
+        self.amassUrlLabel = QtWidgets.QLabel("Target domain: ")
         # add options to options layout
-        self.amassRunnerOptionsLayout.addRow(self.amassUrlLabel, self.amassUrlTarget) 
+        self.amassRunnerOptionsLayout.addRow(
+            self.amassUrlLabel, self.amassUrlTarget)
         # add form layout to vbox layout
         self.amassRunnerLayout.addLayout(self.amassRunnerOptionsLayout)
         # run Button
@@ -451,7 +656,31 @@ class TestTargetWindow(QtWidgets.QMainWindow):
         self.amassRunButton.clicked.connect(runAmass)
         self.amassRunnerLayout.addWidget(self.amassRunButton)
 
-        self.tabManager.addTab(self.amassRunner,"Amass Runner")
+        self.tabManager.addTab(self.amassRunner, "Amass Runner")
+
+        # SubDomainizerRunner
+        self.subDomainizerRunner = QtWidgets.QWidget()
+        self.subDomainizerRunnerLayout = QtWidgets.QVBoxLayout()
+        self.subDomainizerRunner.setLayout(self.subDomainizerRunnerLayout)
+        # # options layout
+        self.subDomainizerRunnerOptionsLayout = QtWidgets.QFormLayout()
+        self.subDomainizerUrlTarget = QtWidgets.QLineEdit()
+        self.subDomainizerUrlLabel = QtWidgets.QLabel("Target domain: ")
+        # add options to options layout
+        self.subDomainizerRunnerOptionsLayout.addRow(
+            self.subDomainizerUrlLabel, self.subDomainizerUrlTarget
+        )
+        # add form layout to vbox layout
+        self.subDomainizerRunnerLayout.addLayout(
+            self.subDomainizerRunnerOptionsLayout)
+        # run Button
+        self.subDomainizerRunButton = QtWidgets.QPushButton()
+        self.subDomainizerRunButton.setText("Run subDomainizer")
+        self.subDomainizerRunButton.clicked.connect(runsubDomainizer)
+        self.subDomainizerRunnerLayout.addWidget(self.subDomainizerRunButton)
+
+        self.tabManager.addTab(self.subDomainizerRunner, "subdomainizer")
+
         # add tab manager to central widget layout
         self.centralWidgetLayout.addWidget(self.tabManager)
 
@@ -466,25 +695,29 @@ class TestTargetWindow(QtWidgets.QMainWindow):
 
     def runatom(self):
         domain = self.atomUrlTarget.text()
-        directory = self.atomWorkingDirectory.text()
+        directory = domain
         usehttp = self.useHttp
         usebrowser = self.useBrowser
         with ProcessPoolExecutor(max_workers=4) as executor:
-            executor.submit(asyncio.run(RunMainAtomFunction(domain,directory,usehttp,usebrowser)))
+            executor.submit(
+                asyncio.run(RunMainAtomFunction(
+                    domain, directory, usehttp, usebrowser))
+            )
 
     def runAtom(self):
         with ThreadPoolExecutor(max_workers=1000) as executor:
-            executor.submit(self.runatom)   
+            executor.submit(self.runatom)
+
 
 class MainWindow(QtWidgets.QMainWindow):
-    def __init__(self, projectDirPath:str):
+    def __init__(self, projectDirPath: str):
         super().__init__()
         self.projectDirPath = projectDirPath
 
         # Docks
-        lowerDock = LowerDock(self,self.projectDirPath)
+        lowerDock = LowerDock(self, self.projectDirPath)
         self.LowerDock = lowerDock.InitializeLowerDock()
-        rightDock = RightDock(self)
+        rightDock = RightDock(self, self.projectDirPath)
         self.RightDock = rightDock.InitializeDock()
         leftdock = LeftDock(self, self.projectDirPath)
         self.LeftDock = leftdock.InitializeLeftDock()
@@ -508,7 +741,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.centralWidgetLayout.addLayout(self.lowerCentralLayout)
         centralWidget.setLayout(self.centralWidgetLayout)
         self.setCentralWidget(centralWidget)
-        
+
         # network button
         self.NetworkButtonIcon = QtGui.QIcon.fromTheme("network-wired")
         self.NetworkButton = QtWidgets.QPushButton()
@@ -536,11 +769,11 @@ class MainWindow(QtWidgets.QMainWindow):
     def OpenNetworkWindow(self):
         self.networkWindow = NetworkWindow()
         self.NetworkWindow_ = self.networkWindow.IniatializeNetworkWindow()
-        self.networkWindow.resize(800,600)
+        self.networkWindow.resize(800, 600)
         self.networkWindow.show()
 
     def AddUrlHandler(self):
-        self.urlLabel  = QtWidgets.QLabel()
+        self.urlLabel = QtWidgets.QLabel()
         self.urlLabel.setText("Url:")
         self.urlText = QtWidgets.QLineEdit()
         self.searchButton = QtWidgets.QPushButton()
@@ -558,7 +791,7 @@ class MainWindow(QtWidgets.QMainWindow):
     def AddTopMenu(self):
         # top menu
         self.centralWidgetMenu = QtWidgets.QMenu()
-        a_Open= self.centralWidgetMenu.addMenu("open")
+        a_Open = self.centralWidgetMenu.addMenu("open")
         a_openProjects = a_Open.addAction("projects")
         a_openProjects.triggered.connect(self.OpenProject)
         self.centralWidgetMenu.addSeparator()
@@ -577,7 +810,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.menuButton.setIcon(self.MenuIcon)
         self.menuButton.setFixedWidth(28)
         self.menuButton.clicked.connect(self.ShowMenu)
-        self.uppperCentralLayout.addWidget(self.menuButton,alignment=Qt.AlignLeft)
+        self.uppperCentralLayout.addWidget(
+            self.menuButton, alignment=Qt.AlignLeft)
 
     def ShowMenu(self):
         self.menuButton.setMenu(self.centralWidgetMenu)
@@ -593,31 +827,35 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def OpenProject(self):
         file_menu = QtWidgets.QFileDialog()
-        filename = file_menu.getOpenFileName(self, "Open File", "/", "Text Files (*.txt)")[0]
-        
+        filename = file_menu.getOpenFileName(
+            self, "Open File", "/", "Text Files (*.txt)"
+        )[0]
+
     def ViewNotepad(self):
         self.RightDock.setVisible(True)
 
     def LoadProject(self):
         pass
 
+
 class MainWin(QtWidgets.QMainWindow):
     def __init__(self) -> None:
         super().__init__()
         self.homeDirectory = os.path.expanduser("~")
-        self.defaultWorkspaceDir = os.path.join(self.homeDirectory,"AtomProjects/")
+        self.defaultWorkspaceDir = os.path.join(
+            self.homeDirectory, "AtomProjects/")
         try:
             if not Path(self.defaultWorkspaceDir).exists():
                 os.makedirs(self.defaultWorkspaceDir)
         except PermissionError as permisssion_error:
-            print(f"{red('permission denied')} {cyan('cannot create file')}")    
+            print(f"{red('permission denied')} {cyan('cannot create file')}")
         # central widget
         self.centralWidget = QtWidgets.QWidget()
         self.tabManager = QtWidgets.QTabWidget()
         # central widget layout
         self.MainLayout = QtWidgets.QVBoxLayout()
         self.centralWidget.setLayout(self.MainLayout)
-        
+
         # maintab  widget
         self.mainTabWidget = QtWidgets.QWidget()
         self.mainTabLayout = QtWidgets.QVBoxLayout()
@@ -628,7 +866,7 @@ class MainWin(QtWidgets.QMainWindow):
         self.mainTabLayout.addWidget(self.buttonAddTab)
         self.mainTabLayout.setAlignment(self.buttonAddTab, Qt.AlignCenter)
         self.mainTabWidget.setLayout(self.mainTabLayout)
-        self.tabManager.addTab(self.mainTabWidget,"Welcome")
+        self.tabManager.addTab(self.mainTabWidget, "Welcome")
 
         # self.AddTargetTab("target one")
         self.upperTabMenuLayout = QtWidgets.QHBoxLayout()
@@ -657,15 +895,16 @@ class MainWin(QtWidgets.QMainWindow):
         self.newTargetWindow.setFixedWidth(600)
         self.newTargetWindow.setWindowTitle("Add Target")
         # new target window layout main
-        self.newTargetWindowLayoutMain  = QtWidgets.QVBoxLayout()
+        self.newTargetWindowLayoutMain = QtWidgets.QVBoxLayout()
         # new target window layout for form
         self.newTargetWindowLayout = QtWidgets.QFormLayout()
         self.newTargetTabName = QtWidgets.QLineEdit()
         self.newTargetUrlName = QtWidgets.QLineEdit()
         self.projectDir = QtWidgets.QLineEdit()
         # form layout setup
-        self.newTargetWindowLayout.addRow("Project Name:",self.newTargetTabName)
-        self.newTargetWindowLayout.addRow("Target Url:",self.newTargetUrlName)
+        self.newTargetWindowLayout.addRow(
+            "Project Name:", self.newTargetTabName)
+        self.newTargetWindowLayout.addRow("Target Url:", self.newTargetUrlName)
         self.newTargetWindowLayout.addRow("project path: ", self.projectDir)
 
         self.newTargetWindowLayoutMain.addLayout(self.newTargetWindowLayout)
@@ -683,12 +922,14 @@ class MainWin(QtWidgets.QMainWindow):
         if tab_name == "":
             self.newTargetTabName.setStyleSheet("border: 1px solid red;")
         else:
-            projectDirectory = os.path.join(self.defaultWorkspaceDir, tab_name)   
-            if not Path(projectDirectory).exists(): 
+            projectDirectory = os.path.join(self.defaultWorkspaceDir, tab_name)
+            if not Path(projectDirectory).exists():
                 os.makedirs(projectDirectory)
             self.mainWindowInstance = MainWindow(projectDirectory)
-            self.tabManager.addTab(self.mainWindowInstance,tab_name)
-            self.tabManager.setCurrentIndex(self.tabManager.indexOf(self.mainWindowInstance))
+            self.tabManager.addTab(self.mainWindowInstance, tab_name)
+            self.tabManager.setCurrentIndex(
+                self.tabManager.indexOf(self.mainWindowInstance)
+            )
             self.newTargetWindow.close()
             # TargetUrl = addHttpsScheme(self.newTargetTabName.text())
             # self.mainWindowInstance.browser.setUrl(TargetUrl)
@@ -697,6 +938,7 @@ class MainWin(QtWidgets.QMainWindow):
         self.current_tab_index = self.tabManager.currentIndex()
         if self.current_tab_index != -1:
             self.tabManager.removeTab(self.current_tab_index)
+
 
 if __name__ == "__main__":
     App = QtWidgets.QApplication()

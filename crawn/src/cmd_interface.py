@@ -3,12 +3,13 @@ from atomcore import MainRunner
 import asyncio
 from utiliities import green, yellow, red, cyan 
 import subprocess
-from asynccmd import Cmd
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 
 print("\n")
 print(green("Fill the main runner configuration settings"))
 
-class Atomcmd(Cmd):
+class Atomcmd():
+    """ a rudementary implementation of a commandline interface for the program"""
     def __init__(self):
         main_domain = input(cyan("input the main domain: "))
         main_directory = input(cyan("input the main directory: "))
@@ -18,9 +19,9 @@ class Atomcmd(Cmd):
                   recursive=recursive,use_browser=use_browser)
         super().__init__()
 
-    def do_process_get(self,url):
-        response = asyncio.run(self.cwl.process_get(url))
-        print(response[1]) 
+    def cmd_get(self,url):
+        response = asyncio.run(self.cwl.ProcessGet(url))
+        print(response[1])
 
     def do_exit(self, arg):
         return True
@@ -29,10 +30,14 @@ class Atomcmd(Cmd):
         sub_cmd = subprocess.Popen(command, shell=True, stdout= subprocess.PIPE)
         output = sub_cmd.communicate()[0]
         print(output)
+
+    def cmdloop(self):
+        # run the main loop
+        pass
     
-async def main():
+def main():
     Atomcmd_  = Atomcmd()
-    await run_cmdloop(Atomcmd_)
+    Atomcmd_.cmdloop()
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()

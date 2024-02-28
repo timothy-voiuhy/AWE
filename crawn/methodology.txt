@@ -1,0 +1,160 @@
+Location of server:
+	country/countries
+	:server hosting
+		:hosted locally
+		:AWS or other server hosting platforms
+														#TOOLS
+															:nmap
+															:legion
+Enumerate Server:
+	Implementation/flavour 
+		:nginx
+		:apache
+		:MIS
+	Software version of server:
+		:check for existing CVE's
+
+Enumerate Server defenses:
+	WAF
+	DMZ
+	Network firewall
+	AI solutions
+	Load Balancer and virtual servers
+		::how the load balancer handles sessions
+	Virtual(VM) Servers
+
+		for server_defense in server_defenses:
+			get software_version:
+				check with existing vulnerabilities and CVES		
+
+# By the end of the above ,you should be able to make a network map of the whole system
+
+OSINT
+							## TOOLS
+								:maltego
+								:reconspider
+								:set
+								:sherlock
+Developers:
+	info concerning the developers:
+		Name
+		Email
+		social network information (facebook,instagram,linkendin,youtube,etc)
+		Historical Information
+		coding conventions
+
+Employees:
+	info concerning the company employees:
+		Name
+		Email
+		social network information
+		personal information(family,history,etc)
+
+# Information obtained helps in username bruteforcing, gaining admin bruteforcing,and possible password bruteforcing
+
+# Go the main page / domain 
+what does the webapp do:
+	marketing
+	Banking
+	Transport
+	Trading, etc
+	## know what the application does in so doing :
+		Map the possible impact of an attacker on the applications and applications 
+		users:
+
+Client side software and libraries:
+	Get versions:
+		Check out for existing vulnerabilities and CVE's
+		
+Analyze the client side and server side technologies being used and notice out the vulnerabilities that are going to be tested or concentrated on for that specific js library for both the server end and the client end.
+
+including identifying the database at the backend being used and then focusing on given vulnerabilities forexample if an application is using mongo db then one can the focus on nosql injection and may be grapql injection: something of that kind.	
+
+POSSIBLE VULNS = analysis of the tech stack especially for the side attacks since they are more of being tech specific.
+rule out the different vulnerabilities depending on the tech stack.
+
+Analysis of http headers and what vulnerabilities may arise due to them such that testing is done with those in mind   tools:
+                            csv evaluator: the google content security policy evaluator evaluatesthe content security policy of a webapplication showing the possible vulnerabilities that can looked for.
+
+	
+	FOR LIBs:																###TOOLS
+																					:wapplyzer
+
+choose burp extensions for each and every step (choose the required one not just any extension)
+
+Get domains and subdomains:
+
+for subdomain in subdomains:
+	get all directories: (this is done by crawling and bruteforcing directories to get unknown endpoints)
+				using tools like atom , link finder , ffuf, dirb, dirbuseter and so on
+		for directory(page) in directories:
+			is the root directory and endpoint forexample a login page , something else
+			get all endpoints:(these include the previous pages found and also individual functionalities fo	
+				found on the page forexample it can a file upload, share functionality etc.
+				for endpoint in endpoints:
+					Test:
+						for POSSIBLE VULNS :
+						authentication
+							:password guessing 
+							:spoofing tokens with a cookie
+							:analysing existing defenses like security question , forgot password 
+							functionality.
+							:lockout policies
+              :see how the cookies change before and after authentication(test for session puzzling ie one cookie multiple pages esp before authentication but trying to authenticate and then tryother pages whether they are reacheable with the obtained session cookie.)
+						authorization 
+							:attacking access to resources like files folders and so on
+							:changing the user principle(eg altering from or cooke values)
+							:requsting hidden objects
+							:attempting caononicalisation attacks
+							:escalating priviledges
+							:tunneling commands to the sql server
+						server testing
+						client testing
+						session handling
+						Functional analysis
+							:testing individual functionalities in the application[involves analysing js 
+							code and testing out what it does and how it does it
+							:breaking such functionalities and combining withe the other vulnerabilities 
+							that are present in the web appliction.
+						attacking data connectivity
+							:attacking the back end database
+						attacking management interfaces
+						launcking a DOS(unlikely not in a bug bounty hunt)
+													
+													VULNERABILITIES:: 
+													FOR EACH TECH STACK(programming languages, Frameworks):
+														WHAT VUNERABILITIES NORMALLY AFFECT IT.
+
+for endpoint in enpoints:
+	get apis:(api testing)
+
+
+generalization of the testing 
+  i) injections(client testing and server testing )
+      - xss(all types)
+      - sql injections
+      - command injection
+  ii)IDORS and access control(authorization and authentication plus signed IDORS and access control testing)
+  iii)api testing 
+  iv) attacking compensating controls:
+      cookie flags
+      browser security headers
+      client side validation
+      servers side validation
+      web application firewall
+      content security policy
+      output encoding.
+      other http headers including those that may be specific to the webapp.
+      
+
+General steps while testing injections:
+    recon and enumeration: understanding the web application.
+    finding endpoints and generalising them depending on where they fall 
+    testing for reflections
+    finding hidden parameters.
+    testing compensating controls.
+
+
+note: if a webcache poisoning is obtained on the target after getting an xss firing the the impact is now larget enough since the attacker does not have to deliver the payload to the targe but every one that reaches out to the page and loads the poisoned DOM is now affected by the vulnerability.
+
+ to add to order we can use the already existing vulnerabilities eg from rs0n.com , hacktricks and so on  and then compare with our methodology and see what we are missing and what we are not missing. 
