@@ -168,7 +168,8 @@ class AmassSubdProcessor:
         ]
         self.name_records = []
         [
-            self.name_records.append(os.path.join(self.projectDir, namerecord + ".txt"))
+            self.name_records.append(os.path.join(
+                self.projectDir, namerecord + ".txt"))
             for namerecord in self.namerecords
         ]
         self.file_path_names = [
@@ -190,7 +191,8 @@ class AmassSubdProcessor:
                 file.close()
         self.cwd = self.projectDir
         self.MAX_RETRIES = max_retries
-        self.dicts_file = os.path.join(self.projectDir, "amass_dicts_file.json")
+        self.dicts_file = os.path.join(
+            self.projectDir, "amass_dicts_file.json")
         if Path(self.dicts_file).exists():
             os.remove(self.dicts_file)
             with open(self.dicts_file, "a") as file:
@@ -266,7 +268,8 @@ class AmassSubdProcessor:
                     if re.match(pattern, line) is not None:
                         # print(line)
                         manager = re.findall(" \D+ -", line)[0]
-                        manager = manager.replace("(ASN)", "").replace("-", "").strip()
+                        manager = manager.replace(
+                            "(ASN)", "").replace("-", "").strip()
                         asn = re.findall("\d+\s", line)[0]
                         if asn not in managerAsnDicts:
                             managerAsnDicts[manager] = []
@@ -335,7 +338,8 @@ class AmassSubdProcessor:
         with open(self.dicts_file, "r") as dicts_file:
             dictsData = dicts_file.read()
             dicts_file.close()
-        dictsData_ = list(dict(json.loads(dictsData)).values())[0]  # [data_dict]
+        dictsData_ = list(dict(json.loads(dictsData)).values())[
+            0]  # [data_dict]
         NetblockIpDict = dictsData_[0]  # dictionary {netblock: [ips]}
         AsnNetblockDict = dictsData_[1]  # {asn: [netblocks]}
         ManagerAsnDict = dictsData_[2]  # {manager: [asns]}
@@ -397,7 +401,8 @@ class AmassSubdProcessor:
                         for line in lines:
                             if list(self.file_namerecord_dict.keys())[idx] in line:
                                 self.compare_append_line_file(
-                                    line, list(self.file_namerecord_dict.values())[idx]
+                                    line, list(self.file_namerecord_dict.values())[
+                                        idx]
                                 )
                 idx = idx + 1
         else:
@@ -503,7 +508,8 @@ def RxnLinkFinder(
         cookie_str = ""
         key_index = 0
         for key in cookie_keys:
-            cookie_str = cookie_str + key + ":" + cookie_values[key_index] + ";"
+            cookie_str = cookie_str + key + ":" + \
+                cookie_values[key_index] + ";"
             key_index += 1
         command = command + " -c " + cookie_str
     else:
@@ -521,10 +527,79 @@ def RunNuclei():
     pass
 
 
+class SublisterRunner:
+    """ "  -d DOMAIN, --domain DOMAIN
+                          Domain name to enumerate it's subdomains
+    -b [BRUTEFORCE], --bruteforce [BRUTEFORCE]
+                          Enable the subbrute bruteforce module
+    -p PORTS, --ports PORTS
+                          Scan the found subdomains against specified tcp ports
+    -v [VERBOSE], --verbose [VERBOSE]
+                          Enable Verbosity and display results in realtime
+    -t THREADS, --threads THREADS
+                          Number of threads to use for subbrute bruteforce
+    -e ENGINES, --engines ENGINES
+                          Specify a comma-separated list of search engines
+    -o OUTPUT, --output OUTPUT
+                          Save the results to text file
+    -n, --no-color        Output without color"""
+
+    def __init__(
+        self,
+        domain,
+        projectDirPath:str,
+        threads,
+        search_engines:list = None,
+        bruteforce:bool=False,
+        ports:list=None,
+    ):
+        self.domain = domain
+        self.projectDirPath = projectDirPath
+        self.save_file = os.path.join(
+            self.projectDirPath, "sublisterSubdomains.txt")
+        self.threads = threads
+        self.bruteforce = bruteforce
+        self.search_engines = search_engines
+        self.ports = ports
+
+    def RunOnDomain(self):
+        command = "sublist3r" + " -d " + self.domain + " -o " + self.save_file
+        if self.search_engines is not None:
+            search_engine_string = ""
+            for engine in self.search_engines:
+                if self.search_engines.index(engine) == len(self.search_engines) - 1:
+                    search_engine_string = search_engine_string + engine
+                else:
+                    search_engine_string = search_engine_string + engine + ","
+            command = command +" -e " +search_engine_string
+        if self.bruteforce:
+            command = command + " -b "
+
+        if self.ports is not None:
+            ports = ""
+            for port in self.ports:
+                if self.ports.index(port) == len(self.ports)-1:
+                    ports = ports + port
+                else:
+                    ports = ports + port+","
+                
+            command  = command + " -p " + ports
+
+        if self.threads is not None:
+            command  = command + " -t " +str(self.threads) 
+
+        print(yellow(f"Running sublist3r with command: {cyan(command)}"))
+        subprocess.Popen(
+            command,
+            shell=True,
+        )
+
+
 class SubDomainizerRunner:
     def __init__(self, url, projectDirPath, cookies=None) -> None:
         self.projectDirPath = projectDirPath
-        self.subDomainFile = os.path.join(self.projectDirPath, "subdomains.txt")
+        self.subDomainFile = os.path.join(
+            self.projectDirPath, "subdomains.txt")
         if not Path(self.subDomainFile).exists():
             with open(self.subDomainFile, "a") as file:
                 file.close()

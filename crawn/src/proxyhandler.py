@@ -2,8 +2,7 @@ import ssl
 import asyncio
 import aiohttp
 
-""" this is a rudementary implementation of a proxyhandler similar to the burp proxy that basically intercepts
-traffic on a certain port in thsi case we are using burps port 8080 since it has a signed certificate"""
+""" this is a rudementary implementation of a proxyhandler similar to the burp proxy that basically intercepts traffic on a certain port ie in this case 8081"""
 
 
 class ProxyHandler:
@@ -12,7 +11,6 @@ class ProxyHandler:
         self.port = port  # the default
         self.certfile = "./proxycert/cert.pem"
         self.keyfile = "./proxycert/key.pem"
-        # use the pass phrase you used while generating the pem files
         self.passPhrase = "11039202200105@T"
 
     def DissectPacket(self, packet: str):

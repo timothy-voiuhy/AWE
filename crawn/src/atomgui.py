@@ -1,4 +1,6 @@
 from typing import Optional
+from aiohttp import ThreadedResolver
+import sublist3r
 from PySide6 import QtCore, QtWidgets, QtGui, QtWebEngineWidgets
 import subprocess
 from PySide6.QtCore import QThread
@@ -14,7 +16,13 @@ from PySide6.QtGui import QKeyEvent
 from utiliities import addHttpsScheme
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QWidget
-from utiliities import red, cyan, AmassSubdProcessor, SubDomainizerRunner
+from utiliities import (
+    red,
+    cyan,
+    AmassSubdProcessor,
+    SubDomainizerRunner,
+    SublisterRunner,
+)
 
 """ functionalities so far:
 program output
@@ -481,8 +489,9 @@ class LeftDock:
         else:
             self.noSubdomainsAlert = QtWidgets.QMessageBox()
             self.noSubdomainsAlert.setWindowTitle("Information")
-                                           self.noSubdomainsAlert.setText("It seems no domain finding tool has been run on the target"
-                                           )
+            self.noSubdomainsAlert.setText(
+                "It seems no domain finding tool has been run on the target"
+            )
             self.noSubdomainsAlert.setIcon(QtWidgets.QMessageBox.Information)
             self.noSubdomainsAlert.setStandardButtons(QtWidgets.QMessageBox.Ok)
             ret = self.noSubdomainsAlert.exec()
@@ -552,6 +561,55 @@ class NetworkMap(QtWidgets.QWidget):
         self.NetworkMapWidget = QtWidgets.QWidget()
 
 
+class SubdomainizerThreadRunner(QThread):
+    def __init__(self, subDomainizerUrlTarget, projectDirPath):
+        super().__init__()
+        self.subdomainizerUrlTarget = subDomainizerUrlTarget
+        self.projectDirPath = projectDirPath
+
+    def subdomainizerRun(self):
+        self.subDomainizerRunner = SubDomainizerRunner(
+            self.subDomainizerUrlTarget, self.projectDirPath
+        )
+        self.subDomainizerRunner.Run()
+
+    def run(self) -> None:
+        self.subdomainizerRun()
+
+
+class Sublist3rThreadRunner(QThread):
+    def __init__(
+        self,
+        domain,
+        projectDirPath,
+        bruteforce: bool = None,
+        searchengines: list = None,
+        threads: int = None,
+        ports: list = None,
+    ):
+        super().__init__()
+        self.domain = domain
+        self.projectDirPath = projectDirPath
+        self.bruteforce = bruteforce
+        self.searchengines = searchengines
+        self.threads = threads
+        self.ports = ports
+
+    def sublist3rRun(self):
+        self.sublisterRunner = SublisterRunner(
+            self.domain,
+            self.projectDirPath,
+            bruteforce=self.bruteforce,
+            search_engines=self.searchengines,
+            threads=self.threads,
+            ports=self.ports,
+        )
+        self.sublisterRunner.RunOnDomain()
+
+    def run(self) -> None:
+        self.sublist3rRun()
+
+
 class AmassThreadRunner(QThread):
     def __init__(self, amassUrlTarget, projectDirPath):
         super().__init__()
@@ -575,14 +633,81 @@ class TestTargetWindow(QtWidgets.QMainWindow):
         self.useHttp = False
         self.useBrowser = False
         self.runAmass = False
+        self.subliterBruteForce = False
+        self.sublisterScanPorts = False
+        self.sublisterUseSearchEngines = False
         self.projectDirPath = projectDirPath
-
+            
     def Initialize(self):
+        def runSublist3r():
+
+            # configure search engines
+            self.searchEngines = []
+            searchEngine_string = self.sublist3rSearchEngines.text().strip()
+            if not self.sublisterUseSearchEngines:
+                self.searchEngines =  None
+            else:
+                if searchEngine_string.endswith(","):
+                    searchEngine_string = searchEngine_string[:-1]
+                self.searchEngines = searchEngine_string.split(",")
+
+            # configure ports
+            self.sublisterPorts = []
+            Port_string = self.sublist3rPorts.text().strip()
+            if not self.sublisterScanPorts:
+                Ports = None
+            else:
+                if Port_string.endswith(","):
+                    Port_string = Port_string[:-1]
+                Ports = Port_string.split(",")
+
+                for port in Ports:
+                    try:
+                        int(port.strip())
+                    except:
+                        self.sublist3rPorts.setStyleSheet(
+                            "QLineEdit{border: 2px Solid red; }"
+                        )
+                        Ports  = None 
+            # configure threads
+            try:
+                sublisterThreads = int(self.sublist3rThreads.text())
+            except:
+                sublisterThreads = None
+                self.sublist3rThreads.setStyleSheet("QLineEdit({border: 2px Solid red;})")
+
+            try:
+                self.sublist3rRunner = Sublist3rThreadRunner(
+                    self.sublist3rUrlTarget.text(),
+                    self.projectDirPath,
+                    self.subliterBruteForce,
+                    self.searchEngines,
+                    sublisterThreads,
+                    Ports,
+                )
+                self.sublist3rRunner.start()
+            except:
+                self.sublisterFailRunMessageBox = QtWidgets.QMessageBox()
+                self.sublisterFailRunMessageBox.setWindowTitle(
+                    "Warning")
+                self.sublisterFailRunMessageBox.setText(
+                    "Sublister has a problem running!! \nThis can be due to invalid args \nor a faulty internet connection\nDo you want to run it again"
+                )
+                self.sublisterFailRunMessageBox.setIcon(
+                    QtWidgets.QMessageBox.Warning
+                )
+                self.sublisterFailRunMessageBox.setStandardButtons(
+                    QtWidgets.QMessageBox.Ok
+                )
+                ret = self.sublisterFailRunMessageBox.exec()
+                if ret == QtWidgets.QMessageBox.Ok:
+                    pass
+                                    
         def runsubDomainizer():
-            self.subDomainizerRunner = SubDomainizerRunner(
+            self.subDomainizerRunner = SubdomainizerThreadRunner(
                 self.subDomainizerUrlTarget.text(), self.projectDirPath
             )
-            self.subDomainizerRunner.Run()
+            self.subDomainizerRunner.start()
 
         def runAmass():
             self.amassRunner = AmassThreadRunner(
@@ -681,17 +806,119 @@ class TestTargetWindow(QtWidgets.QMainWindow):
 
         self.tabManager.addTab(self.subDomainizerRunner, "subdomainizer")
 
+        # SubDomainizerRunner
+        self.sublist3rRunner = QtWidgets.QWidget()
+        self.sublist3rRunnerLayout = QtWidgets.QVBoxLayout()
+        self.sublist3rRunner.setLayout(self.sublist3rRunnerLayout)
+        # # options layout
+        self.sublist3rRunnerOptionsLayout = QtWidgets.QFormLayout()
+        self.sublist3rUrlTarget = QtWidgets.QLineEdit()
+        self.sublist3rUrlLabel = QtWidgets.QLabel("Target domain: ")
+        self.sublist3rBruteForceLabel = QtWidgets.QLabel()
+        self.sublist3rBruteForceLabel.setText("Allow BruteForce")
+        self.sublist3rBruteforcebutton = QtWidgets.QCheckBox()
+        self.sublist3rBruteforcebutton.stateChanged.connect(
+            self.registerSubliterBruteforceButton
+        )
+        self.sublist3rUseSearchEngniesCheckBox = QtWidgets.QCheckBox()
+        self.sublist3rUseSearchEngniesCheckBox.stateChanged.connect(
+            self.registerSublisterUseSearchEngines
+        )
+        self.sublist3rUseSearchEnginesLabel = QtWidgets.QLabel()
+        self.sublist3rUseSearchEnginesLabel.setText("Use SearchEngines:")
+        self.sublist3rSearchEnginesLabel = QtWidgets.QLabel()
+        self.sublist3rSearchEnginesLabel.setText("SearchEngines:")
+        self.sublist3rSearchEngines = QtWidgets.QLineEdit()
+        self.sublist3rSearchEngines.setHidden(True)
+        self.sublist3rSearchEngines.setPlaceholderText(
+            "write comma separated values of search engines"
+        )
+        self.sublist3rScanPortsLabel = QtWidgets.QLabel()
+        self.sublist3rScanPortsLabel.setText("Scan Ports")
+        self.sublist3rScanPortsCheckBox = QtWidgets.QCheckBox()
+        self.sublist3rScanPortsCheckBox.stateChanged.connect(
+            self.registerSublisterScanPorts
+        )
+        self.sublist3rPortsLabel = QtWidgets.QLabel()
+        self.sublist3rPortsLabel.setText("Ports:")
+        self.sublist3rPorts = QtWidgets.QLineEdit()
+        self.sublist3rPorts.setPlaceholderText(
+            "write command separated values of ports"
+        )
+        self.sublist3rPorts.setVisible(False)
+        self.sublist3rThreadsLabel = QtWidgets.QLabel()
+        self.sublist3rThreadsLabel.setText("Number of threads")
+        self.sublist3rThreads = QtWidgets.QLineEdit()
+        self.sublist3rThreads.setPlaceholderText("number of threads to be used (int)")
+
+        # add options to options layout
+        self.sublist3rRunnerOptionsLayout.addRow(
+            self.sublist3rUrlLabel, self.sublist3rUrlTarget
+        )
+        self.sublist3rRunnerOptionsLayout.addRow(
+            self.sublist3rBruteForceLabel, self.sublist3rBruteforcebutton
+        )
+        self.sublist3rRunnerOptionsLayout.addRow(self.sublist3rUseSearchEnginesLabel, self.sublist3rUseSearchEngniesCheckBox)
+        self.sublist3rRunnerOptionsLayout.addRow(
+            self.sublist3rSearchEnginesLabel, self.sublist3rSearchEngines
+        )
+        self.sublist3rRunnerOptionsLayout.addRow(
+            self.sublist3rScanPortsLabel, self.sublist3rScanPortsCheckBox
+        )
+        self.sublist3rRunnerOptionsLayout.addRow(self.sublist3rPortsLabel, self.sublist3rPorts)
+        self.sublist3rRunnerOptionsLayout.addRow(self.sublist3rThreadsLabel, self.sublist3rThreads)
+
+        # add form layout to vbox layout
+        self.sublist3rRunnerLayout.addLayout(self.sublist3rRunnerOptionsLayout)
+        # run Button
+        self.sublist3rRunButton = QtWidgets.QPushButton()
+        self.sublist3rRunButton.setText("Run sublist3r")
+        self.sublist3rRunButton.clicked.connect(runSublist3r)
+        self.sublist3rRunnerLayout.addWidget(self.sublist3rRunButton)
+
+        self.tabManager.addTab(self.sublist3rRunner, "sublist3r")
         # add tab manager to central widget layout
         self.centralWidgetLayout.addWidget(self.tabManager)
 
+    def registerSublisterUseSearchEngines(self):
+        if self.sublist3rUseSearchEngniesCheckBox.isChecked():
+            self.sublist3rSearchEngines.setVisible(True)
+            self.sublisterUseSearchEngines = True
+        else:
+            self.sublist3rSearchEngines.setVisible(False)
+            self.sublisterUseSearchEngines = False
+
+    def registerSublisterScanPorts(self):
+        if self.sublist3rScanPortsCheckBox.isChecked():
+            self.sublist3rPorts.setVisible(True)
+            self.sublisterScanPorts = True
+        else:
+            self.sublist3rPorts.setVisible(False)
+            self.sublisterScanPorts = False
+
     def registerRunAmass(self):
-        self.runAmass = True
+        if self.atomRunAmassCheckBox.isChecked():
+            self.runAmass = True
+        else:
+            self.runAmass = False
+
+    def registerSubliterBruteforceButton(self):
+        if self.sublist3rBruteforcebutton.isChecked():
+            self.subliterBruteForce = True
+        else:
+            self.subliterBruteForce = False
 
     def registerUseHttp(self):
-        self.useHttp = True
+        if self.atomUseHttpCheckBox.isChecked():
+            self.useHttp = True
+        else:
+            self.useHttp = False
 
     def registerUseBrowser(self):
-        self.useBrowser = True
+        if self.atomUseBrowserCheckBox.isChecked():
+            self.useBrowser = True
+        else:
+            self.useBrowser = False
 
     def runatom(self):
         domain = self.atomUrlTarget.text()
@@ -763,7 +990,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.testWindow = TestTargetWindow(self.projectDirPath)
         self.testWindow.Initialize()
         self.testWindow.setFixedHeight(600)
-        self.testWindow.setFixedWidth(600)
+        self.testWindow.setFixedWidth(800)
         self.testWindow.show()
 
     def OpenNetworkWindow(self):
