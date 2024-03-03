@@ -1,6 +1,5 @@
 from typing import Optional
 from aiohttp import ThreadedResolver
-import sublist3r
 from PySide6 import QtCore, QtWidgets, QtGui, QtWebEngineWidgets
 import subprocess
 from PySide6.QtCore import QThread
@@ -22,12 +21,13 @@ from utiliities import (
     AmassSubdProcessor,
     SubDomainizerRunner,
     SublisterRunner,
+    rm_same,
 )
 
 """ functionalities so far:
 program output
 choosing pentest type(network, web, active directory,etc)
-parsed results from amass (location of webserver, on what asns, local or 
+parsed results from amass, sublist3r, subdomainizer  (location of webserver, on what asns, local or 
 hosted)
 notepad -- for taking notes on the target being worked on 
 browser support 
@@ -57,40 +57,29 @@ def GetUrls(workingdir):
     urls = open(hrefLinksFile, "r").read()
     return urls
 
-
-def atomGuiGetSubdomains(emcpfile_path, workingdir):
-    try:
-        amassProcessor = AmassSubdProcessor(workingDir=workingdir)
-        try:
-            amassProcessor.parseAmassData()
-        except:
-            raise amassFailure
-        with open(emcpfile_path, "r") as file:
-            data = file.read()
-            jsonData = dict(json.loads(data))
-            emcpData = jsonData["data"]
-            subdomains = ""
-            sub_l = set()
-            len_subdomains = len(emcpData)
-            for domain in emcpData:
-                urlDomain = domain["subdomain"]
-                if urlDomain not in sub_l:
-                    sub_l.add(urlDomain)
-                    subdomains = subdomains + urlDomain + "\n"
-
-        with open(workingdir + "subdomains.txt", "r") as file:
-            data = file.read()
-
-        subdomains = subdomains + data
-        return subdomains, len_subdomains, 1
-
-    except amassFailure:
-        with open(workingdir + "/subdomains.txt", "r") as file:
-            data = file.read()
-            len_subdomains = len(file.readlines())
-            return data, len_subdomains, 0
-    return None
-
+def atomGuiGetSubdomains(projectDirPath, toolName):
+    filename= ""
+    if toolName == "amass":
+        filename = "amassSubdomains.txt"
+    elif toolName == "sublist3r":
+        filename = "sublisterSubdomains.txt"
+    elif toolName == "subdomainizer":
+        filename = "subdomainizerSubdomains.txt"
+    filepath = os.path.join(projectDirPath+"/",filename).replace(" ","")
+    if not Path(filepath).exists():
+        return False, None, None
+    else:
+        with open(filepath , "r") as file:
+            list_subdomains=  file.readlines()
+            len_subdomains = len(list_subdomains)
+            subdomiansStr = ""
+            for subdomain in list_subdomains:
+                subdomiansStr = subdomiansStr + subdomain
+        if len_subdomains == 0:
+            return False, None, None
+        else:
+            return True, subdomiansStr, len_subdomains
+            
 
 class Qterminal(QtWidgets.QTextEdit):
     def __init__(self) -> None:
@@ -448,10 +437,19 @@ class LeftDock:
         self.generalInformationLayout.addRow(self.urlTargetName, self.urlName)
         self.numberOfSubdomains = QtWidgets.QLabel("nSubdomains")
         self.nSubd = QtWidgets.QLabel("0")
+        self.amassSdCount = QtWidgets.QLabel(" =>Amass:")
+        self.amassSdCountLabel = QtWidgets.QLabel("0")
+        self.subdomainizerSdCount = QtWidgets.QLabel(" =>subdomainizer:")
+        self.subdomainizerSdCountLabel = QtWidgets.QLabel("0")
+        self.sublist3rSdCount = QtWidgets.QLabel(" =>sublist3r:")
+        self.sublist3rSdCountLabel = QtWidgets.QLabel("0")
         self.generalInformationLayout.addRow(
             self.numberOfSubdomains, self.nSubd)
         self.numberOfUrls = QtWidgets.QLabel("nUrls")
         self.nUrls = QtWidgets.QLabel("0")
+        self.generalInformationLayout.addRow(self.amassSdCount, self.amassSdCountLabel)
+        self.generalInformationLayout.addRow(self.subdomainizerSdCount, self.subdomainizerSdCountLabel)
+        self.generalInformationLayout.addRow(self.sublist3rSdCount, self.sublist3rSdCountLabel)
         self.generalInformationLayout.addRow(self.numberOfUrls, self.nUrls)
         # dynamic information
         self.USlayout = QtWidgets.QHBoxLayout()
@@ -469,23 +467,50 @@ class LeftDock:
         self.leftDockLayout.addLayout(self.textBrowserLayout)
         self.textBrowser = QtWidgets.QTextBrowser()
         self.textBrowser.setOpenExternalLinks(True)
-        self.textBrowser.anchorClicked.connect(self.openClickedUrl)
+        self.textBrowser.setOpenLinks(True)
         # self.textBrowser.setFixedHeight(600)
         self.textBrowserLayout.addWidget(self.textBrowser, 0, 0)
 
         return self.leftDock
 
-    def openClickedUrl(self, url: QtCore.QUrl):
-        urll = url.toString()
-        print(f"clicked {urll}")
-
     def showSubDomains(self):
-        emcpFilePath = os.path.join(self.projectDirPath, "emcpData.json")
-        subdomains = atomGuiGetSubdomains(emcpFilePath, self.projectDirPath)
+        toolNames = ["amass", "sublist3r", "subdomainizer"]
+        subdomains = ""
+        for tN in toolNames:
+            SubdomainResults = atomGuiGetSubdomains(self.projectDirPath, tN)
+            if SubdomainResults[0] == False:
+                self.toolNotYetRunAlert = QtWidgets.QMessageBox()
+                self.toolNotYetRunAlert.setWindowTitle("Information")
+                self.toolNotYetRunAlert.setText(
+                    f"{tN} has not yet been run on the target,\nDo you want to run {tN}"
+                )
+                self.toolNotYetRunAlert.setIcon(QtWidgets.QMessageBox.Information)
+                self.toolNotYetRunAlert.setStandardButtons(
+                    QtWidgets.QMessageBox.Ok)
+                ret = self.toolNotYetRunAlert.exec()
+            else:
+                subdomains = subdomains + SubdomainResults[1] + "\n"
+                len_subdomains = SubdomainResults[2]
+                if tN == "amass":
+                    self.amassSdCountLabel.setText(str(len_subdomains))
+                elif tN == "subdomainizer":
+                    self.subdomainizerSdCountLabel.setText(str(len_subdomains))
+                elif tN == "sublist3r":
+                    self.sublist3rSdCountLabel.setText(str(len_subdomains))
 
-        if subdomains is not None:
-            self.textBrowser.setText(subdomains[0])
-            self.nSubd.setText(str(subdomains[1]))
+        tempFilePath = os.path.join(self.projectDirPath, "subdomainTempFile.txt")
+        with open(tempFilePath, "a") as file:
+            file.write(subdomains)
+        rm_same(tempFilePath)
+        with open(tempFilePath, "r")as f:
+            list_sd = f.readlines()
+            len_subdomains = len(list_sd)
+            sd = ""
+            for s in list_sd:
+                sd += s
+        if len_subdomains != 0:
+            self.textBrowser.setText(sd)
+            self.nSubd.setText(str(len_subdomains))
         else:
             self.noSubdomainsAlert = QtWidgets.QMessageBox()
             self.noSubdomainsAlert.setWindowTitle("Information")
@@ -498,19 +523,6 @@ class LeftDock:
             if ret == QtWidgets.QMessageBox.Ok:
                 pass
 
-        if (
-            subdomains[2] == 0
-        ):  # this show that only subdomainizer has been run on the target.
-            self.amassNotYetRunAlert = QtWidgets.QMessageBox()
-            self.amassNotYetRunAlert.setWindowTitle("Information")
-            self.amassNotYetRunAlert.setText(
-                "Amass has not yet been run on the target,\nThe results shown are from subdomainizer only\nDo you want to run amass"
-            )
-            self.amassNotYetRunAlert.setIcon(QtWidgets.QMessageBox.Information)
-            self.amassNotYetRunAlert.setStandardButtons(
-                QtWidgets.QMessageBox.Ok)
-            ret = self.amassNotYetRunAlert.exec()
-
 
 class BrowserWindow:
     def __init__(self) -> None:
@@ -520,6 +532,7 @@ class BrowserWindow:
         self.browser = QtWebEngineWidgets.QWebEngineView()
         # self.browser.createStandardContextMenu()
         self.browser.setUrl(QtCore.QUrl("http://google.com/"))
+        # self.browser.
         return self.browser
 
 
@@ -964,6 +977,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self.lowerCentralLayout = QtWidgets.QHBoxLayout()
         self.browserwindow = BrowserWindow()
         self.browser = self.browserwindow.InitializeBrowserWindow()
+        self.browser.urlChanged.connect(self.handleUrlChange)
+        self.browser.loadProgress.connect(self.handleLoadProgress)
+        self.browser.loadFinished.connect(self.closeProgressBarWidget)
         self.lowerCentralLayout.addWidget(self.browser)
         self.centralWidgetLayout.addLayout(self.lowerCentralLayout)
         centralWidget.setLayout(self.centralWidgetLayout)
@@ -999,21 +1015,52 @@ class MainWindow(QtWidgets.QMainWindow):
         self.networkWindow.resize(800, 600)
         self.networkWindow.show()
 
+    def closeProgressBarWidget(self):
+        self.browserProgressBar.setVisible(False)
+
+    @QtCore.Slot(int)
+    def handleLoadProgress(self, prog):
+        self.browserProgressBar.setVisible(True)
+        self.browserProgressBar.setMinimum(0)
+        self.browserProgressBar.setMaximum(100)
+        self.browserProgressBar.setValue(prog)
+
+    def handleUrlChange(self):        
+        _Qurl = self.browser.url()
+        str_Url = _Qurl.url()
+        self.urlText.setText(str_Url)
+
     def AddUrlHandler(self):
         self.urlLabel = QtWidgets.QLabel()
         self.urlLabel.setText("Url:")
         self.urlText = QtWidgets.QLineEdit()
         self.searchButton = QtWidgets.QPushButton()
         self.searchButton.setText("search")
+        self.clearButton = QtWidgets.QPushButton()
+        self.clearButton.setText("X")
+        self.clearButton.setFixedWidth(32)
+        self.clearButton.clicked.connect(self.urlTextClear)
         self.searchButton.clicked.connect(self.searchUrlOnBrowser)
+        self.browserProgressBar = QtWidgets.QProgressBar()
+        self.browserProgressBar.setVisible(False)
+        self.browserProgressBar.setFormat("Loading")
         self.upperUrlHandlerLayout.addWidget(self.urlLabel)
         self.upperUrlHandlerLayout.addWidget(self.urlText)
         self.upperUrlHandlerLayout.addWidget(self.searchButton)
+        self.upperUrlHandlerLayout.addWidget(self.clearButton)
+        self.upperUrlHandlerLayout.addWidget(self.browserProgressBar)
+
+    def urlTextClear(self):
+        self.urlText.clear()
 
     def searchUrlOnBrowser(self):
         self.target_url = self.urlText.text()
         self.target_url = addHttpsScheme(self.target_url)
         self.browser.setUrl(QtCore.QUrl(self.target_url))
+        
+        self.QbrowserURL = self.browser.url()
+        self.strUrl = self.QbrowserURL.url()
+        self.urlText.setText(self.strUrl)
 
     def AddTopMenu(self):
         # top menu

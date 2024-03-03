@@ -415,6 +415,24 @@ class AmassSubdProcessor:
                             with open(name_record + "s", "a") as c:
                                 c.write(line)
 
+
+    def SaveAmassSubdomains(self):
+        with open(self.emcpDataFile, "r") as file:
+            data = file.read()
+            jsonData = dict(json.loads(data))
+            emcpData = jsonData["data"]
+            subdomains = ""
+            sub_l = set()
+            len_subdomains = len(emcpData)
+            for domain in emcpData:
+                urlDomain = domain["subdomain"]
+                if urlDomain not in sub_l:
+                    sub_l.add(urlDomain)
+                    subdomains = subdomains + urlDomain + "\n"
+        filepath = os.path.join(self.projectDir, "amassSubdomains.txt")
+        with open(filepath, "a") as file:
+            file.write(subdomains)
+
     def parseAmassData(self):
         self.create_name_record_files(str(self.results_file))
         self.getNetblockIpDict(str(self.results_file))
@@ -428,6 +446,7 @@ class AmassSubdProcessor:
         with open(self.dicts_file, "a") as file_:
             file_.write(stringfiedJsonDict)
         self.createPerSubDomainData()
+        self.SaveAmassSubdomains()
 
     def Run(self, run=False, parse=False):
         if run:
@@ -599,7 +618,7 @@ class SubDomainizerRunner:
     def __init__(self, url, projectDirPath, cookies=None) -> None:
         self.projectDirPath = projectDirPath
         self.subDomainFile = os.path.join(
-            self.projectDirPath, "subdomains.txt")
+            self.projectDirPath, "subdomainizerSubdomains.txt")
         if not Path(self.subDomainFile).exists():
             with open(self.subDomainFile, "a") as file:
                 file.close()
