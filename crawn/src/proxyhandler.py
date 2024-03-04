@@ -48,6 +48,8 @@ class ProxyHandler:
             self.rootCA = CertificateAuthority("LOCALHOST CA", self.rootCAcf, cert_cache=50)
 
         self.useAiohttp = UseAiohttp
+        self.loop = asyncio.get_event_loop()
+        self.connector = aiohttp.TCPConnector(limit_per_host=50)
 
     def DissectPacket(self, packet: str):
         headersBodyDis_ = packet.split("\r\n\r\n")
@@ -76,34 +78,64 @@ class ProxyHandler:
                 packetParamsDict[pP_[0]] = pP_[1]
         except IndexError:
             packetParamsDict = None
-        print(f"{yellow("method:")}{packetMethod}\n{yellow("url:")}{packetUrl}\n{yellow("headers")}{packetHeadersDict}\n{yellow("params")}{packetParamsDict}\n{yellow("body")}{packetBody}" )
+        print(f"{yellow('method:')}{packetMethod}\n{yellow('url:')}{packetUrl}\n{yellow('headers:')}{packetHeadersDict}\n{yellow('params:')}{packetParamsDict}\n{yellow('body:')}{packetBody}" )
         return packetMethod, packetUrl, packetHeadersDict, packetParamsDict, packetBody
+
+    def processUrl(self,url:str):
+        https = "https://"
+        whttps = "https://www."
+        if url.startswith(https):
+            h_url = url
+            w_url = url.replace(https, whttps)
+        elif url.startswith(whttps):
+            w_url = url
+            h_url = url.replace(whttps, https)
+        return h_url, w_url        
 
     async def HandleBrowserRequest(self, request: bytes, destSrvSkt:SSL.Connection= None, ClientSession:aiohttp.ClientSession= None, useAiohttp=False):
         browserRequest = request.decode("utf-8")
-        print(f"browser request {browserRequest[0:20]} ....")
+        print(f"{yellow('browser request:')} {browserRequest[0:100]} ....")
         (requestMethod,requestUrl,requestHeaders,requestParams,requestBody) = self.DissectPacket(browserRequest)
         if useAiohttp:
-            async with ClientSession.request(method=requestMethod,
-                                            url=requestUrl,
-                                            headers=requestHeaders,
-                                            params=requestParams,
+            # try:
+            async with ClientSession.request(method=requestMethod,url=requestUrl,
+                                            headers=requestHeaders,params=requestParams,
                                             data=requestBody) as response:
-                responsePacket = await response.read()
+                body = await response.read()
+                status_line = f"HTTP/{response.version.major}.{response.version.minor} {response.status} {response.reason}"
+                headers = ''.join([f"{key}: {value}\r\n" for key, value in response.headers.items()])
+                cookies = response.cookies.output(header='', sep='; ')
+                responsePacket = f"{status_line}\r\n{headers}"
+                if cookies:
+                    responsePacket += f"Set-Cookie: {cookies}\r\n"
+                responsePacket += "\r\n"
+                with open("response.txt", "wb") as resp_file:
+                    resp_file.write(responsePacket.encode())
+                    resp_file.write(body)
+                with open("response.txt", "rb") as resp_file:
+                    responsePacket = resp_file.read()    
+            # except aiohttp.TooManyRedirects:
+
         else:
             destSrvSkt.send(request)
-            responsePacket = destSrvSkt.recv(8000) # after sending to server and getting response
+            responsePacket = destSrvSkt.recv(80000000) # after sending to server and getting response
         return responsePacket
 
     def DissectBrowserProxyRequests(self, browser_request:str):
         """Disect the initial browser request and extract the host, port and keep-alive values"""
         host_regex = "CONNECT .*\:\d\d\d"
         pattern = re.compile(host_regex)
-        hostStr = pattern.findall(browser_request)[0]
-        host = hostStr.split(" ")[1].split(":")[0]
-        port  = hostStr.split(" ")[1].split(":")[1]
-        keep_alive = True
-        return host,port, keep_alive
+        try:
+            hostStr = pattern.findall(browser_request)[0]
+            if hostStr is not None:
+                host = hostStr.split(" ")[1].split(":")[0]
+                port  = hostStr.split(" ")[1].split(":")[1]
+                keep_alive = True
+                return host,port, keep_alive
+            else:
+                return False
+        except IndexError:
+            return False
 
     def generateDomainCerts(self, hostname:str):
         """generate a certificate for a specific host and sign it with the root certificate. Return the path to the certficate (.crt) file"""
@@ -145,82 +177,90 @@ class ProxyHandler:
         initial_browser_request = browser_socket.recv(1600).decode("utf-8")
         print(cyan("Browser Intercept Request: "))
         print(initial_browser_request)
-        host_portlist = self.DissectBrowserProxyRequests(initial_browser_request)
-        keep_alive = host_portlist[2]
-        host_cer = self.generateDomainCerts(host_portlist[0])     
+        if initial_browser_request != "":
+            host_portlist = self.DissectBrowserProxyRequests(initial_browser_request)
+            if host_portlist is not None:
+                keep_alive = host_portlist[2]
+                host_cer = self.generateDomainCerts(host_portlist[0])     
 
-        # proxy-destination server connection
-        if keep_alive:
-            if self.useAiohttp == False:
-                try:
-                    destServerSslServerSocket, Conn_status = await self.createDestConnection(host_portlist)
-                    if Conn_status == 0:
-                        useAiohttp = False
-                        Proxy_DestSession = None
-                    elif Conn_status == 1:
-                        Proxy_DestSession = aiohttp.ClientSession()
+                # proxy-destination server connection
+                if keep_alive:
+                    if self.useAiohttp == False:
+                        try:
+                            destServerSslServerSocket, Conn_status = await self.createDestConnection(host_portlist)
+                            if Conn_status == 0:
+                                useAiohttp = False
+                                Proxy_DestSession = None
+                            elif Conn_status == 1:
+                                print(cyan("Initiating server connection error"))
+                                print(cyan("Resorting to => aiohttp for destination server connection"))
+                                Proxy_DestSession = aiohttp.ClientSession(connector=self.connector)
+                                useAiohttp = True
+                            destConnection = True
+                        except Exception as e:
+                            print(red(f"Encoutered error {e} when initiating a connection to remote server"))
+                            destConnection = False
+                    elif self.useAiohttp == True:   
+                        print(cyan("Using aiohttp for destination server connection"))
+                        Proxy_DestSession = aiohttp.ClientSession(connector=self.connector) 
                         useAiohttp = True
-                    destConnection = True
-                except Exception as e:
-                    print(red(f"Encoutered error {e} when initiating a connection to remote server"))
-                    destConnection = False
-            elif self.useAiohttp == True:   
-                print(cyan("using aiohttp"))
-                Proxy_DestSession = aiohttp.ClientSession() 
-                useAiohttp = True
-                destConnection = True
-                destServerSslServerSocket = None
+                        destConnection = True
+                        destServerSslServerSocket = None
 
-        # respond to browser after making destination connection
-        if destConnection:
-            response = b"HTTP/1.1 200 Connection established\r\n\r\n"
-            browser_socket.sendall(response)
-            #upgrade the browser-proxy socket to ssl/tls
-            browserSocketSslContext = SSL.Context(SSL.TLSv1_2_METHOD)
-            browserSocketSslContext.use_certificate(host_cer[0])
-            browserSocketSslContext.use_privatekey(host_cer[1])
-            ClientSslSocket = SSL.Connection(browserSocketSslContext, browser_socket)
-            ClientSslSocket.set_accept_state()
-            print("successfully wrapped browser socket with ssl")
-            
-            # open browser-proxy-destination tunnel
-            while True:
-                # try:
-
-                RequestPacket = ClientSslSocket.recv(4096)
-                ResponsePacket = await self.HandleBrowserRequest(RequestPacket,destServerSslServerSocket,Proxy_DestSession,useAiohttp)
-                print(f"{cyan('dest_response')}{ResponsePacket}")
-                ClientSslSocket.sendall(ResponsePacket)
-
-                # except Exception as e:
-                #     print(red(f"Encountered error {e}\n"))
-                #     print(yellow("Cleaning connection"))
-                #     ClientSslSocket.close()  
-                #     if useAiohttp:                  
-                #         Proxy_DestSession.close()
-                #     break
-        else:
-            response = b"HTTP/1.1 500 Connection Failed"
-            browser_socket.sendall(response)
-            print(red("Connection to remote server failed\n"))
-            browser_socket.close()
-
-    async def handleHostInstance(self, browser_socket):
-        with ThreadPoolExecutor(max_workers=8) as executor:
-            executor.submit(await self.HandleHostInstance(browser_socket))
+                # respond to browser after making destination connection
+                if destConnection:
+                    response = b"HTTP/1.1 200 Connection established\r\n\r\n"
+                    browser_socket.sendall(response)
+                    #upgrade the browser-proxy socket to ssl/tls
+                    browserSocketSslContext = SSL.Context(SSL.TLSv1_2_METHOD)
+                    browserSocketSslContext.use_certificate(host_cer[0])
+                    browserSocketSslContext.use_privatekey(host_cer[1])
+                    ClientSslSocket = SSL.Connection(browserSocketSslContext, browser_socket)
+                    ClientSslSocket.set_accept_state()
+                    print(cyan("Upgraded browser socket with ssl"))
+                    
+                    # open browser-proxy-destination tunnel
+                    try:
+                        RequestPacket = ClientSslSocket.recv(4096)
+                        ResponsePacket = await self.HandleBrowserRequest(RequestPacket,destServerSslServerSocket,Proxy_DestSession,useAiohttp)
+                        print(f"{yellow('dest_response:')}{ResponsePacket[0:800]}........")
+                        ClientSslSocket.sendall(ResponsePacket) # replace with sendall during debugging
+                        browser_socket.close()
+                        if self.useAiohttp:
+                            Proxy_DestSession.close()
+                    except SSL.SysCallError:
+                        print(f"{red('Browser Socket Unexpectdly closed')}")
+                        browser_socket.close()
+                        if self.useAiohttp:
+                            Proxy_DestSession.close()
+                    # except Exception as e:
+                    #     print(red(f"Encountered error {e}\n"))
+                    #     print(yellow("Cleaning connection"))
+                    #     ClientSslSocket.close()  
+                    #     if useAiohttp:                  
+                    #         Proxy_DestSession.close()
+                else:
+                    response = b"HTTP/1.1 500 Connection Failed"
+                    browser_socket.sendall(response)
+                    print(red("Connection to remote server failed\n"))
+                    browser_socket.close()
+            else:
+                print(red("Initial Browser Request is Invalid"))
 
     async def startServerInstance(self):
         print(yellow(f"Proxy running on {self.host} on port {self.port}"))
-        while True:
-            print(yellow("Waiting for Incoming Connections"))
-            browser_socket, browser_address = self.socket.accept()
-            await self.handleHostInstance(browser_socket)
+        with ThreadPoolExecutor(max_workers=3084) as executor:
+            while True:
+                print(yellow("Waiting for Incoming Connections"))
+                browser_socket, browser_address = self.socket.accept()
+                executor.submit(await self.HandleHostInstance(browser_socket))
 
 
 if __name__ == "__main__":
     try:
-        proxy = ProxyHandler(UseAiohttp=True)
-        asyncio.run(proxy.startServerInstance())
+        proxy = ProxyHandler(UseAiohttp=False)
+        # asyncio.run(proxy.startServerInstance())
+        proxy.loop.run_until_complete(proxy.startServerInstance())
     except KeyboardInterrupt:
         print(red("\nCleaning Up"))
         proxy.socket.close()
