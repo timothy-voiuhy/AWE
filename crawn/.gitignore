@@ -3,3 +3,13 @@ venv/
 __pycache__/
 Tools
 other
+bin/
+compiler_compat/
+conda-meta/
+etc/
+include/
+lib/
+man/
+share/
+x86_64-conda_cos7-linux-gnu/
+x86_64-conda-linux-gnu/
