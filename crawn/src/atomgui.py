@@ -1111,6 +1111,36 @@ class MainWindow(QtWidgets.QMainWindow):
     def LoadProject(self):
         pass
 
+class SiteMapDock:
+    def __init__(self, main_window:QtWidgets.QMainWindow) -> None:
+        self.main_window = main_window
+
+    def InitializeSiteMapDock(self):
+        self.SiteMapDock = QtWidgets.QDockWidget("Site Map")
+        self.SiteMapDockWidget = QtWidgets.QWidget()
+        self.SiteMapDock.setWidget(self.leftDockWidget)
+        self.SiteMapDockArea = QtCore.Qt.DockWidgetArea()
+        self.main_window.addDockWidget(
+            self.SiteMapDockArea.LeftDockWidgetArea, self.SiteMapDock
+        )
+        # layout
+        self.SiteMapDockLayout = QtWidgets.QVBoxLayout()
+        self.SiteMapDockWidget.setLayout(self.SiteMapDockLayout)
+
+        return self.SiteMapDock    
+
+class ProxyInterceptWindow(QtWidgets.QMainWindow):
+    def __init__(self, projectDirPath):
+        super().__init__()
+        self.projectDirPath = projectDirPath
+
+        # docks
+        SiteMapDock = SiteMapDock(self) # site map dock
+        self.siteMapDock = SiteMapDock.InitializeSiteMapDock()
+
+        self.MainWidget = QtWidgets.QWidget()
+        self.setCentralWidget(self.MainWidget)
+            
 
 class MainWin(QtWidgets.QMainWindow):
     def __init__(self) -> None:
@@ -1150,17 +1180,25 @@ class MainWin(QtWidgets.QMainWindow):
         self.closeTabButton.setFixedWidth(120)
         self.closeTabButton.clicked.connect(self.closeTab)
         self.upperTabMenuLayout.addWidget(self.closeTabButton)
+        self.SiteMapButton = QtWidgets.QPushButton()
+        self.SiteMapButton.setText("SiteMap")
+        self.SiteMapButton.setFixedWidth(110)
+        self.SiteMapButton.clicked.connect(self.OpenSiteMapWindow)
+        self.upperTabMenuLayout.addWidget(self.SiteMapButton)            
         # add target button
         self.addTabButton = QtWidgets.QPushButton()
         self.addTabButton.setText("Add Target")
         self.addTabButton.setFixedWidth(120)
         self.addTabButton.clicked.connect(self.AddTargetWindow)
         self.upperTabMenuLayout.addWidget(self.addTabButton)
-        self.upperTabMenuLayout.setAlignment(self.addTabButton, Qt.AlignCenter)
+        self.upperTabMenuLayout.setAlignment(self.addTabButton, Qt.AlignLeft)
         self.MainLayout.addLayout(self.upperTabMenuLayout)
 
         self.MainLayout.addWidget(self.tabManager)
         self.setCentralWidget(self.centralWidget)
+
+    def OpenSiteMapWindow(self):
+        pass
 
     def AddTargetWindow(self):
         # new target window
