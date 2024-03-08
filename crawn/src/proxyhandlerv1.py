@@ -18,9 +18,9 @@ import random
 import functools
 
 import urllib3
-from urllib3.poolmanager import HTTPConnectionPool, HTTPSConnectionPool
 import urllib.parse as urlParser
 import brotli
+import httpx
 
 def is_brotli_compressed(data):
     brotli_magic_number = b'\x1b'
@@ -63,7 +63,7 @@ def DissectBrowserReqPkt(packet: str, http:bool=None):
     packetHeadersDict = {}
     for packetHeader in packetHeaders:
         keyValue = packetHeader.split(":")
-        key, value = keyValue[0], keyValue[1]
+        key, value = keyValue[0].strip(), keyValue[1].strip()
         packetHeadersDict[key] = value
     packetMethod = headersDis[0].split(" ")[0]
     host = packetHeadersDict["Host"]
@@ -115,7 +115,6 @@ def writeLinkContentToFIle(MAIN_DIR, link: str, data, type_="txt"):
     except Exception as e:
         print(f"failed to save file with error {e}")
 
-
 def processUrl(url:str):
     https = "https://"
     whttps = "https://www."
@@ -137,7 +136,6 @@ class ProxyHandler:
                  downloadMozillaCAs=False,
                  UsehttpLibs=False,
                  verifyDstServerCerts=True,
-                 persitSessions= True,
                  save_traffic = False,
                  useFileBasedCerts= False,
                  useUrllib = False):
@@ -180,10 +178,10 @@ class ProxyHandler:
         self.defaultWorkspaceDir = os.path.join(self.homeDirectory, "AtomProjects/")
         self.verifyDstServerCerts = verifyDstServerCerts
         self.sessionsDict = {}
-        self.persitSessions = persitSessions
         self.save_traffic = save_traffic
         self.error_file_count = 0
-        self.useUrllib = useUrllib        
+        self.useUrllib = useUrllib 
+        self.PoolManager = urllib3.PoolManager(num_pools=100)       
 
     def constructResponsePacket(self,u_response:urllib3.HTTPResponse=None,
                                 usedRequests:bool=False):
@@ -193,7 +191,7 @@ class ProxyHandler:
             status_line = f"HTTP/{str(u_response.version)[0]}.{str(u_response.version)[1]} {u_response.status} {u_response.reason}"
             r_headers = u_response.headers
             
-            if "Transfer-Encoding" in list(r_headers.keys()):
+            if "Transfer-Encoding" in list(r_headers.keys()) or "transfer-encoding" in list(r_headers.keys()):
                 r_headers.pop("Transfer-Encoding")
                 r_headers["Content-Length"] = str(len_body)
 
@@ -273,7 +271,6 @@ class ProxyHandler:
             return True
 
     def HandleBrowserRequest(self,request: bytes,
-                            u_ClientSession:HTTPSConnectionPool|HTTPConnectionPool,
                             destSrvSkt:SSL.Connection= None,
                             usehttpLibs=False,
                             http:bool=False
@@ -284,7 +281,7 @@ class ProxyHandler:
             bodyEncoding = False
     
             encoded_body = request[headers_end+4:]
-            if b'Content-Encoding: gzip' in headers:
+            if b'Content-Encoding: gzip' in headers or b'content-encoding: gzip' in headers:
                 bodyEncoding = True
                 decompressed_body= gzip.decompress(encoded_body)
                 decompressed_utf_body = decompressed_body.decode("utf-8")
@@ -304,12 +301,8 @@ class ProxyHandler:
                 requestBody = encoded_body
             print(yellow(f"Connecting to remote server ....... on url: {requestUrl}"))
             if self.useUrllib:
-                if isinstance(u_ClientSession, HTTPConnectionPool):
-                    print(yellow("Using http connection pool for request"))
-                elif isinstance(u_ClientSession, HTTPSConnectionPool):
-                    print(yellow("Using https connection pool for request"))
                 try:
-                    response = u_ClientSession.request(method=requestMethod,
+                    response = self.PoolManager.request(method=requestMethod,
                                                     url=requestUrlwParams,
                                                     headers=requestHeaders,
                                                     body= requestBody,
@@ -327,58 +320,11 @@ class ProxyHandler:
         else:
             destSrvSkt.sendall(request)
             responsePacket = destSrvSkt.recv(80000000) # after sending to server and getting response
-        return responsePacket, requestUrl
+        return responsePacket, requestUrl                      
 
-    def createUrllibProxyDestSession(self, hostname, http:bool=False):
-        if self.persitSessions:
-            if hostname in list(self.sessionsDict.keys()):
-                Proxy_DestSession = self.sessionsDict[hostname]
-                if isinstance(Proxy_DestSession, HTTPSConnectionPool):
-                    print(yellow("Using found HTTPS sesssion"))
-                    return Proxy_DestSession
-                elif isinstance(Proxy_DestSession, HTTPConnectionPool):
-                    print(yellow("Using found HTTP session"))
-                    return Proxy_DestSession
-                else:
-                    print(f"{yellow('Session has been closed<=>...Opening new session.....')}")
-                    if http:
-                        Proxy_DestSession = HTTPSConnectionPool(hostname)
-                    else:
-                        Proxy_DestSession = HTTPSConnectionPool(hostname) 
-                    return Proxy_DestSession
-            else:
-                if http:
-                    Proxy_DestSession = HTTPSConnectionPool(hostname)
-                else:
-                    Proxy_DestSession = HTTPSConnectionPool(hostname) 
-                self.sessionsDict[hostname] = Proxy_DestSession
-                return Proxy_DestSession
-        else:
-            if http:
-                Proxy_DestSession = HTTPSConnectionPool(hostname)
-            else:
-                Proxy_DestSession = HTTPSConnectionPool(hostname) 
-            return Proxy_DestSession                        
-
-    def closeTunnel(self, browser_socket, Proxy_DestSession, closeBrowserSocket = True):
+    def closeTunnel(self, browser_socket, closeBrowserSocket = True):
         if closeBrowserSocket:
             browser_socket.close()
-        try:
-            if not self.persitSessions:
-                if self.usehttpLibs:
-                    if Proxy_DestSession is not None:
-                        Proxy_DestSession.close()       
-        except TypeError as e:
-            pass
-
-    def cleanSessions(self):
-        if self.persitSessions:
-            try:
-                for session in list(self.sessionsDict.values()):
-                    session.close()
-                    self.sessionsDict.clear()
-            except:
-                pass
 
     def isRequest(self, request:bytes):
         if b'Accept-Encoding:' in request and b'Accept:' in request:
@@ -388,8 +334,7 @@ class ProxyHandler:
 
     def openCommTunnel(self, ClientSslSocket:SSL.Connection,
                    hostDir,
-                   hostnameUrl, 
-                   Proxy_DestSession:HTTPSConnectionPool|HTTPConnectionPool,
+                   hostnameUrl,
                    destServerSslServerSocket:SSL.Connection,
                    usehttpLibs:bool,
                    browser_socket:socket.socket,
@@ -402,7 +347,6 @@ class ProxyHandler:
             if self.save_traffic:
                 writeLinkContentToFIle(hostDir,hostnameUrl, RequestPacket)  
             ResponsePacket, requestUrl =  self.HandleBrowserRequest(RequestPacket,
-                                                                    Proxy_DestSession,
                                                                     destServerSslServerSocket,
                                                                     usehttpLibs=usehttpLibs,
                                                                     http=http)
@@ -411,13 +355,13 @@ class ProxyHandler:
             print(f"{yellow('dest_response:')}{ResponsePacket[:200]}")
             writtenBytes = ClientSslSocket.sendall(ResponsePacket) # replace with sendall during debugging
             print(f"{yellow('Bytes written to browser socket')}\n\t{writtenBytes}")
-            self.closeTunnel(browser_socket, Proxy_DestSession)
+            self.closeTunnel(browser_socket)
         except SSL.SysCallError as e:
             print(f"{red('Browser Socket Unexpectdly closed with error:')}{e}")
-            self.closeTunnel(browser_socket, Proxy_DestSession)
+            self.closeTunnel(browser_socket)
         except SSL.Error as e:
             print(f"{red('Browser failed to accept certificates')}\n\t{yellow('Error:')}{red(e)}")  
-            self.closeTunnel(browser_socket, Proxy_DestSession)        
+            self.closeTunnel(browser_socket)        
 
     def HandleConnection(self, browser_socket:socket.socket, placeholder):
             print("Waiting for initial browser request")
@@ -436,11 +380,9 @@ class ProxyHandler:
                      requestUrlwParams)= DissectBrowserReqPkt(initial_browser_request, http=True)
                     hostname = requestHeaders["Host"]
                     hostDir = os.path.join(self.defaultWorkspaceDir, hostname+"/")
-                    Proxy_DestSession = self.createUrllibProxyDestSession(hostname, http=True)
                     self.openCommTunnel(ClientSslSocket=None,
                                     hostDir=hostDir,
                                     hostnameUrl=requestUrl,
-                                    Proxy_DestSession=Proxy_DestSession,
                                     destServerSslServerSocket=None,
                                     usehttpLibs=self.usehttpLibs,
                                     browser_socket=browser_socket,
@@ -461,12 +403,10 @@ class ProxyHandler:
                                     destServerSslServerSocket, Conn_status = self.createDestConnection(host_portlist)
                                     if Conn_status == 0:
                                         usehttpLibs = False
-                                        Proxy_DestSession = None
                                     elif Conn_status == 1:
                                         print(cyan("Initiating server connection error"))
                                         if self.useUrllib:
                                             print(cyan("Resorting to => urllib3 for destination server connection"))
-                                            Proxy_DestSession = self.createUrllibProxyDestSession(hostname, http=True)
                                         usehttpLibs = True
                                     destConnection = True
                                 except Exception as e:
@@ -474,8 +414,6 @@ class ProxyHandler:
                                     destConnection = False
                             elif self.usehttpLibs == True:   
                                 print(cyan("Using urllib3 for destination server connection"))
-                                if self.useUrllib:
-                                    Proxy_DestSession = self.createUrllibProxyDestSession(hostname)
                                 usehttpLibs = True
                                 destConnection = True
                                 destServerSslServerSocket = None
@@ -499,7 +437,6 @@ class ProxyHandler:
                             self.openCommTunnel(ClientSslSocket,
                                             hostDir,
                                             hostnameUrl,
-                                            Proxy_DestSession,
                                             destServerSslServerSocket,
                                             usehttpLibs,
                                             browser_socket)
@@ -522,20 +459,16 @@ class ProxyHandler:
                 browser_socket, browser_address = self.socket.accept()
                 executor.submit(self.HandleConnection, browser_socket,None)
                 # self.HandleConnection(browser_socket, None)
- 
+
 if __name__ == "__main__":
     try:
         proxy = ProxyHandler(
                              verifyDstServerCerts=False,
-                             persitSessions=True,
-                             useFileBasedCerts=False,
                              UsehttpLibs=True,
                              useUrllib=True,
-                             save_traffic=True
                              )
         proxy.startServerInstance()
     except KeyboardInterrupt:
         print(red("\nCleaning Up"))
-        if proxy.persitSessions:
-            proxy.cleanSessions()
+        proxy.PoolManager.clear()
         proxy.socket.close()
