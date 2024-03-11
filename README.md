@@ -11,3 +11,5 @@ This is not a scanner but it is just convienient for me to use on a target.
 Generally it helps me get the whole picture of the target(s) esp in the recon phase.
 
 ### it is really good for my programming skills and it is helping me understand the working of the web more (esp when i worked on the proxy)
+
+## inspired by the ars0n framework: https://github.com/R-s0n/ars0n-framework
