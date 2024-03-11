@@ -272,7 +272,7 @@ class ProxyHandler:
         else:
             return True
 
-    def HandleBrowserRequest(self,request: bytes,
+    def ForwardBrowserRequest(self,request: bytes,
                             u_ClientSession:HTTPSConnectionPool|HTTPConnectionPool,
                             destSrvSkt:SSL.Connection= None,
                             usehttpLibs=False,
@@ -386,7 +386,7 @@ class ProxyHandler:
         else:
             return False
 
-    def openCommTunnel(self, ClientSslSocket:SSL.Connection,
+    def OpenHttpsCommTunnel(self, ClientSslSocket:SSL.Connection,
                    hostDir,
                    hostnameUrl, 
                    Proxy_DestSession:HTTPSConnectionPool|HTTPConnectionPool,
@@ -401,7 +401,7 @@ class ProxyHandler:
                 print(f"{yellow('Browser Request: ')}{RequestPacket}")
             if self.save_traffic:
                 writeLinkContentToFIle(hostDir,hostnameUrl, RequestPacket)  
-            ResponsePacket, requestUrl =  self.HandleBrowserRequest(RequestPacket,
+            ResponsePacket, requestUrl =  self.ForwardBrowserRequest(RequestPacket,
                                                                     Proxy_DestSession,
                                                                     destServerSslServerSocket,
                                                                     usehttpLibs=usehttpLibs,
@@ -437,7 +437,7 @@ class ProxyHandler:
                     hostname = requestHeaders["Host"]
                     hostDir = os.path.join(self.defaultWorkspaceDir, hostname+"/")
                     Proxy_DestSession = self.createUrllibProxyDestSession(hostname, http=True)
-                    self.openCommTunnel(ClientSslSocket=None,
+                    self.OpenHttpsCommTunnel(ClientSslSocket=None,
                                     hostDir=hostDir,
                                     hostnameUrl=requestUrl,
                                     Proxy_DestSession=Proxy_DestSession,
@@ -496,7 +496,7 @@ class ProxyHandler:
                             print(cyan("Upgraded browser socket to support ssl"))
                             
                             # open browser-proxy-destination tunnel
-                            self.openCommTunnel(ClientSslSocket,
+                            self.OpenHttpsCommTunnel(ClientSslSocket,
                                             hostDir,
                                             hostnameUrl,
                                             Proxy_DestSession,

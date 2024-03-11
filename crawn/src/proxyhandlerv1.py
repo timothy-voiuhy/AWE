@@ -14,7 +14,12 @@ import re
 
 import gzip
 import threading
-import random
+from websockets.client import ClientConnection
+from websockets.server import ServerConnection
+# from websockets.connection import Request as WebSktRequest
+# from websockets.connection import Response as WebSktResponse
+from websockets.datastructures import Headers as WebSktHeaders
+from websockets.uri import WebSocketURI
 import functools
 
 import urllib3
@@ -70,6 +75,7 @@ def DissectBrowserReqPkt(packet: str, http:bool=None):
     path = headersDis[0].split(" ")[1]
     if http:
         packetUrl = path.split("?")[0]
+        packetUrlPath = packetUrl
     else:
         packetUrl = host + path.split("?")[0]
         packetUrl = "https://"+packetUrl.strip()
@@ -94,7 +100,7 @@ def DissectBrowserReqPkt(packet: str, http:bool=None):
         else:
             packetUrlwParams = packetUrl 
     print(f"{yellow('method:')}{packetMethod}\n{yellow('url:')}{packetUrl}\n{yellow('headers:')}{packetHeadersDict}\n{yellow('params:')}{packetParamsDict}\n{yellow('body:')}{packetBody}\n{yellow('packetUrlWithParams:')}{packetUrlwParams}" )
-    return packetMethod, packetUrl, packetHeadersDict, packetParamsDict, packetBody,packetUrlwParams
+    return packetMethod, packetUrl, packetHeadersDict, packetParamsDict, packetBody,packetUrlwParams, packetUrlPath
 
 def writeLinkContentToFIle(MAIN_DIR, link: str, data, type_="txt"):
     scheme_path = link.split("//")  # scheme_path = [https: , path] or  #shceme_path = [https: , path?jfdk]
@@ -270,22 +276,69 @@ class ProxyHandler:
         else:
             return True
 
-    def HandleBrowserRequest(self,request: bytes,
+    def ForwardBrowserRequest(self,request: bytes,
                             destSrvSkt:SSL.Connection= None,
                             usehttpLibs=False,
                             http:bool=False
                             ):
+        headers_end = request.find(b"\r\n\r\n")
+        headers = request[:headers_end]
+        bodyEncoding = False
+        headers_dict = {}
+        for header in headers.split("\r\n"):
+            key, value = header.split(":")
+            headers_dict[key] = value
+        if b'Upgrade: websocket' in headers or b'upgrade: websocket' in headers:
+            websocket_key = headers_dict.get("Sec-WebSocket-Key")
+            if websocket_key is None:
+                websocket_key = headers_dict.get("sec-websocket-key")
+            print(red(f"Browser asking for websocket support with key: {websocket_key}"))
+                
+            browser_request = request.decode("utf-8")
+            (requestMethod,
+             requestUrl,
+             requestHeaders,
+             requestParams,
+             requestBody,
+             requestUrlwParams,
+             requestUrlPath) = DissectBrowserReqPkt(browser_request, http=False)
+            wsuri = WebSocketURI(secure=True,
+                                 host=requestHeaders.get("Host"),
+                                 port=443,
+                                 path=requestUrlPath,
+                                 )
+
+            print(yellow("Initiating websocket communications with server......."))
+            ## proxy websocket client connection with remote server
+            web_socketClient = ClientConnection(wsuri)
+            request_handshake = web_socketClient.connect()
+            web_socketClient.send_request(request_handshake)
+            # ? how to check for the status of the handshake
+        
+            print(yellow("Initiating websocket comms with browser"))
+            ## proxy websocket connection with browser(client)
+            web_socketServer = ServerConnection()
+            webskt_path = requestUrlPath
+            webskt_headers = WebSktHeaders()
+            for key, value in zip(requestHeaders.keys(), requestHeaders.values()):
+                webskt_headers[key] = value
+            # browser_websocket_req = WebSktRequest(headers=webskt_headers, path=webskt_path)
+            # response_handshake = web_socketServer.accept(browser_websocket_req)
+            # web_socketServer.send_response(response_handshake)
+
+            ## open websocket comms tunnel
+
+        # else:    
         try:
-            headers_end = request.find(b"\r\n\r\n")
-            headers = request[:headers_end]
-            bodyEncoding = False
-    
             encoded_body = request[headers_end+4:]
             if b'Content-Encoding: gzip' in headers or b'content-encoding: gzip' in headers:
                 bodyEncoding = True
                 decompressed_body= gzip.decompress(encoded_body)
                 decompressed_utf_body = decompressed_body.decode("utf-8")
-                browserRequest = headers.decode("utf-8")+decompressed_utf_body 
+                len_decompressed_utf_body = len(decompressed_utf_body)
+                headers_dict["Content-Length"] = str(len_decompressed_utf_body)
+                headers = ''.join([f"{key}: {value}\r\n" for key, value in headers_dict.items()])
+                browserRequest = headers+decompressed_utf_body 
             else:
                 browserRequest = request.decode("utf-8") 
         except UnicodeDecodeError:
@@ -295,7 +348,7 @@ class ProxyHandler:
                 print(f"{red(f'got unicode decode error in browser request , written to file=>')}{filename}")
             self.error_file_count += 1
         print(f"{yellow('browser request:')} {browserRequest[0:100]} ....")
-        (requestMethod,requestUrl,requestHeaders,requestParams,requestBody, requestUrlwParams) = DissectBrowserReqPkt(browserRequest, http)
+        (requestMethod,requestUrl,requestHeaders,requestParams,requestBody, requestUrlwParams, requestUrlPath) = DissectBrowserReqPkt(browserRequest, http)
         if usehttpLibs:
             if bodyEncoding:
                 requestBody = encoded_body
@@ -310,13 +363,7 @@ class ProxyHandler:
                     responsePacket = self.constructResponsePacket(u_response=response)
                 except Exception as e:
                     print(red(f"Experiencing error {e} {yellow('<=>')} \n\t restortig to using requests lib" ))
-                    response = requests.request(requestMethod, requestUrlwParams,
-                                                headers=requestHeaders,
-                                                params=requestParams,
-                                                data=requestBody,
-                                                allow_redirects=True)
-                    responsePacket = self.constructResponsePacket(u_response=response,usedRequests=True)
-   
+
         else:
             destSrvSkt.sendall(request)
             responsePacket = destSrvSkt.recv(80000000) # after sending to server and getting response
@@ -332,27 +379,28 @@ class ProxyHandler:
         else:
             return False
 
-    def openCommTunnel(self, ClientSslSocket:SSL.Connection,
-                   hostDir,
-                   hostnameUrl,
-                   destServerSslServerSocket:SSL.Connection,
-                   usehttpLibs:bool,
-                   browser_socket:socket.socket,
-                   RequestPacket:bytes=None,
-                   http:bool=False):
+    def OpenHttpsCommTunnel(self,
+                            ClientSslSocket:SSL.Connection,
+                            hostDir,
+                            hostnameUrl,
+                            destServerSslSocket:SSL.Connection,
+                            usehttpLibs:bool,
+                            browser_socket:socket.socket,
+                            RequestPacket:bytes=None,
+                            http:bool=False):
         try:
             if RequestPacket is None:    
                 RequestPacket = ClientSslSocket.recv(40960)
                 print(f"{yellow('Browser Request: ')}{RequestPacket}")
             if self.save_traffic:
                 writeLinkContentToFIle(hostDir,hostnameUrl, RequestPacket)  
-            ResponsePacket, requestUrl =  self.HandleBrowserRequest(RequestPacket,
-                                                                    destServerSslServerSocket,
+            ResponsePacket, requestUrl =  self.ForwardBrowserRequest(RequestPacket,
+                                                                    destServerSslSocket,
                                                                     usehttpLibs=usehttpLibs,
                                                                     http=http)
             if self.save_traffic:
                 writeLinkContentToFIle(hostDir, requestUrl,ResponsePacket)
-            print(f"{yellow('dest_response:')}{ResponsePacket[:200]}")
+            print(f"{yellow('dest_response:')}{ResponsePacket[:800]}")
             writtenBytes = ClientSslSocket.sendall(ResponsePacket) # replace with sendall during debugging
             print(f"{yellow('Bytes written to browser socket')}\n\t{writtenBytes}")
             self.closeTunnel(browser_socket)
@@ -363,7 +411,22 @@ class ProxyHandler:
             print(f"{red('Browser failed to accept certificates')}\n\t{yellow('Error:')}{red(e)}")  
             self.closeTunnel(browser_socket)        
 
-    def HandleConnection(self, browser_socket:socket.socket, placeholder):
+    def SSLUpgradeBrowserSocket(self, browser_socket:socket.socket,
+                                certificate=None,
+                                private_key = None,
+                                cert_chain=None):
+        browserSocketSslContext = SSL.Context(SSL.TLSv1_2_METHOD)
+        if self.useFileBasedCerts is False:
+            browserSocketSslContext.use_certificate(certificate)
+            browserSocketSslContext.use_privatekey(private_key)
+        else:
+            browserSocketSslContext.use_certificate_chain_file(cert_chain)
+        ClientSslSocket = SSL.Connection(browserSocketSslContext, browser_socket)
+        ClientSslSocket.set_accept_state()
+        print(cyan("Upgraded browser socket to support ssl"))
+        return ClientSslSocket
+
+    def HandleConnection(self, browser_socket:socket.socket):
             print("Waiting for initial browser request")
             initial_browser_request = browser_socket.recv(160000).decode("utf-8")
             print(cyan("Browser Intercept Request: "))
@@ -380,10 +443,12 @@ class ProxyHandler:
                      requestUrlwParams)= DissectBrowserReqPkt(initial_browser_request, http=True)
                     hostname = requestHeaders["Host"]
                     hostDir = os.path.join(self.defaultWorkspaceDir, hostname+"/")
-                    self.openCommTunnel(ClientSslSocket=None,
+                    host_cer = self.generateDomainCerts(hostname)
+                    ClientSslSocket = self.SSLUpgradeBrowserSocket(browser_socket, host_cer[0], host_cer[1], host_cer)
+                    self.OpenHttpsCommTunnel(ClientSslSocket,
                                     hostDir=hostDir,
                                     hostnameUrl=requestUrl,
-                                    destServerSslServerSocket=None,
+                                    destServerSslSocket=None,
                                     usehttpLibs=self.usehttpLibs,
                                     browser_socket=browser_socket,
                                     RequestPacket=initial_browser_request.encode("utf-8"),
@@ -400,7 +465,7 @@ class ProxyHandler:
                         if keep_alive:
                             if self.usehttpLibs == False:
                                 try:
-                                    destServerSslServerSocket, Conn_status = self.createDestConnection(host_portlist)
+                                    destServerSslSocket, Conn_status = self.createDestConnection(host_portlist)
                                     if Conn_status == 0:
                                         usehttpLibs = False
                                     elif Conn_status == 1:
@@ -416,28 +481,19 @@ class ProxyHandler:
                                 print(cyan("Using urllib3 for destination server connection"))
                                 usehttpLibs = True
                                 destConnection = True
-                                destServerSslServerSocket = None
+                                destServerSslSocket = None
 
                         # respond to browser after making destination connection
-                        if destConnection:
+                        if destConnection is True:
                             response = b"HTTP/1.1 200 Connection established\r\n\r\n"
                             browser_socket.sendall(response)
                             #upgrade the browser-proxy socket to ssl/tls
-                            browserSocketSslContext = SSL.Context(SSL.TLSv1_2_METHOD)
-                            if self.useFileBasedCerts is False:
-                                browserSocketSslContext.use_certificate(host_cer[0])
-                                browserSocketSslContext.use_privatekey(host_cer[1])
-                            else:
-                                browserSocketSslContext.use_certificate_chain_file(host_cer)
-                            ClientSslSocket = SSL.Connection(browserSocketSslContext, browser_socket)
-                            ClientSslSocket.set_accept_state()
-                            print(cyan("Upgraded browser socket to support ssl"))
-                            
+                            ClientSslSocket = self.SSLUpgradeBrowserSocket(browser_socket, host_cer[0],host_cer[1])
                             # open browser-proxy-destination tunnel
-                            self.openCommTunnel(ClientSslSocket,
+                            self.OpenHttpsCommTunnel(ClientSslSocket,
                                             hostDir,
                                             hostnameUrl,
-                                            destServerSslServerSocket,
+                                            destServerSslSocket,
                                             usehttpLibs,
                                             browser_socket)
           
@@ -457,8 +513,8 @@ class ProxyHandler:
             while True:
                 print(yellow("Waiting for Incoming Connections"))
                 browser_socket, browser_address = self.socket.accept()
-                executor.submit(self.HandleConnection, browser_socket,None)
-                # self.HandleConnection(browser_socket, None)
+                executor.submit(self.HandleConnection, browser_socket)
+                # self.HandleConnection(browser_socket)
 
 if __name__ == "__main__":
     try:

@@ -640,6 +640,7 @@ class SubDomainizerRunner:
 
 
 def addHttpsScheme(url: str):
+
     if not url.endswith("/"):  # add trailing line character
         url = url + "/"
     if not url.startswith(("https://", "http://")):  # add scheme if does not exist

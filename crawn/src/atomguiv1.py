@@ -2,6 +2,7 @@ from typing import Optional
 from aiohttp import ThreadedResolver
 from PySide6 import QtCore, QtWidgets, QtGui, QtWebEngineWidgets
 from PySide6.QtNetwork import QNetworkProxyQuery, QNetworkProxy, QSsl, QSslCertificate, QSslConfiguration
+from PySide6.QtCore import Signal, SignalInstance
 import subprocess
 from PySide6.QtCore import QThread
 from pathlib import Path
@@ -373,6 +374,7 @@ class RightDock:
 
 
 class LowerDock:
+
     def __init__(self, MainWindow: QtWidgets.QMainWindow, projectDirPath) -> None:
         self.main_window = MainWindow
         self.projectDirPath = projectDirPath
@@ -397,17 +399,22 @@ class LowerDock:
         return self.lowerDock
 
 
-class LeftDock:
+class LeftDock(QtCore.QObject):
+
+    openLinkInBrw = Signal(str)
+
     def __init__(self, mainWindow: QtWidgets.QMainWindow, projectDirPath) -> None:
+        super().__init__()
         self.main_window = mainWindow
         self.projectDirPath = projectDirPath
 
     def InitializeLeftDock(self):
         def showUrls():
             urls = GetUrls(self.projectDirPath)
-            nUrls = len(urls.split("\n"))
+            Urls = urls.split("\n")
+            nUrls = len(Urls)
             self.nUrls.setText(str(nUrls))
-            self.textBrowser.setText(urls)
+            self.subdomainsModel.setStringList(Urls)
 
         # lower dock
         self.leftDock = QtWidgets.QDockWidget("Target Information")
@@ -457,16 +464,24 @@ class LeftDock:
         self.urlsButton = QtWidgets.QPushButton("Show Urls")
         self.urlsButton.clicked.connect(showUrls)
         self.USlayout.addWidget(self.urlsButton)
-        # major text browser
-        self.textBrowserLayout = QtWidgets.QGridLayout()
-        self.leftDockLayout.addLayout(self.textBrowserLayout)
-        self.textBrowser = QtWidgets.QTextBrowser()
-        self.textBrowser.setOpenExternalLinks(True)
-        self.textBrowser.setOpenLinks(True)
-        # self.textBrowser.setFixedHeight(600)
-        self.textBrowserLayout.addWidget(self.textBrowser, 0, 0)
+
+        # subdomains and urls
+        self.subdomainsModel = QtCore.QStringListModel()
+        self.subdomainsListview = QtWidgets.QListView()
+        self.subdomainsListview.doubleClicked.connect(self.openLinkInBrowser)
+        self.subdomainsListview.setModel(self.subdomainsModel)
+
+        self.subdomainsScrollArea = QtWidgets.QScrollArea()
+        self.subdomainsScrollArea.setWidgetResizable(True)
+        self.subdomainsScrollArea.setWidget(self.subdomainsListview)
+        self.leftDockLayout.addWidget(self.subdomainsScrollArea)
 
         return self.leftDock
+
+    @QtCore.Slot(int)
+    def openLinkInBrowser(self, index):
+        clicked_link = self.subdomainsModel.data(index, QtCore.Qt.DisplayRole)
+        self.openLinkInBrw.emit(clicked_link)
 
     def showSubDomains(self):
         toolNames = ["amass", "sublist3r", "subdomainizer"]
@@ -503,7 +518,8 @@ class LeftDock:
             for s in list_sd:
                 sd += s
         if len_subdomains != 0:
-            self.textBrowser.setText(sd)
+            subdomains_string_list = sd.split("\n")
+            self.subdomainsModel.setStringList(subdomains_string_list)
             self.nSubd.setText(str(len_subdomains))
         else:
             self.noSubdomainsAlert = QtWidgets.QMessageBox()
@@ -518,17 +534,86 @@ class LeftDock:
                 pass
 
 
-class BrowserWindow:
-    def __init__(self) -> None:
-        pass
+class BrowserWindow(QtWidgets.QMainWindow):
+    def __init__(self, link=None) -> None:
+        super().__init__()
 
-    def InitializeBrowserWindow(self):
+        self.init_link = link
+
+        centralWidget= QtWidgets.QWidget()
+        self.setCentralWidget(centralWidget)
+
+        self.centralWidgetLayout = QtWidgets.QVBoxLayout()
+        centralWidget.setLayout(self.centralWidgetLayout)
+
         self.browser = QtWebEngineWidgets.QWebEngineView()
-        # self.browser.createStandardContextMenu()
-        self.browser.setUrl(QtCore.QUrl("http://google.com/"))
-        # self.browser.
-        return self.browser
+        self.browser.urlChanged.connect(self.handleUrlChange)
+        self.browser.loadProgress.connect(self.handleLoadProgress)
+        self.browser.loadFinished.connect(self.closeProgressBarWidget)
 
+        self.upperUrlHandlerLayout = QtWidgets.QHBoxLayout()
+        self.centralWidgetLayout.addLayout(self.upperUrlHandlerLayout)
+
+        self.lowerCentralLayout = QtWidgets.QHBoxLayout()
+        self.centralWidgetLayout.addLayout(self.lowerCentralLayout)
+        self.AddUrlHandler()
+
+        self.lowerCentralLayout.addWidget(self.browser)        
+        # self.browser.createStandardContextMenu()
+        if self.init_link is None:
+            self.browser.setUrl(QtCore.QUrl("http://google.com/"))
+        else:
+            self.searchUrlOnBrowser(self.init_link)
+
+    def closeProgressBarWidget(self):
+        self.browserProgressBar.setVisible(False)
+
+    @QtCore.Slot(int)
+    def handleLoadProgress(self, prog):
+        self.browserProgressBar.setVisible(True)
+        self.browserProgressBar.setMinimum(0)
+        self.browserProgressBar.setMaximum(100)
+        self.browserProgressBar.setValue(prog)
+
+    def handleUrlChange(self):
+        _Qurl = self.browser.url()
+        str_Url = _Qurl.url()
+        self.urlText.setText(str_Url)
+
+    def AddUrlHandler(self):
+        self.urlLabel = QtWidgets.QLabel()
+        self.urlLabel.setText("Url:")
+        self.urlText = QtWidgets.QLineEdit()
+        self.searchButton = QtWidgets.QPushButton()
+        self.searchButton.setText("search")
+        self.clearButton = QtWidgets.QPushButton()
+        self.clearButton.setText("X")
+        self.clearButton.setFixedWidth(32)
+        self.clearButton.clicked.connect(self.urlTextClear)
+        self.searchButton.clicked.connect(self.searchUrlOnBrowser)
+        self.browserProgressBar = QtWidgets.QProgressBar()
+        self.browserProgressBar.setVisible(False)
+        self.browserProgressBar.setFormat("Loading")
+        self.upperUrlHandlerLayout.addWidget(self.urlLabel)
+        self.upperUrlHandlerLayout.addWidget(self.urlText)
+        self.upperUrlHandlerLayout.addWidget(self.searchButton)
+        self.upperUrlHandlerLayout.addWidget(self.clearButton)
+        self.upperUrlHandlerLayout.addWidget(self.browserProgressBar)
+
+    def urlTextClear(self):
+        self.urlText.clear()
+
+    def searchUrlOnBrowser(self, link=None):
+        if link is not None:
+            self.target_url = self.urlText.text()
+        else:
+            self.target_url = link
+        self.target_url = addHttpsScheme(self.target_url)
+        self.browser.setUrl(QtCore.QUrl(self.target_url))
+
+        self.QbrowserURL = self.browser.url()
+        self.strUrl = self.QbrowserURL.url()
+        self.urlText.setText(self.strUrl)
 
 class NetworkWindow(QtWidgets.QMainWindow):
     def __init__(self) -> None:
@@ -949,9 +1034,11 @@ class MainWindow(QtWidgets.QMainWindow):
         # Docks
         lowerDock = LowerDock(self, self.projectDirPath)
         self.LowerDock = lowerDock.InitializeLowerDock()
+        self.LowerDock.setVisible(False)
         rightDock = RightDock(self, self.projectDirPath)
         self.RightDock = rightDock.InitializeDock()
         leftdock = LeftDock(self, self.projectDirPath)
+        leftdock.openLinkInBrw.connect(self.openNewBrowserTab)
         self.LeftDock = leftdock.InitializeLeftDock()
 
         # central widget
@@ -961,27 +1048,10 @@ class MainWindow(QtWidgets.QMainWindow):
         self.uppperCentralLayout = QtWidgets.QHBoxLayout()
         self.centralWidgetLayout.addLayout(self.uppperCentralLayout)
         self.AddTopMenu()
-        
-        # self.enableProxyButton = QtWidgets.QPushButton()
-        # self.enableProxyButton.clicked.connect(self.enableProxy)
-
-        self.upperUrlHandlerLayout = QtWidgets.QHBoxLayout()
-        self.centralWidgetLayout.addLayout(self.upperUrlHandlerLayout)
-        self.AddUrlHandler()
-
-        self.lowerCentralLayout = QtWidgets.QHBoxLayout()
-        self.browserwindow = BrowserWindow()
-        self.browser = self.browserwindow.InitializeBrowserWindow()
-        self.browser.urlChanged.connect(self.handleUrlChange)
-        self.browser.loadProgress.connect(self.handleLoadProgress)
-        self.browser.loadFinished.connect(self.closeProgressBarWidget)
-        self.lowerCentralLayout.addWidget(self.browser)
 
         self.browserTabWidget = QtWidgets.QTabWidget()
-        # self.browserTabWidget.addTab(BrowserWindow, "new")
-        # self.lowerCentralLayout.addWidget(self.browserTabWidget)
-
-        self.centralWidgetLayout.addLayout(self.lowerCentralLayout)
+        self.centralWidgetLayout.addWidget(self.browserTabWidget)
+        self.openNewBrowserTab()
 
         centralWidget.setLayout(self.centralWidgetLayout)
         self.setCentralWidget(centralWidget)
@@ -1001,6 +1071,13 @@ class MainWindow(QtWidgets.QMainWindow):
         self.newBrowserTabButton.setFixedWidth(150)
         self.uppperCentralLayout.addWidget(self.newBrowserTabButton)
 
+        # close Browser Tab
+        self.closeTabButton = QtWidgets.QPushButton()
+        self.closeTabButton.setText("Close Tab")
+        self.closeTabButton.setFixedWidth(120)
+        self.closeTabButton.clicked.connect(self.closeBrowserTab)
+        self.uppperCentralLayout.addWidget(self.closeTabButton)
+
         # test target button
         self.testTargetButton = QtWidgets.QPushButton()
         self.testTargetButton.setText("Test target")
@@ -1010,8 +1087,29 @@ class MainWindow(QtWidgets.QMainWindow):
 
         self.setWindowTitle("atom")
 
-    def openNewBrowserTab(self):
-        pass
+        self.centralWidgetLayout.addStretch()
+
+    def openNewBrowserTab(self, link:str=None):
+        BrowserWindow_ = BrowserWindow(link = link)
+        tab_name = "newT"
+        try:
+            if link is not None:
+                if link.startswith(("https", "http")):
+                    tab_name = link.split("//")[1].split(".")[0]
+                else:
+                    tab_name = link.split(".")[0]   
+        except:
+            tab_name = "newT" 
+        self.browserTabWidget.addTab(BrowserWindow_,tab_name)
+        self.browserTabWidget.setCurrentIndex(
+                self.browserTabWidget.indexOf(BrowserWindow_)
+            )
+
+    def closeBrowserTab(self):
+        self.browserTabWidget
+        self.current_tab_index = self.browserTabWidget.currentIndex()
+        if self.current_tab_index != 0:
+            self.browserTabWidget.removeTab(self.current_tab_index)
 
     def LoadCA_Certificate(self):
         self.rootCACertificate = QSslCertificate()
@@ -1051,53 +1149,6 @@ class MainWindow(QtWidgets.QMainWindow):
         self.NetworkWindow_ = self.networkWindow.IniatializeNetworkWindow()
         self.networkWindow.resize(800, 600)
         self.networkWindow.show()
-
-    def closeProgressBarWidget(self):
-        self.browserProgressBar.setVisible(False)
-
-    @QtCore.Slot(int)
-    def handleLoadProgress(self, prog):
-        self.browserProgressBar.setVisible(True)
-        self.browserProgressBar.setMinimum(0)
-        self.browserProgressBar.setMaximum(100)
-        self.browserProgressBar.setValue(prog)
-
-    def handleUrlChange(self):
-        _Qurl = self.browser.url()
-        str_Url = _Qurl.url()
-        self.urlText.setText(str_Url)
-
-    def AddUrlHandler(self):
-        self.urlLabel = QtWidgets.QLabel()
-        self.urlLabel.setText("Url:")
-        self.urlText = QtWidgets.QLineEdit()
-        self.searchButton = QtWidgets.QPushButton()
-        self.searchButton.setText("search")
-        self.clearButton = QtWidgets.QPushButton()
-        self.clearButton.setText("X")
-        self.clearButton.setFixedWidth(32)
-        self.clearButton.clicked.connect(self.urlTextClear)
-        self.searchButton.clicked.connect(self.searchUrlOnBrowser)
-        self.browserProgressBar = QtWidgets.QProgressBar()
-        self.browserProgressBar.setVisible(False)
-        self.browserProgressBar.setFormat("Loading")
-        self.upperUrlHandlerLayout.addWidget(self.urlLabel)
-        self.upperUrlHandlerLayout.addWidget(self.urlText)
-        self.upperUrlHandlerLayout.addWidget(self.searchButton)
-        self.upperUrlHandlerLayout.addWidget(self.clearButton)
-        self.upperUrlHandlerLayout.addWidget(self.browserProgressBar)
-
-    def urlTextClear(self):
-        self.urlText.clear()
-
-    def searchUrlOnBrowser(self):
-        self.target_url = self.urlText.text()
-        self.target_url = addHttpsScheme(self.target_url)
-        self.browser.setUrl(QtCore.QUrl(self.target_url))
-
-        self.QbrowserURL = self.browser.url()
-        self.strUrl = self.QbrowserURL.url()
-        self.urlText.setText(self.strUrl)
 
     def AddTopMenu(self):
         # top menu
@@ -1229,10 +1280,12 @@ class MainWin(QtWidgets.QMainWindow):
             if not Path(self.defaultWorkspaceDir).exists():
                 os.makedirs(self.defaultWorkspaceDir)
         except PermissionError as permisssion_error:
-            print(f"{red('permission denied')} {cyan('cannot create file')}")
+            print(f"{red('permission denied')} {cyan('cannot create workspace directory')}")
+            print(f"{red('Consider running the program with sudo priviledges')}")
         # central widget
         self.centralWidget = QtWidgets.QWidget()
         self.tabManager = QtWidgets.QTabWidget()
+        # self.centralWidget.setStyleSheet("background-color: #170048;")
         # central widget layout
         self.MainLayout = QtWidgets.QVBoxLayout()
         self.centralWidget.setLayout(self.MainLayout)
@@ -1241,6 +1294,24 @@ class MainWin(QtWidgets.QMainWindow):
         self.mainTabWidget = QtWidgets.QWidget()
         self.mainTabLayout = QtWidgets.QVBoxLayout()
         self.buttonAddTab = QtWidgets.QPushButton()
+        self.recentProjectsLabel = QtWidgets.QLabel()
+        self.recentProjectsLabel.setText("<b>Recent Projects</b>")
+        self.mainTabLayout.addWidget(self.recentProjectsLabel, alignment=Qt.AlignCenter)
+
+        self.addProjects()
+        self.openBarFrame = QtWidgets.QFrame()
+        self.openBarLayout = QtWidgets.QHBoxLayout()
+        self.choosenProjectDir = QtWidgets.QLineEdit()
+        self.choosenProjectDir.setFixedWidth(400)
+        self.openBarLayout.addWidget(self.choosenProjectDir)
+        self.openProjectButton = QtWidgets.QPushButton()
+        self.openProjectButton.setText("Open")
+        self.openProjectButton.setFixedWidth(50)
+        self.openProjectButton.clicked.connect(self.openChoosenProject)
+        self.openBarLayout.addWidget(self.openProjectButton)
+        self.openBarFrame.setLayout(self.openBarLayout)
+        self.mainTabLayout.addWidget(self.openBarFrame, alignment=Qt.AlignCenter)
+
         self.buttonAddTab.setText("Add Target")
         self.buttonAddTab.setFixedWidth(110)
         self.buttonAddTab.clicked.connect(self.AddTargetWindow)
@@ -1273,6 +1344,36 @@ class MainWin(QtWidgets.QMainWindow):
 
         self.MainLayout.addWidget(self.tabManager)
         self.setCentralWidget(self.centralWidget)
+        self.mainTabLayout.addStretch()
+
+    def openChoosenProject(self):
+        dir_name = os.path.join(self.defaultWorkspaceDir, self.choosenProjectDir.text())
+        if os.path.isdir(dir_name):
+            self.AddTargetTab(dir_name)
+        else:
+            self.choosenProjectDir.setStyleSheet("QLineEdit{border: 2px solid red;}")
+
+    def addProjects(self):
+        available_dirs = []
+        with os.scandir(self.defaultWorkspaceDir) as entries:
+            for entry in entries:
+                if entry.is_dir():
+                    available_dirs.append(entry.name)
+        self.dirsModel = QtCore.QStringListModel(available_dirs)
+        self.dirListView  = QtWidgets.QListView()
+        self.dirListView.setModel(self.dirsModel)
+        self.dirListView.clicked.connect(self.projectDirClicked)
+
+        self.dirsProjectsScrollArea = QtWidgets.QScrollArea()
+        self.dirsProjectsScrollArea.setWidget(self.dirListView)
+        self.dirsProjectsScrollArea.setWidgetResizable(True)  
+        self.dirsProjectsScrollArea.setFixedHeight(450)
+        self.dirsProjectsScrollArea.setFixedWidth(450)
+        self.mainTabLayout.addWidget(self.dirsProjectsScrollArea, alignment=Qt.AlignCenter)          
+
+    def projectDirClicked(self, index):
+        clicked_dir = self.dirsModel.data(index, QtCore.Qt.DisplayRole)
+        self.choosenProjectDir.setText(clicked_dir)
 
     def OpenSiteMapWindow(self):
         pass
@@ -1305,22 +1406,28 @@ class MainWin(QtWidgets.QMainWindow):
         self.newTargetWindow.setLayout(self.newTargetWindowLayoutMain)
         self.newTargetWindow.show()
 
-    def AddTargetTab(self):
-        tab_name = self.newTargetTabName.text()
-        if tab_name == "":
-            self.newTargetTabName.setStyleSheet("border: 1px solid red;")
+    def AddTargetTab(self, directory=None):
+        if directory is None:
+            tab_name = self.newTargetTabName.text()
+            if tab_name == "":
+                self.newTargetTabName.setStyleSheet("border: 1px solid red;")
+            else:
+                projectDirectory = os.path.join(self.defaultWorkspaceDir, tab_name)
+                if not Path(projectDirectory).exists():
+                    os.makedirs(projectDirectory)
+                self.mainWindowInstance = MainWindow(projectDirectory)
+                self.tabManager.addTab(self.mainWindowInstance, tab_name)
+                self.tabManager.setCurrentIndex(
+                    self.tabManager.indexOf(self.mainWindowInstance)
+                )
+                self.newTargetWindow.close()
         else:
-            projectDirectory = os.path.join(self.defaultWorkspaceDir, tab_name)
-            if not Path(projectDirectory).exists():
-                os.makedirs(projectDirectory)
-            self.mainWindowInstance = MainWindow(projectDirectory)
+            self.mainWindowInstance = MainWindow(directory)
+            tab_name = directory.split("/")[-1]
             self.tabManager.addTab(self.mainWindowInstance, tab_name)
             self.tabManager.setCurrentIndex(
                 self.tabManager.indexOf(self.mainWindowInstance)
-            )
-            self.newTargetWindow.close()
-            # TargetUrl = addHttpsScheme(self.newTargetTabName.text())
-            # self.mainWindowInstance.browser.setUrl(TargetUrl)
+            )              
 
     def closeTab(self):
         self.current_tab_index = self.tabManager.currentIndex()
