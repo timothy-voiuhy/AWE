@@ -429,7 +429,10 @@ class LeftDock(QtCore.QObject):
         self.leftDockWidget.setLayout(self.leftDockLayout)
         # general information layout
         self.generalInformationLayout = QtWidgets.QFormLayout()
-        self.leftDockLayout.addLayout(self.generalInformationLayout)
+        self.generalInformationFrame = QtWidgets.QFrame()
+        self.generalInformationFrame.setLayout(self.generalInformationLayout)
+        # self.generalInformation = QtWidgets.Q
+        self.leftDockLayout.addWidget(self.generalInformationFrame)
         # rows (static information)
         self.urlTargetName = QtWidgets.QLabel("URL: ")
         self.urlName = QtWidgets.QLabel("put here targe name")
@@ -1299,6 +1302,7 @@ class MainWin(QtWidgets.QMainWindow):
         self.mainTabLayout.addWidget(self.recentProjectsLabel, alignment=Qt.AlignCenter)
 
         self.addProjects()
+        
         self.openBarFrame = QtWidgets.QFrame()
         self.openBarLayout = QtWidgets.QHBoxLayout()
         self.choosenProjectDir = QtWidgets.QLineEdit()

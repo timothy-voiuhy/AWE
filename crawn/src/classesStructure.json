@@ -1,0 +1,523 @@
+{
+    "classes:": [],
+    "classes": [
+        {
+            "class_name": "amassFailure",
+            "class_inherits": [
+                "Exception"
+            ],
+            "functions": []
+        },
+        {
+            "class_name": "Qterminal",
+            "class_inherits": [
+                "QtWidgets.QTextEdit"
+            ],
+            "functions": [
+                {
+                    "function_name": "__init__",
+                    "function_args": [
+                        "self"
+                    ]
+                },
+                {
+                    "function_name": "getCurrentWorkingDir",
+                    "function_args": [
+                        "self"
+                    ]
+                },
+                {
+                    "function_name": "Initialize",
+                    "function_args": [
+                        "self"
+                    ]
+                },
+                {
+                    "function_name": "keyPressEvent",
+                    "function_args": [
+                        "self",
+                        " e: QKeyEvent"
+                    ]
+                },
+                {
+                    "function_name": "placeCursorAtEnd",
+                    "function_args": [
+                        "self"
+                    ]
+                }
+            ]
+        },
+        {
+            "class_name": "RightDock",
+            "class_inherits": [],
+            "functions": [
+                {
+                    "function_name": "__init__",
+                    "function_args": []
+                },
+                {
+                    "function_name": "InitializeDock",
+                    "function_args": []
+                },
+                {
+                    "function_name": "increaseFont",
+                    "function_args": []
+                },
+                {
+                    "function_name": "AddSettingsMenu",
+                    "function_args": []
+                },
+                {
+                    "function_name": "AddMainMenu",
+                    "function_args": []
+                },
+                {
+                    "function_name": "rightDockOpenNotesFile",
+                    "function_args": []
+                },
+                {
+                    "function_name": "ShowSettings",
+                    "function_args": []
+                },
+                {
+                    "function_name": "RightDockShowMenu",
+                    "function_args": []
+                }
+            ]
+        },
+        {
+            "class_name": "LowerDock",
+            "class_inherits": [],
+            "functions": [
+                {
+                    "function_name": "__init__",
+                    "function_args": []
+                },
+                {
+                    "function_name": "InitializeLowerDock",
+                    "function_args": []
+                }
+            ]
+        },
+        {
+            "class_name": "LeftDock",
+            "class_inherits": [],
+            "functions": [
+                {
+                    "function_name": "__init__",
+                    "function_args": []
+                },
+                {
+                    "function_name": "InitializeLeftDock",
+                    "function_args": []
+                },
+                {
+                    "function_name": "showSubDomains",
+                    "function_args": []
+                }
+            ]
+        },
+        {
+            "class_name": "BrowserWindow",
+            "class_inherits": [],
+            "functions": [
+                {
+                    "function_name": "__init__",
+                    "function_args": []
+                },
+                {
+                    "function_name": "InitializeBrowserWindow",
+                    "function_args": []
+                }
+            ]
+        },
+        {
+            "class_name": "NetworkWindow",
+            "class_inherits": [
+                "QtWidgets.QMainWindow"
+            ],
+            "functions": [
+                {
+                    "function_name": "__init__",
+                    "function_args": [
+                        "self"
+                    ]
+                },
+                {
+                    "function_name": "IniatializeNetworkWindow",
+                    "function_args": [
+                        "self"
+                    ]
+                }
+            ]
+        },
+        {
+            "class_name": "NetworkMap",
+            "class_inherits": [
+                "QtWidgets.QWidget"
+            ],
+            "functions": [
+                {
+                    "function_name": "__init__",
+                    "function_args": [
+                        "self"
+                    ]
+                },
+                {
+                    "function_name": "InitializeNetworkMapWidget",
+                    "function_args": [
+                        "self"
+                    ]
+                }
+            ]
+        },
+        {
+            "class_name": "SubdomainizerThreadRunner",
+            "class_inherits": [
+                "QThread"
+            ],
+            "functions": [
+                {
+                    "function_name": "__init__",
+                    "function_args": [
+                        "self",
+                        " subDomainizerUrlTarget",
+                        " projectDirPath"
+                    ]
+                },
+                {
+                    "function_name": "subdomainizerRun",
+                    "function_args": [
+                        "self"
+                    ]
+                },
+                {
+                    "function_name": "run",
+                    "function_args": [
+                        "self"
+                    ]
+                }
+            ]
+        },
+        {
+            "class_name": "Sublist3rThreadRunner",
+            "class_inherits": [
+                "QThread"
+            ],
+            "functions": [
+                {
+                    "function_name": "sublist3rRun",
+                    "function_args": [
+                        "self"
+                    ]
+                },
+                {
+                    "function_name": "run",
+                    "function_args": [
+                        "self"
+                    ]
+                }
+            ]
+        },
+        {
+            "class_name": "AmassThreadRunner",
+            "class_inherits": [
+                "QThread"
+            ],
+            "functions": [
+                {
+                    "function_name": "__init__",
+                    "function_args": [
+                        "self",
+                        " amassUrlTarget",
+                        " projectDirPath"
+                    ]
+                },
+                {
+                    "function_name": "amassRun",
+                    "function_args": [
+                        "self"
+                    ]
+                },
+                {
+                    "function_name": "run",
+                    "function_args": [
+                        "self"
+                    ]
+                }
+            ]
+        },
+        {
+            "class_name": "TestTargetWindow",
+            "class_inherits": [
+                "QtWidgets.QMainWindow"
+            ],
+            "functions": [
+                {
+                    "function_name": "__init__",
+                    "function_args": [
+                        "self",
+                        " projectDirPath"
+                    ]
+                },
+                {
+                    "function_name": "Initialize",
+                    "function_args": [
+                        "self"
+                    ]
+                },
+                {
+                    "function_name": "registerSublisterUseSearchEngines",
+                    "function_args": [
+                        "self"
+                    ]
+                },
+                {
+                    "function_name": "registerSublisterScanPorts",
+                    "function_args": [
+                        "self"
+                    ]
+                },
+                {
+                    "function_name": "registerRunAmass",
+                    "function_args": [
+                        "self"
+                    ]
+                },
+                {
+                    "function_name": "registerSubliterBruteforceButton",
+                    "function_args": [
+                        "self"
+                    ]
+                },
+                {
+                    "function_name": "registerUseHttp",
+                    "function_args": [
+                        "self"
+                    ]
+                },
+                {
+                    "function_name": "registerUseBrowser",
+                    "function_args": [
+                        "self"
+                    ]
+                },
+                {
+                    "function_name": "runatom",
+                    "function_args": [
+                        "self"
+                    ]
+                },
+                {
+                    "function_name": "runAtom",
+                    "function_args": [
+                        "self"
+                    ]
+                }
+            ]
+        },
+        {
+            "class_name": "MainWindow",
+            "class_inherits": [
+                "QtWidgets.QMainWindow"
+            ],
+            "functions": [
+                {
+                    "function_name": "__init__",
+                    "function_args": [
+                        "self",
+                        " projectDirPath: str"
+                    ]
+                },
+                {
+                    "function_name": "openNewBrowserTab",
+                    "function_args": [
+                        "self"
+                    ]
+                },
+                {
+                    "function_name": "LoadCA_Certificate",
+                    "function_args": [
+                        "self"
+                    ]
+                },
+                {
+                    "function_name": "enableProxy",
+                    "function_args": [
+                        "self"
+                    ]
+                },
+                {
+                    "function_name": "OpenTestTargetWindow",
+                    "function_args": [
+                        "self"
+                    ]
+                },
+                {
+                    "function_name": "OpenNetworkWindow",
+                    "function_args": [
+                        "self"
+                    ]
+                },
+                {
+                    "function_name": "closeProgressBarWidget",
+                    "function_args": [
+                        "self"
+                    ]
+                },
+                {
+                    "function_name": "handleLoadProgress",
+                    "function_args": [
+                        "self",
+                        " prog"
+                    ]
+                },
+                {
+                    "function_name": "handleUrlChange",
+                    "function_args": [
+                        "self"
+                    ]
+                },
+                {
+                    "function_name": "AddUrlHandler",
+                    "function_args": [
+                        "self"
+                    ]
+                },
+                {
+                    "function_name": "urlTextClear",
+                    "function_args": [
+                        "self"
+                    ]
+                },
+                {
+                    "function_name": "searchUrlOnBrowser",
+                    "function_args": [
+                        "self"
+                    ]
+                },
+                {
+                    "function_name": "AddTopMenu",
+                    "function_args": [
+                        "self"
+                    ]
+                },
+                {
+                    "function_name": "openBrowserSettingsWindow",
+                    "function_args": [
+                        "self"
+                    ]
+                },
+                {
+                    "function_name": "ShowMenu",
+                    "function_args": [
+                        "self"
+                    ]
+                },
+                {
+                    "function_name": "LowerDockClick",
+                    "function_args": [
+                        "self"
+                    ]
+                },
+                {
+                    "function_name": "ViewTarget",
+                    "function_args": [
+                        "self"
+                    ]
+                },
+                {
+                    "function_name": "ViewTerminal",
+                    "function_args": [
+                        "self"
+                    ]
+                },
+                {
+                    "function_name": "OpenProject",
+                    "function_args": [
+                        "self"
+                    ]
+                },
+                {
+                    "function_name": "ViewNotepad",
+                    "function_args": [
+                        "self"
+                    ]
+                },
+                {
+                    "function_name": "LoadProject",
+                    "function_args": [
+                        "self"
+                    ]
+                }
+            ]
+        },
+        {
+            "class_name": "SiteMapDock",
+            "class_inherits": [],
+            "functions": [
+                {
+                    "function_name": "__init__",
+                    "function_args": []
+                },
+                {
+                    "function_name": "InitializeSiteMapDock",
+                    "function_args": []
+                }
+            ]
+        },
+        {
+            "class_name": "ProxyInterceptWindow",
+            "class_inherits": [
+                "QtWidgets.QMainWindow"
+            ],
+            "functions": [
+                {
+                    "function_name": "__init__",
+                    "function_args": [
+                        "self",
+                        " projectDirPath"
+                    ]
+                }
+            ]
+        },
+        {
+            "class_name": "MainWin",
+            "class_inherits": [
+                "QtWidgets.QMainWindow"
+            ],
+            "functions": [
+                {
+                    "function_name": "__init__",
+                    "function_args": [
+                        "self"
+                    ]
+                },
+                {
+                    "function_name": "OpenSiteMapWindow",
+                    "function_args": [
+                        "self"
+                    ]
+                },
+                {
+                    "function_name": "AddTargetWindow",
+                    "function_args": [
+                        "self"
+                    ]
+                },
+                {
+                    "function_name": "AddTargetTab",
+                    "function_args": [
+                        "self"
+                    ]
+                },
+                {
+                    "function_name": "closeTab",
+                    "function_args": [
+                        "self"
+                    ]
+                }
+            ]
+        }
+    ]
+}

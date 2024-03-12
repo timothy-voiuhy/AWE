@@ -629,7 +629,7 @@ class AmassThreadRunner(QThread):
         )
         amassProcessor.Run()
 
-    def run(self) -> None:
+    def run(self):
         self.amassRun()
         # return super().run()
 
