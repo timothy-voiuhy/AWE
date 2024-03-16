@@ -627,7 +627,7 @@ class SubDomainizerRunner:
 
     def Run(self):
         command = (
-            "python ../Tools/SubDomainizer/SubDomainizer.py "
+            "python /media/program/01DA55CA5F28E000/MYAPPLICATIONS/AWE/AWE/crawn/Tools/SubDomainizer/SubDomainizer.py "
             + " -u "
             + self.url
             + " -o "

@@ -1098,17 +1098,18 @@ class MainRunner:
     def ConstructUrlWithParameters(self, url, parameters_dict):
         pass
 
-async def RunMainAtomFunction(domain, dirr, u_http, use_browser):
-    print(yellow(f"running Atom with command: atomcore -d {domain} --dirr {dirr} --use_http {u_http} --use_browser {use_browser}"))
+async def RunMainAtomFunction(domain, dirr, u_http, use_browser, recur_=False):
+    print(yellow(f"running Atom with command: atomcore -d {domain} --dirr {dirr} --use_http {u_http} --use_browser {use_browser} --rec {recur_}"))
     tracemalloc.start()
     url = str(domain)
     __url__ = str(domain)
     before_mem = tracemalloc.get_traced_memory()[0]
-    cwl = MainRunner(url, dirr, recursive=False, use_http=u_http, use_browser=use_browser)
+    cwl = MainRunner(url, dirr, recursive=recur_, use_http=u_http, use_browser=use_browser)
 
-    if not use_browser:
-        await cwl.get_js_links()
-        await cwl.get_js_content()
+    # if not use_browser:
+    #     await cwl.get_js_links()
+    #     await cwl.get_js_content()
+
     await cwl.GetHtmlContent()
     await cwl.session.close()
     after_mem = tracemalloc.get_traced_memory()[0]

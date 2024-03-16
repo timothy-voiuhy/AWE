@@ -177,7 +177,7 @@ class ProxyHandler:
             self.rootCAprivatekeyfile = "./proxycert/CA/privatekey.pem"
         self.usehttpLibs = UsehttpLibs
         self.homeDirectory = os.path.expanduser("~")
-        self.defaultWorkspaceDir = os.path.join(self.homeDirectory, "AtomProjects/")
+        self.defaultWorkspaceDir = os.path.join(self.homeDirectory, "AtomProjects/Proxy/")
         self.verifyDstServerCerts = verifyDstServerCerts
         self.sessionsDict = {}
         self.save_traffic = save_traffic
@@ -476,6 +476,7 @@ if __name__ == "__main__":
                              verifyDstServerCerts=False,
                              UsehttpLibs=True,
                              useUrllib=True,
+                             save_traffic=True
                              )
         asyncio.run(proxy.startServerInstance())
     except KeyboardInterrupt:
