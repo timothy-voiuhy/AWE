@@ -16,3 +16,5 @@ x86_64-conda-linux-gnu/
 ssl/
 environment.yml
 .idea/
+unix/
+tmp/
