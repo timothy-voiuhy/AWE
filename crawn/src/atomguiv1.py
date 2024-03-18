@@ -1,3 +1,4 @@
+import socket
 from typing import Optional
 from PySide6 import QtCore, QtWidgets, QtGui, QtWebEngineWidgets
 from PySide6.QtNetwork import QNetworkProxyQuery, QNetworkProxy, QSsl, QSslCertificate, QSslConfiguration
@@ -33,6 +34,10 @@ from utiliities import (
     yellow
 )
 from urllib.parse import urlsplit
+import copy
+import queue
+import tracemalloc
+import psutil
 
 """ functionalities so far:
 program output
@@ -53,17 +58,16 @@ note: https://iconscout.com/
 
 """
 
+rundir = "/media/program/01DA55CA5F28E000/MYAPPLICATIONS/AWE/AWE/crawn/"
 
-class amassFailure(Exception):
+
+class AmassFailure(Exception):
     pass
 
 
-def HighlightUrls():
-    pass
-
-def iterDir(parentPath, parentItem:QStandardItem):
+def iterDir(parentPath, parentItem: QStandardItem):
     for element in os.scandir(parentPath):
-        if element.is_file():# if it is a file , append it to the parent item
+        if element.is_file():  # if it is a file , append it to the parent item
             element_item = QStandardItem(element.name)
             parentItem.appendRow(element_item)
         elif element.is_dir():
@@ -71,7 +75,7 @@ def iterDir(parentPath, parentItem:QStandardItem):
             pItem = QStandardItem(element.name)
             parentItem.appendRow(pItem)
             iterDir(pPath, pItem)
-                    
+
 
 def atomGuiGetSubdomains(projectDirPath, toolName):
     filename = ""
@@ -103,34 +107,36 @@ def GetUrls(workingdir):
     urls = open(hrefLinksFile, "r").read()
     return urls
 
-class linkFinderRunner(QThread):
-    def __init__(self,workingDir, subdomain:str):
+
+class LInkFinderRunner(QThread):
+    def __init__(self, workingDir, subdomain: str):
         super().__init__()
         self.workingDir = workingDir
         self.subdomain = subdomain
-        self.savePathName = "linkFinder"+self.subdomain+"Subdomains.txt"
+        self.savePathName = "linkFinder" + self.subdomain + "Subdomains.txt"
         self.savePath = os.path.join(self.workingDir, self.savePathName)
         self.linkfinder = "/media/program/01DA55CA5F28E000/MYAPPLICATIONS/AWE/AWE/crawn/Tools/LinkFinder/linkfinder.py"
 
     def linkFinderRun(self):
-        self.subdomain = "https://"+self.subdomain.strip()
+        self.subdomain = "https://" + self.subdomain.strip()
         command = f"python {self.linkfinder} -i {self.subdomain} -d -o {self.savePath} -t 20"
         print(red(f"running linkFinder with command:\n\t {command}"))
         subprocess.run(command, shell=True)
 
     def run(self) -> None:
-        self.linkFinderRun()    
+        self.linkFinderRun()
+
 
 class getAllUrlsRunner(QThread):
     def __init__(self, workingDir, subdomain):
         super().__init__()
         self.subdomain = subdomain
         self.workingDir = workingDir
-        self.savePathName = "getAllUrls_"+self.subdomain+"Subdomains.txt"
+        self.savePathName = "getAllUrls_" + self.subdomain + "Subdomains.txt"
         self.savePath = os.path.join(self.workingDir, self.savePathName)
 
     def getAllUrlsRun(self):
-        command  = "getallurls "+self.subdomain+" > "+self.savePath
+        command = "getallurls " + self.subdomain + " > " + self.savePath
         print(red(f"Running getallurls with command:\n\t {command}"))
         subprocess.run(command, shell=True)
         print(yellow("finished running getallurls"))
@@ -140,9 +146,9 @@ class getAllUrlsRunner(QThread):
             seen_structs = []
             seen_urls = []
             for url in fileLines:
-                if not url.endswith((".js", ".pdf", ".css",".txt", ".png", ".svg", "ico")):
+                if not url.endswith((".js", ".pdf", ".css", ".txt", ".png", ".svg", "ico")):
                     url_cmps = urlsplit(url)
-                    url_path = url_cmps[1]+url_cmps[2]
+                    url_path = url_cmps[1] + url_cmps[2]
                     if "?" in url:
                         if "&" in url_cmps[3]:
                             url_paramsets = url_cmps[3].split("&")
@@ -157,24 +163,25 @@ class getAllUrlsRunner(QThread):
                                 url_params_dict[key] = value
                             except:
                                 pass
-                        url_params_struct = list(url_params_dict.keys())  
-                        url_struct = [url_path, url_params_struct]  
+                        url_params_struct = list(url_params_dict.keys())
+                        url_struct = [url_path, url_params_struct]
                         if url_struct not in seen_structs:
                             newfileLines.append(url)
                             seen_structs.append(url_struct)
                     else:
                         if url_path not in seen_urls:
                             newfileLines.append(url)
-                            seen_urls.append(url_path)            
+                            seen_urls.append(url_path)
         with open(self.savePath, "w") as file:
-            file.writelines(newfileLines)            
+            file.writelines(newfileLines)
 
     def run(self) -> None:
-        self.getAllUrlsRun()    
+        self.getAllUrlsRun()
+
 
 class AtomRunner:
     def __init__(self, subdomain, usehttp, useBrowser) -> None:
-        self.subdomain =  subdomain
+        self.subdomain = subdomain
         self.usehttp = usehttp
         self.usebrowser = useBrowser
         self.recursive = True
@@ -192,13 +199,15 @@ class AtomRunner:
         with ThreadPoolExecutor(max_workers=1000) as executor:
             executor.submit(self.runatom)
 
+
 def runUrlToolsOnSd(workingDir, subdomain):
     getAllUrlsRunner_ = getAllUrlsRunner(workingDir, subdomain)
     getAllUrlsRunner_.run()
-    # linkFinderRunner_ = linkFinderRunner(workingDir, subdomain)
-    # linkFinderRunner_.run()
+    # LInkFinderRunner_ = LInkFinderRunner(workingDir, subdomain)
+    # LInkFinderRunner_.run()
     # AtomRunner_ = AtomRunner(subdomain, usehttp=False, useBrowser=False)
     # AtomRunner_.runatom()
+
 
 def getAtomSubdUrls(subdomain, workingDir):
     atomSbdUrls = []
@@ -210,15 +219,15 @@ def getAtomSubdUrls(subdomain, workingDir):
     for url in urls:
         if url.startsWith((f"https://{subdomain}", f"http://{subdomain}")):
             atomSbdUrls.append(url)
-    return atomSbdUrls                  
+    return atomSbdUrls
 
 
-def atomGuiGetUrls(subdomain:str, workingDir):
+def atomGuiGetUrls(subdomain: str, workingDir):
     # tools: Atom, getallUrls, linkFinder, xnLinkFinder(Atom)
-    subdomain = subdomain.replace("\n","").strip()
+    subdomain = subdomain.replace("\n", "").strip()
     UrlsList_ = []
-    
-    pathName = "getAllUrls"+subdomain+"Subdomains.txt"
+
+    pathName = "getAllUrls" + subdomain + "Subdomains.txt"
     pathName = os.path.join(workingDir, pathName)
     if Path(pathName).exists():
         with open(pathName, "r") as f:
@@ -235,10 +244,11 @@ def atomGuiGetUrls(subdomain:str, workingDir):
     # atomSubdUrls = getAtomSubdUrls(subdomain, workingDir) 
     # UrlsList_.extend(atomSubdUrls)   
     return UrlsList_
-        # runUrlToolsOnSd(workingDir, subdomain)
+    # runUrlToolsOnSd(workingDir, subdomain)
+
 
 class UrlGetter(QThread):
-    def __init__(self, subdomainUrlDict:dict, workingDir):
+    def __init__(self, subdomainUrlDict: dict, workingDir):
         super().__init__()
         self.subdomainUrlDict = subdomainUrlDict
         self.workingDir = workingDir
@@ -295,7 +305,7 @@ class Qterminal(QtWidgets.QTextEdit):
                     UserSetWorkingDir = command.split(" ")[1]
                     if UserSetWorkingDir.startswith("/"):
                         precurrentWorkingDir = (
-                            self.currentWorkingDir + UserSetWorkingDir + "/"
+                                self.currentWorkingDir + UserSetWorkingDir + "/"
                         )
                     elif UserSetWorkingDir == "..":
                         if not self.currentWorkingDir == "/":
@@ -310,22 +320,22 @@ class Qterminal(QtWidgets.QTextEdit):
                             for dirr in currentWorkingDirr:
                                 if currentWorkingDirr.index(dirr) == len(dirr) - 1:
                                     newCurrentWorkingDir = (
-                                        newCurrentWorkingDir + "/" + dirr + "/"
+                                            newCurrentWorkingDir + "/" + dirr + "/"
                                     )
                                 else:
                                     newCurrentWorkingDir = (
-                                        newCurrentWorkingDir + "/" + dirr
+                                            newCurrentWorkingDir + "/" + dirr
                                     )
                             precurrentWorkingDir = newCurrentWorkingDir
                     elif UserSetWorkingDir == ".":
                         self.currentWorkingDir = self.currentWorkingDir
                     elif (
-                        re.match(self.plainStringRegexPattern, UserSetWorkingDir)
-                        is not None
+                            re.match(self.plainStringRegexPattern, UserSetWorkingDir)
+                            is not None
                     ):
                         UserSetWorkingDir = "/" + UserSetWorkingDir + "/"
                         precurrentWorkingDir = (
-                            self.currentWorkingDir + UserSetWorkingDir
+                                self.currentWorkingDir + UserSetWorkingDir
                         )
                     if os.path.isdir(precurrentWorkingDir):
                         self.currentWorkingDir = precurrentWorkingDir
@@ -346,16 +356,16 @@ class Qterminal(QtWidgets.QTextEdit):
                     if commandOutput is not None:
                         commandOutput = commandOutput.decode("utf-8")
                         totalLines = (
-                            lines
-                            + "\n"
-                            + commandOutput
-                            + "\n"
-                            + self.terminalDefaultText
+                                lines
+                                + "\n"
+                                + commandOutput
+                                + "\n"
+                                + self.terminalDefaultText
                         )
                     else:
                         commandError = commandOutput_[1].decode("utf-8")
                         totalLines = (
-                            lines + commandError + "\n" + self.terminalDefaultText
+                                lines + commandError + "\n" + self.terminalDefaultText
                         )
                     self.setPlainText(totalLines)
                     self.placeCursorAtEnd()
@@ -386,35 +396,36 @@ class TextEditor(QtWidgets.QTextEdit):
         self.setFontWeight(50)
 
     def keyPressEvent(self, event: QKeyEvent) -> None:
-        if  self.autoIndent and event.key() == QtCore.Qt.Key.Key_Return:
+        if self.autoIndent and event.key() == QtCore.Qt.Key.Key_Return:
             cursor = self.textCursor()
             block = cursor.block()
             text = block.text()
             cursor_position = cursor.positionInBlock()
-            leading_spaces = len(text)-len(text.strip())
+            leading_spaces = len(text) - len(text.strip())
 
             if cursor_position > 0 and text.endswith((":", "{")):
-                indent = leading_spaces+self.tabStopDistance()//self.fontMetrics().averageCharWidth()
+                indent = leading_spaces + self.tabStopDistance() // self.fontMetrics().averageCharWidth()
                 QtWidgets.QTextEdit.keyPressEvent(self, event)
-                cursor.insertText(" "*int(indent))
-                return 
+                cursor.insertText(" " * int(indent))
+                return
         elif self.autoIndent and event.key() == QtCore.Qt.Key.Key_Tab:
             cursor = self.textCursor()
             block = cursor.block()
             text = block.text()
             cursor_position = cursor.positionInBlock()
-            leading_spaces = len(text)-len(text.strip())
+            leading_spaces = len(text) - len(text.strip())
 
-            if cursor_position >0:
-                indent = leading_spaces+self.tabStopDistance()//self.fontMetrics().averageCharWidth()
+            if cursor_position > 0:
+                indent = leading_spaces + self.tabStopDistance() // self.fontMetrics().averageCharWidth()
                 # QtWidgets.QTextEdit.keyPressEvent(self, event)
-                cursor.insertText(" "*int(indent))
+                cursor.insertText(" " * int(indent))
                 return
 
         QtWidgets.QTextEdit.keyPressEvent(self, event)
 
-    def setAutoIndent(self, enabled:bool):
+    def setAutoIndent(self, enabled: bool):
         self.autoIndent = enabled
+
 
 class SyntaxHighlighter(QtGui.QSyntaxHighlighter):
     def __init__(self, parent=None):
@@ -426,13 +437,14 @@ class SyntaxHighlighter(QtGui.QSyntaxHighlighter):
         # keyword_fmt.setFontWeight(QtGui.QFont.Bold)
 
         keywords = [
-            "class", "def", "if", "else", "elif", "for", "while", "try", 
+            "class", "def", "if", "else", "elif", "for", "while", "try",
             "except", "finally", "import", "from", "as", "return", "raise"
-            "\."
+                                                                   "\."
         ]
 
         # note the format of a highlight rule: [regularexpression, keywordFormat]
-        self.highlightRules = [(QtCore.QRegularExpression("\\b" + keyword + "\\b"), keyword_fmt) for keyword in keywords]
+        self.highlightRules = [(QtCore.QRegularExpression("\\b" + keyword + "\\b"), keyword_fmt) for keyword in
+                               keywords]
 
         parentheses_words = ["\(", "\)", "\{", "\}", "\[", "\]"]
 
@@ -440,7 +452,7 @@ class SyntaxHighlighter(QtGui.QSyntaxHighlighter):
         parentheses_fmt.setForeground(Qt.yellow)
         # parentheses_fmt.setFontWeight(QtGui.QFont.Bold)
         self.highlightRules.extend(
-            [(QRegularExpression(keyword), parentheses_fmt) for keyword in parentheses_words ]
+            [(QRegularExpression(keyword), parentheses_fmt) for keyword in parentheses_words]
         )
 
         # comments 
@@ -491,9 +503,9 @@ class SyntaxHighlighter(QtGui.QSyntaxHighlighter):
         # self.highlightRules.extend(
         #     [(QRegularExpression(f"((?<={keyword_})\s.*\s)"), imports_fmt) for  keyword_ in imports_keywords]
         # )
-    
+
     def highlightBlock(self, text: str) -> None:
-        for pattern , format in self.highlightRules:
+        for pattern, format in self.highlightRules:
             expression = QRegularExpression(pattern)
             match_iter = expression.globalMatch(text)
             while match_iter.hasNext():
@@ -517,7 +529,7 @@ class RightDock:
         self.RightDock = QtWidgets.QDockWidget("Take Your Notes, Edit Files")
         self.rightDockWidget = QtWidgets.QWidget()
         self.RightDock.setWidget(self.rightDockWidget)
-        
+
         self.rightDockLayoutMain = QtWidgets.QVBoxLayout()
         self.rightDockWidget.setLayout(self.rightDockLayoutMain)
 
@@ -696,7 +708,6 @@ class LowerDock:
 
 
 class LeftDock(QtCore.QObject):
-
     openLinkInBrw = Signal(str)
 
     def __init__(self, mainWindow: QtWidgets.QMainWindow, projectDirPath) -> None:
@@ -736,7 +747,7 @@ class LeftDock(QtCore.QObject):
             with open(tempFilePath, "a") as file:
                 file.write(subdomains)
             rm_same(tempFilePath)
-        
+
             with open(tempFilePath, "r") as f:
                 list_sd = f.readlines()
                 len_subdomains = len(list_sd)
@@ -750,7 +761,7 @@ class LeftDock(QtCore.QObject):
                     parentItem = QStandardItem(subdomain)
                     self.subdomainsModel.appendRow(parentItem)
                     for url in urls:
-                        url = url.replace("\n","")
+                        url = url.replace("\n", "")
                         url_item = QStandardItem(url)
                         parentItem.appendRow(url_item)
             else:
@@ -764,6 +775,7 @@ class LeftDock(QtCore.QObject):
                 ret = self.noSubdomainsAlert.exec()
                 if ret == QtWidgets.QMessageBox.Ok:
                     pass
+
         # lower dock
         self.leftDock = QtWidgets.QDockWidget("Target Information")
         self.leftDockWidget = QtWidgets.QWidget()
@@ -777,7 +789,7 @@ class LeftDock(QtCore.QObject):
         self.leftDockWidget.setLayout(self.leftDockLayout)
         # hide or show gen info
         self.infoshowLayout = QtWidgets.QFormLayout()
-        self.infoShowCheckBox  = QtWidgets.QCheckBox()
+        self.infoShowCheckBox = QtWidgets.QCheckBox()
         self.infoShowCheckBox.stateChanged.connect(self.hideGenInfo)
         self.infoshowLayout.addRow("hide info", self.infoShowCheckBox)
         self.leftDockLayout.addLayout(self.infoshowLayout)
@@ -825,7 +837,7 @@ class LeftDock(QtCore.QObject):
         # subdomains : urls tree
         self.subdomainsModel = QStandardItemModel()
         self.subdomainsModel.setHorizontalHeaderLabels(["Subdomain:UrlsMapping"])
-        self.subdomainsTreeView  = QtWidgets.QTreeView()
+        self.subdomainsTreeView = QtWidgets.QTreeView()
         self.subdomainsTreeView.setModel(self.subdomainsModel)
         self.subdomainsTreeView.doubleClicked.connect(self.openLinkInBrowser)
         self.subdomainsTreeView.setAlternatingRowColors(True)
@@ -849,16 +861,16 @@ class LeftDock(QtCore.QObject):
                 jsonData = f.read()
             self.SubdomainUrlDict = json.loads(jsonData)
             self.subdomainsModel.dataChanged.emit(QtCore.QModelIndex(), QtCore.QModelIndex())
-        else:   
+        else:
             self.url_getter = UrlGetter(self.SubdomainUrlDict, self.projectDirPath)
             self.url_getter.start()
             self.url_getter.subdomainsUrlDict_
             with open(self.SubdomainUrlDict_file, "r") as f:
                 jsonData = f.read()
-            self.SubdomainUrlDict = json.loads(jsonData) 
+            self.SubdomainUrlDict = json.loads(jsonData)
             self.subdomainsModel.dataChanged.emit(QtCore.QModelIndex(), QtCore.QModelIndex())
-        self.subdomainsModel.clear()  
-        self.subdomainsModel.setHorizontalHeaderLabels(["Subdomain:UrlsMapping"])     
+        self.subdomainsModel.clear()
+        self.subdomainsModel.setHorizontalHeaderLabels(["Subdomain:UrlsMapping"])
         for subdomain, urls in self.SubdomainUrlDict.items():
             parentItem = QStandardItem(subdomain)
             self.subdomainsModel.appendRow(parentItem)
@@ -867,9 +879,10 @@ class LeftDock(QtCore.QObject):
                 parentItem.appendRow(url_item)
 
     @QtCore.Slot(int)
-    def openLinkInBrowser(self, index:QtCore.QModelIndex):
+    def openLinkInBrowser(self, index: QtCore.QModelIndex):
         clicked_link = self.subdomainsModel.itemFromIndex(index).text()
         self.openLinkInBrw.emit(clicked_link)
+
 
 class BrowserWindow(QtWidgets.QMainWindow):
     def __init__(self, link=None) -> None:
@@ -877,7 +890,7 @@ class BrowserWindow(QtWidgets.QMainWindow):
 
         self.init_link = link
 
-        centralWidget= QtWidgets.QWidget()
+        centralWidget = QtWidgets.QWidget()
         self.setCentralWidget(centralWidget)
 
         self.centralWidgetLayout = QtWidgets.QVBoxLayout()
@@ -895,7 +908,7 @@ class BrowserWindow(QtWidgets.QMainWindow):
         self.centralWidgetLayout.addLayout(self.lowerCentralLayout)
         self.AddUrlHandler()
 
-        self.lowerCentralLayout.addWidget(self.browser)        
+        self.lowerCentralLayout.addWidget(self.browser)
         # self.browser.createStandardContextMenu()
         if self.init_link is None:
             self.browser.setUrl(QtCore.QUrl("http://google.com/"))
@@ -946,12 +959,13 @@ class BrowserWindow(QtWidgets.QMainWindow):
         if link is not False:
             self.target_url = link
         self.target_url = addHttpsScheme(self.target_url)
-        
+
         self.browser.setUrl(QtCore.QUrl(self.target_url))
 
         self.QbrowserURL = self.browser.url()
         self.strUrl = self.QbrowserURL.url()
         self.urlText.setText(self.strUrl)
+
 
 class NetworkWindow(QtWidgets.QMainWindow):
     def __init__(self) -> None:
@@ -1010,13 +1024,13 @@ class SubdomainizerThreadRunner(QThread):
 
 class Sublist3rThreadRunner(QThread):
     def __init__(
-        self,
-        domain,
-        projectDirPath,
-        bruteforce: bool = None,
-        searchengines: list = None,
-        threads: int = None,
-        ports: list = None,
+            self,
+            domain,
+            projectDirPath,
+            bruteforce: bool = None,
+            searchengines: list = None,
+            threads: int = None,
+            ports: list = None,
     ):
         super().__init__()
         self.domain = domain
@@ -1369,6 +1383,8 @@ class TestTargetWindow(QtWidgets.QMainWindow):
 class MainWindow(QtWidgets.QMainWindow):
     def __init__(self, projectDirPath: str):
         super().__init__()
+        self.rootCACertificate = None
+        self.current_tab_index = None
         self.projectDirPath = projectDirPath
 
         # Docks
@@ -1429,31 +1445,30 @@ class MainWindow(QtWidgets.QMainWindow):
 
         self.centralWidgetLayout.addStretch()
 
-    def openNewBrowserTab(self, link:str=None):
-        BrowserWindow_ = BrowserWindow(link = link)
+    def openNewBrowserTab(self, link: str = None):
+        BrowserWindow_ = BrowserWindow(link=link)
         tab_name = "newT"
         try:
             if link is not None:
                 if link.startswith(("https", "http")):
                     tab_name = link.split("//")[1].split(".")[0]
                 else:
-                    tab_name = link.split(".")[0]   
+                    tab_name = link.split(".")[0]
         except:
-            tab_name = "newT" 
-        self.browserTabWidget.addTab(BrowserWindow_,tab_name)
+            tab_name = "newT"
+        self.browserTabWidget.addTab(BrowserWindow_, tab_name)
         self.browserTabWidget.setCurrentIndex(
-                self.browserTabWidget.indexOf(BrowserWindow_)
-            )
+            self.browserTabWidget.indexOf(BrowserWindow_)
+        )
 
     def closeBrowserTab(self):
-        self.browserTabWidget
         self.current_tab_index = self.browserTabWidget.currentIndex()
         if self.current_tab_index != 0:
             self.browserTabWidget.removeTab(self.current_tab_index)
 
     def LoadCA_Certificate(self):
         self.rootCACertificate = QSslCertificate()
-        self.rootCACertificateFile = "./proxycert/CA/certificate.crt"
+        self.rootCACertificateFile = rundir + "src/proxycert/CA/certificate.crt"
         # self.rootCACertificate.importPkcs12(self.rootCACertificateFile) this is a wrong approach
 
         self.sslConfig = QSslConfiguration.defaultConfiguration()
@@ -1464,9 +1479,13 @@ class MainWindow(QtWidgets.QMainWindow):
     def enableProxy(self):
         self.enableProxyCheckBox.setChecked(True)
         self.proxy_hostname = self.proxyHostNameLineEdit.text()
+        if self.proxy_hostname == " ":
+            self.proxy_hostname = "127.0.0.1"
         try:
             self.proxy_port = int(self.proxyPortNameLineEdit.text())
-            proxy  = QNetworkProxy()
+            if self.proxy_port == " ":
+                self.proxy_port = 8081
+            proxy = QNetworkProxy()
             proxy.setType(QNetworkProxy.HttpProxy)
             proxy.setHostName(self.proxy_hostname)
             proxy.setPort(self.proxy_port)
@@ -1508,7 +1527,7 @@ class MainWindow(QtWidgets.QMainWindow):
         BrowserSettings_action = self.centralWidgetMenu.addAction("Browser settings")
         BrowserSettings_action.triggered.connect(self.openBrowserSettingsWindow)
         # top menu Button
-        self.MenuIcon = QtGui.QIcon.fromTheme("view-list")
+        self.MenuIcon = QtGui.QIcon(rundir + "resources/icons/settings-icon-gear-3d-render-png.png")
         self.menuButton = QtWidgets.QPushButton()
         self.menuButton.setIcon(self.MenuIcon)
         self.menuButton.setFixedWidth(28)
@@ -1548,7 +1567,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
         self.proxyDoneButton = QtWidgets.QPushButton()
         self.proxyDoneButton.setText("Yes")
-        self.proxyDoneButton.clicked.connect(self.enableProxy())
+        self.proxyDoneButton.clicked.connect(self.enableProxy)
         self.enableProxyLayout.addRow("do you want to set the proxy ?:", self.proxyDoneButton)
 
         self.BrowserSettingsWindowLayout.addLayout(self.enableProxyLayout)
@@ -1588,19 +1607,40 @@ class ProxyInterceptWindow(QtWidgets.QMainWindow):
         super().__init__()
         self.projectDirPath = projectDirPath
 
-        # docks
-        SiteMapDock = SiteMapDock(self)  # site map dock
-        self.siteMapDock = SiteMapDock.InitializeSiteMapDock()
-
         self.MainWidget = QtWidgets.QWidget()
         self.setCentralWidget(self.MainWidget)
 
-class ReqResTextEditor(TextEditor):
+
+class ReqResTextEditor(TextEditor, QtCore.QObject):
+    sendToRepeaterSignal = Signal(str)
+
     def __init__(self):
         super().__init__()
 
+    def contextMenuEvent(self, event):
+        menu = self.createStandardContextMenu()
+
+        sendToRepeaterAction = QtGui.QAction("send to repeater", self)
+        sendToRepeaterAction.triggered.connect(self.sendRequestToRepeater)
+        menu.addAction(sendToRepeaterAction)
+
+        menu.exec()
+
+    def sendRequestToRepeater(self):
+        # print(red("send to repeater signal has been emitted"))
+        self.sendToRepeaterSignal.emit(self.toPlainText())
+
+
+class RepeaterReqResTextEditor(TextEditor):
+    def __init__(self):
+        super().__init__()
+        self.setBaseSize(650, 650)
+        self.setMaximumWidth(750)
+
+
 class SiteMapUpdater(QThread, QtCore.QObject):
     fileStructureChanged = Signal()
+
     def __init__(self, proxyDumpDir):
         super().__init__()
         self.proxyDumpDir = proxyDumpDir
@@ -1613,18 +1653,165 @@ class SiteMapUpdater(QThread, QtCore.QObject):
             self.new_proxyDumpDirComponents.clear()
             for _, dirs, files in os.walk(self.proxyDumpDir):
                 [self.new_proxyDumpDirComponents.add(dir_) for dir_ in dirs]
-                [self.new_proxyDumpDirComponents.add(file) for file in files] 
+                [self.new_proxyDumpDirComponents.add(file) for file in files]
 
             if not self.old_proxyDumpDirComponents == self.new_proxyDumpDirComponents:
                 # print(red("structure changed"))
                 self.fileStructureChanged.emit()
-                self.old_proxyDumpDirComponents = self.new_proxyDumpDirComponents.copy() # set the old list to equal to the new list such that it becomes the new old
+                self.old_proxyDumpDirComponents = self.new_proxyDumpDirComponents.copy()  # set the old list to equal to the new list such that it becomes the new old
             else:
                 # self.stateNotChanged++
                 pass
 
     def run(self) -> None:
         self.checkDirChange()
+
+
+class RepeaterWindow(QtWidgets.QMainWindow, QtCore.QObject):
+
+    # tabChangeSignal  = Signal(int)
+    def __init__(self):
+        super().__init__()
+
+        self.repeaterMainWidget = QtWidgets.QWidget()
+        self.setCentralWidget(self.repeaterMainWidget)
+        self.repeaterMainWidgetLayout = QtWidgets.QVBoxLayout()
+        self.repeaterMainWidget.setLayout(self.repeaterMainWidgetLayout)
+
+        self.repeaterSplitter = QtWidgets.QSplitter()
+        self.repeaterMainWidgetLayout.addWidget(self.repeaterSplitter)
+
+        self.repeaterTabManager = QtWidgets.QTabWidget()
+        self.repeaterTabManager.currentChanged.connect(self.changeTabAttributes)
+        self.repeaterSplitter.addWidget(self.repeaterTabManager)
+        # self.addReqResInstanceTabManager()
+        self.repeaterTabs = []
+        self.currentTabManager = None
+        self.instanceRepeaterSplitter= None
+        self.req_res_tabManager= None
+        self.requestsEditorFrame= None
+        self.requestsEditorLayout= None
+        self.requestsEditor= None
+        self.repeaterSendReqButton= None
+        self.responseEditor= None
+        self.tabIndex = 0
+        self.firstTabPresent = False
+        self.responseQueue = queue.Queue()
+        self.responseDir = rundir+"tmp/"
+        if not Path(self.responseDir).is_dir():
+            os.makedirs(self.responseDir)
+        self.response_file = os.path.join(self.responseDir, "response.txt")
+        if not Path(self.response_file).exists():
+            with open(self.response_file, "w") as f:
+                f.close()
+
+    def addReqResInstanceTabManager(self, request: str = None):
+        instanceRepeaterSplitter = QtWidgets.QSplitter()
+        self.repeaterTabManager.addTab(instanceRepeaterSplitter, "new")
+
+        req_res_tabManager = QtWidgets.QTabWidget()
+        instanceRepeaterSplitter.addWidget(req_res_tabManager)
+
+        requestsEditorFrame = QtWidgets.QFrame()
+        requestsEditorFrame.setBaseSize(650, 650)
+        requestsEditorFrame.setMaximumWidth(750)
+        requestsEditorLayout = QtWidgets.QVBoxLayout()
+        requestsEditorFrame.setLayout(requestsEditorLayout)
+
+        requestsEditor = RepeaterReqResTextEditor()
+        if request is not None:
+            requestsEditor.setText(request)
+        highlighter = SyntaxHighlighter(requestsEditor.document())
+        requestsEditorLayout.addWidget(requestsEditor)
+        req_res_tabManager.addTab(requestsEditorFrame, "request")
+
+        repeaterSendReqButton = QtWidgets.QPushButton()
+        repeaterSendReqButton.setText("send")
+        repeaterSendReqButton.clicked.connect(self.sendRepReqToProxy)
+        requestsEditorLayout.addWidget(repeaterSendReqButton)
+
+        responseEditor = RepeaterReqResTextEditor()
+        highlighter = SyntaxHighlighter(responseEditor.document())
+        req_res_tabManager.addTab(responseEditor, "response")
+
+        tabAttributes= {
+            "instanceRepeaterSplitter":instanceRepeaterSplitter,
+            "req_res_tabManager":req_res_tabManager,
+            "requestsEditorFrame":requestsEditorFrame,
+            "requestsEditorLayout":requestsEditorLayout,
+            "requestsEditor":requestsEditor,
+            "repeaterSendReqButton":repeaterSendReqButton,
+            "responseEditor":responseEditor}
+
+        self.repeaterTabs.append(tabAttributes)
+        self.repeaterTabManager.setCurrentIndex(self.repeaterTabManager.indexOf(instanceRepeaterSplitter))
+        self.firstTabPresent = True
+        if self.repeaterTabManager.currentIndex() == 0:
+            self.repeaterTabManager.currentChanged.emit(0)
+    
+
+    def changeTabAttributes(self):
+        curIndex_ = self.repeaterTabManager.currentIndex()
+        if self.firstTabPresent:
+            self.instanceRepeaterSplitter= self.repeaterTabs[curIndex_]["instanceRepeaterSplitter"]
+            self.req_res_tabManager= self.repeaterTabs[curIndex_]["req_res_tabManager"]
+            self.requestsEditorFrame= self.repeaterTabs[curIndex_]["requestsEditorFrame"]
+            self.requestsEditorLayout= self.repeaterTabs[curIndex_]["requestsEditorLayout"]
+            self.requestsEditor= self.repeaterTabs[curIndex_]["requestsEditor"]
+            self.repeaterSendReqButton= self.repeaterTabs[curIndex_]["repeaterSendReqButton"]
+            self.responseEditor= self.repeaterTabs[curIndex_]["responseEditor"]
+
+
+    def sendRepReqToProxy(self):
+        try:
+            self.guiProxyClient = GuiProxyClient(self.responseEditor, self.requestsEditor.toPlainText())
+            self.guiProxyClient.finished.connect(self.updateResponseEditor)
+            self.guiProxyClient.start()
+        except ConnectionAbortedError or ConnectionResetError:
+            pass
+
+    def updateResponseEditor(self):
+        self.responseEditor.clear()
+        with open(self.response_file, 'r') as file:
+            response = file.read()
+        self.responseEditor.setText(response)
+
+class GuiProxyClient(QThread):
+    def __init__(self, responseEditor: RepeaterReqResTextEditor, request:str):
+        super().__init__()
+        self.responseDir = rundir+"tmp/"
+        self.respose_file = os.path.join(self.responseDir, "response.txt")
+        # self.responseQueue = responseQueue
+        self.request = self.makeRequestPacket(request)
+        self.responseEditor = responseEditor
+        self.proxyAddress = ("127.0.0.1", 8081)
+        try:
+            self.socket = socket.create_connection(self.proxyAddress,timeout=10)
+        except ConnectionRefusedError or ConnectionAbortedError or ConnectionResetError:
+            self.exit()
+
+    def makeRequestPacket(self, request:str):
+        request_lines = request.split("\n")
+        new_request = ""
+        for rl in request_lines:
+            if request_lines.index(rl) == 0:
+                new_request = rl
+            else:
+                new_request = new_request+"\r\n"+rl
+        return new_request        
+
+    def send(self):
+        try:
+            self.socket.sendall(self.request.encode("utf-8"))
+            response = self.socket.recv(496000).decode("utf-8")
+            # self.responseQueue.put(response)
+            with open(self.respose_file, 'w') as file:
+                file.write(response)
+        except:
+            self.exit()
+
+    def run(self):
+        self.send()
 
 
 class SiteMapWindow(QtWidgets.QMainWindow):
@@ -1636,7 +1823,11 @@ class SiteMapWindow(QtWidgets.QMainWindow):
         self.siteMapMainWidget.setLayout(self.siteMapMainWidgetLayout)
         self.proxyDumpDir = "/home/program/AtomProjects/Proxy/"
         self.siteDirs = []
-        
+        self.siteMapScope = ["."]
+
+        self.requestsEditor = ReqResTextEditor()
+        self.responseEditor = ReqResTextEditor()
+
         # splitter
         self.siteMapSplitter = QtWidgets.QSplitter()
         self.siteMapMainWidgetLayout.addWidget(self.siteMapSplitter)
@@ -1656,37 +1847,39 @@ class SiteMapWindow(QtWidgets.QMainWindow):
         self.siteMapUpperLayout.addWidget(self.siteMapListViewLabel, alignment=Qt.AlignLeft)
 
         self.siteMapListViewSettingsButton = QtWidgets.QPushButton()
-        self.siteMapListViewSettingsButtonIcon = QtGui.QIcon("./resources/icons/settings-icon-gear-3d-render-png.png")
+        self.siteMapListViewSettingsButtonIcon = QtGui.QIcon(
+            rundir + "resources/icons/settings-icon-gear-3d-render-png.png")
         self.siteMapListViewSettingsButton.setIcon(self.siteMapListViewSettingsButtonIcon)
         self.siteMapListViewSettingsButton.clicked.connect(self.openSiteMapSettings)
         self.siteMapUpperLayout.addWidget(self.siteMapListViewSettingsButton, alignment=Qt.AlignRight)
 
-        self.siteMapTreeModel =  QStandardItemModel()
+        self.siteMapTreeModel = QStandardItemModel()
         self.siteMapTreeView = QtWidgets.QTreeView()
         self.siteMapTreeView.setAlternatingRowColors(True)
         self.siteMapTreeView.setAnimated(True)
+        self.siteMapTreeView.doubleClicked.connect(self.readReqResData)
         self.siteMapTreeView.setUniformRowHeights(True)
         self.siteMapTreeView.setEditTriggers(QtWidgets.QTreeView.NoEditTriggers)
         self.siteMapTreeViewLayout.addWidget(self.siteMapTreeView)
         # self.siteMapTreeModel.dataChanged.connect(self.getSites())
         self.getSites()
-        #update siteMap class 
+        # update siteMap class
         self.siteMapUpdater = SiteMapUpdater(self.proxyDumpDir)
         self.siteMapUpdater.fileStructureChanged.connect(self.getSites)
         self.siteMapUpdater.destroyed.connect(self.closeEvent)
         self.siteMapUpdater.start()
-    
+
         # the request and response area tabs
         self.siteMapReqResTabManager = QtWidgets.QTabWidget()
         self.siteMapSplitter.addWidget(self.siteMapReqResTabManager)
 
-        self.requestsTab = ReqResTextEditor()
-        self.highlighter = SyntaxHighlighter(self.requestsTab.document())
-        self.siteMapReqResTabManager.addTab(self.requestsTab, "request")
-        self.responseTab = ReqResTextEditor()
-        self.siteMapReqResTabManager.addTab(self.responseTab, "response")
-        self.highlighter = SyntaxHighlighter(self.responseTab.document())
-        
+        self.requestsEditor.setFixedWidth(650)
+        self.highlighter = SyntaxHighlighter(self.requestsEditor.document())
+        self.siteMapReqResTabManager.addTab(self.requestsEditor, "request")
+        self.responseEditor.setFixedWidth(650)
+        self.siteMapReqResTabManager.addTab(self.responseEditor, "response")
+        self.highlighter = SyntaxHighlighter(self.responseEditor.document())
+
     def openSiteMapSettings(self):
         self.siteMapSettingsWidget = QtWidgets.QWidget()
         self.siteMapSettingsWidgetLayout = QtWidgets.QVBoxLayout()
@@ -1696,8 +1889,9 @@ class SiteMapWindow(QtWidgets.QMainWindow):
         self.siteMapSettingsScopeLabel.setText("<b><u>Scope</u></b>")
         self.siteMapSettingsWidgetLayout.addWidget(self.siteMapSettingsScopeLabel)
 
-        self.siteMapSettingsScopeNoteLabel= QtWidgets.QLabel()
-        self.siteMapSettingsScopeNoteLabel.setText("Add comma separated  values of the domains\n\te.g youtube, google\nThe comma separated values can also be regex patterns")
+        self.siteMapSettingsScopeNoteLabel = QtWidgets.QLabel()
+        self.siteMapSettingsScopeNoteLabel.setText(
+            "Add comma separated  values of the domains\n\te.g youtube, google\nThe comma separated values can also be regex patterns")
         self.siteMapSettingsWidgetLayout.addWidget(self.siteMapSettingsScopeNoteLabel)
 
         self.siteMapSettingsScopeLineEdit = QtWidgets.QLineEdit()
@@ -1717,6 +1911,52 @@ class SiteMapWindow(QtWidgets.QMainWindow):
         self.siteMapSettingsWidget.setWindowTitle("siteMap scope settings")
         self.siteMapSettingsWidget.show()
 
+    def readReqResData(self, index: QtCore.QModelIndex):
+        parent_idx = index.parent()
+        clicked_file_dir = self.siteMapTreeModel.itemFromIndex(parent_idx).text()
+        clicked_file = self.siteMapTreeModel.itemFromIndex(index).text()
+
+        file_obtained = False
+
+        for root, dirs, files in os.walk(self.proxyDumpDir):
+            for dirr in dirs:
+                if dirr == clicked_file_dir:
+                    if root != self.proxyDumpDir:
+                        # print(red(f"clicked {root}"))
+                        for entry in os.scandir(root):
+                            if entry.name == clicked_file:
+                                clicked_file_path = os.path.join(root, entry.name)
+                                file_obtained = True
+                                break
+                        if not file_obtained:
+                            # print(red(f"walking through dir {root}"))
+                            for root_, dirs_, files_ in os.walk(root):
+                                for dir__ in dirs_:
+                                    dir_path = os.path.join(root_, dir__)  # note here for far and short searches
+                                    for entry in os.scandir(dir_path):
+                                        # print(red(f"scanning dir: {root_}"))
+                                        if entry.name == clicked_file:
+                                            clicked_file_path = os.path.join(dir_path, entry.name)
+                                            # print(red(f"clicked file path: {clicked_file_path}"))
+                                            file_obtained = True
+                                            break
+                                    if file_obtained:
+                                        break
+
+                if file_obtained:
+                    break
+            if file_obtained:
+                break
+        if file_obtained:
+            with open(clicked_file_path, "r") as f:
+                file_data = f.read().split("\nRESPONSE\n")
+                request_packet = file_data[0]
+                response_packet = file_data[1]
+            self.requestsEditor.clear()
+            self.responseEditor.clear()
+            self.requestsEditor.setText(request_packet)
+            self.responseEditor.setText(response_packet)
+
     def setSiteMapScope(self):
         scope = []
         scope_ = self.siteMapSettingsScopeLineEdit.text()
@@ -1725,10 +1965,14 @@ class SiteMapWindow(QtWidgets.QMainWindow):
             [scope.append(scope__.strip()) for scope__ in scps]
         else:
             scope.append(scope_)
-        self.getSites(scope= scope)    
-        self.siteMapSettingsWidget.close()    
+        self.siteMapScope.clear()
+        self.siteMapScope.extend(scope)
+        self.getSites(scope=self.siteMapScope)
+        self.siteMapSettingsWidget.close()
 
-    def getSites(self, scope:list=None, regex=None):
+    def getSites(self, scope: list = None, regex=None):
+        if scope is None:
+            scope = self.siteMapScope
         # print(red("get sites has been called"))
         self.siteMapTreeModel.clear()
         self.siteDirs.clear()
@@ -1745,9 +1989,9 @@ class SiteMapWindow(QtWidgets.QMainWindow):
         for site_dir in self.siteDirs:
             parentItem = QStandardItem(site_dir.name)
             self.siteMapTreeModel.appendRow(parentItem)
-            defaultParentPath = os.path.join(self.proxyDumpDir, site_dir.name+"/")
+            defaultParentPath = os.path.join(self.proxyDumpDir, site_dir.name + "/")
             iterDir(defaultParentPath, parentItem)
-        self.siteMapTreeView.setModel(self.siteMapTreeModel)    
+        self.siteMapTreeView.setModel(self.siteMapTreeModel)
 
     def closeEvent(self, event: QtGui.QCloseEvent) -> None:
         # return super().closeEvent(event)
@@ -1757,7 +2001,7 @@ class SiteMapWindow(QtWidgets.QMainWindow):
 class MainWin(QtWidgets.QMainWindow):
     def __init__(self) -> None:
         super().__init__()
-        
+
         self.setWindowTitle("AWE(Atom Web Enumeration Framework)")
         self.homeDirectory = os.path.expanduser("~")
         self.defaultWorkspaceDir = os.path.join(self.homeDirectory, "AtomProjects/")
@@ -1784,7 +2028,7 @@ class MainWin(QtWidgets.QMainWindow):
         self.mainTabLayout.addWidget(self.recentProjectsLabel, alignment=Qt.AlignCenter)
 
         self.addProjects()
-        
+
         self.openBarFrame = QtWidgets.QFrame()
         self.openBarLayout = QtWidgets.QHBoxLayout()
         self.choosenProjectDir = QtWidgets.QLineEdit()
@@ -1814,13 +2058,12 @@ class MainWin(QtWidgets.QMainWindow):
         self.closeTabButton.setFixedWidth(120)
         self.closeTabButton.clicked.connect(self.closeTab)
         self.upperTabMenuLayout.addWidget(self.closeTabButton)
+
         self.SiteMapButton = QtWidgets.QPushButton()
         self.SiteMapButton.setText("SiteMap")
         self.SiteMapButton.setFixedWidth(110)
         self.SiteMapButton.clicked.connect(self.addSiteMapTab)
         self.upperTabMenuLayout.addWidget(self.SiteMapButton)
-        # add site map Target
-        self.addSiteMapTab()
         # add target button
         self.addTabButton = QtWidgets.QPushButton()
         self.addTabButton.setText("Add Target")
@@ -1833,9 +2076,19 @@ class MainWin(QtWidgets.QMainWindow):
         self.MainLayout.addWidget(self.tabManager)
         self.setCentralWidget(self.centralWidget)
         self.mainTabLayout.addStretch()
+        # add repeater tab
+        self.repeaterWindow = RepeaterWindow()
+        self.tabManager.addTab(self.repeaterWindow, "Repeater")
+        # add site map Target
+        self.addSiteMapTab()
+
+    def addRepeaterInstanceTab(self, request: str = None):
+        self.repeaterWindow.addReqResInstanceTabManager(request)
 
     def addSiteMapTab(self):
         self.siteMapWindow = SiteMapWindow()
+        self.siteMapWindow.requestsEditor.sendToRepeaterSignal.connect(self.addRepeaterInstanceTab)
+        # self.siteMapWindow.responseEditor.sendToRepeaterSignal.connect(self.addRepeaterTab)
         self.tabManager.addTab(self.siteMapWindow, "SitesMap")
 
     def openChoosenProject(self):
@@ -1852,16 +2105,16 @@ class MainWin(QtWidgets.QMainWindow):
                 if entry.is_dir():
                     available_dirs.append(entry.name)
         self.dirsModel = QtCore.QStringListModel(available_dirs)
-        self.dirListView  = QtWidgets.QListView()
+        self.dirListView = QtWidgets.QListView()
         self.dirListView.setModel(self.dirsModel)
         self.dirListView.clicked.connect(self.projectDirClicked)
 
         self.dirsProjectsScrollArea = QtWidgets.QScrollArea()
         self.dirsProjectsScrollArea.setWidget(self.dirListView)
-        self.dirsProjectsScrollArea.setWidgetResizable(True)  
+        self.dirsProjectsScrollArea.setWidgetResizable(True)
         self.dirsProjectsScrollArea.setFixedHeight(450)
         self.dirsProjectsScrollArea.setFixedWidth(450)
-        self.mainTabLayout.addWidget(self.dirsProjectsScrollArea, alignment=Qt.AlignCenter)          
+        self.mainTabLayout.addWidget(self.dirsProjectsScrollArea, alignment=Qt.AlignCenter)
 
     def projectDirClicked(self, index):
         clicked_dir = self.dirsModel.data(index, QtCore.Qt.DisplayRole)
@@ -1890,37 +2143,37 @@ class MainWin(QtWidgets.QMainWindow):
         self.doneButton = QtWidgets.QPushButton()
         self.doneButton.setText("Done")
         self.newTargetWindowLayoutMain.addWidget(self.doneButton)
-        self.doneButton.clicked.connect(self.AddTargetTab)
+        self.doneButton.clicked.connect(self.m_AddTargetTab)
 
         self.newTargetWindow.setLayout(self.newTargetWindowLayoutMain)
         self.newTargetWindow.show()
 
-    def AddTargetTab(self, directory=None):
-        if directory is None:
-            tab_name = self.newTargetTabName.text()
-            if tab_name == "":
-                self.newTargetTabName.setStyleSheet("border: 1px solid red;")
-            else:
-                projectDirectory = os.path.join(self.defaultWorkspaceDir, tab_name)
-                if not Path(projectDirectory).exists():
-                    os.makedirs(projectDirectory)
-                self.mainWindowInstance = MainWindow(projectDirectory)
-                self.tabManager.addTab(self.mainWindowInstance, tab_name)
-                self.tabManager.setCurrentIndex(
-                    self.tabManager.indexOf(self.mainWindowInstance)
-                )
-                self.newTargetWindow.close()
+    def m_AddTargetTab(self):
+        tab_name = self.newTargetTabName.text()
+        if tab_name == "":
+            self.newTargetTabName.setStyleSheet("border: 1px solid red;")
         else:
-            self.mainWindowInstance = MainWindow(directory)
-            tab_name = directory.split("/")[-1]
+            projectDirectory = os.path.join(self.defaultWorkspaceDir, tab_name)
+            if not Path(projectDirectory).exists():
+                os.makedirs(projectDirectory)
+            self.mainWindowInstance = MainWindow(projectDirectory)
             self.tabManager.addTab(self.mainWindowInstance, tab_name)
             self.tabManager.setCurrentIndex(
                 self.tabManager.indexOf(self.mainWindowInstance)
-            )              
+            )
+            self.newTargetWindow.close()
+
+    def AddTargetTab(self, directory=""):
+        self.mainWindowInstance = MainWindow(directory)
+        tab_name = directory.split("/")[-1]
+        self.tabManager.addTab(self.mainWindowInstance, tab_name)
+        self.tabManager.setCurrentIndex(
+            self.tabManager.indexOf(self.mainWindowInstance)
+        )
 
     def closeTab(self):
         self.current_tab_index = self.tabManager.currentIndex()
-        if self.current_tab_index != -1:
+        if self.current_tab_index > 1:
             self.tabManager.removeTab(self.current_tab_index)
 
 
@@ -1929,3 +2182,4 @@ if __name__ == "__main__":
     main_window = MainWin()
     main_window.showMaximized()
     sys.exit(App.exec())
+    
