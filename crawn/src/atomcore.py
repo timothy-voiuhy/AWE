@@ -225,7 +225,7 @@ class MainRunner:
         Values = {"TYPE": type_, "URL": url, "ATTRS": attrs}
         self.Data_dict[element] = Values
 
-    async def perform_get(self, url, get_logger) -> requests.Response.text:
+    async def PerformGet(self, url, get_logger) -> requests.Response.text:
         """description: makes a get request to a server and returns the contents of response.text()"""
         if self.use_browser:
             print(green(f"Processing get on url: {url}"))
@@ -309,12 +309,12 @@ class MainRunner:
 
     async def ProcessGet_core(self, urll, w_url, get_logger):
         try:
-            response = await self.perform_get(urll, get_logger)
+            response = await self.PerformGet(urll, get_logger)
             if response is not None:
                 return response
             elif response is None:
                 print("None")
-                w_response = await self.perform_get(w_url, get_logger)
+                w_response = await self.PerformGet(w_url, get_logger)
                 if w_response is not None:
                     return w_response
                 else:
@@ -327,7 +327,7 @@ class MainRunner:
         # except Exception as exception:
         #     print(exception)
         #     try:
-        #         res__= await self.perform_get(w_url,get_logger)
+        #         res__= await self.PerformGet(w_url,get_logger)
         #         if res__  is not None:
         #             return res__
         #         else:

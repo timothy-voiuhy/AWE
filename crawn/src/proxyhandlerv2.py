@@ -24,6 +24,9 @@ import asyncio
 
 import threading
 from pathlib import Path
+import json
+from urllib import parse as urlparser
+import logging
 
 
 def is_brotli_compressed(data):
@@ -111,28 +114,30 @@ def DissectBrowserReqPkt(packet: str, http: bool = None):
     return packetMethod, packetUrl, packetHeadersDict, packetParamsDict, packetBody, packetUrlwParams
 
 
-def writeLinkContentToFIle(MAIN_DIR, link: str, data, hostname):
+def writeLinkContentToFIle(main_dir, link: str, data, hostname):
+    
+    link_components = urlparser.urlparse(link)
+    relative_path = link_components[1] + link_components[2] # the netlock + path,  this already has file name if it does not end with "/"
+
     if link.endswith("/"):
-        link = link + "index.html"
-    scheme_path = link.split("//")  # scheme_path = [https: , path] or  #shceme_path = [https: , path?jfdk]
-    if scheme_path is not None:
-        if not MAIN_DIR.endswith("/"):
-            _path = MAIN_DIR + "/" + scheme_path[1]
+        relative_path = relative_path + "index.html" # giving a file name for the index file 
+
+    if relative_path is not None:
+        if not main_dir.endswith("/"):
+            file_path = main_dir + "/" + relative_path
         else:
-            _path = MAIN_DIR+scheme_path[1]
-    dir_path, file_name = os.path.split(_path)
+            file_path = main_dir+relative_path
+    dir_path, file_name = os.path.split(file_path)
     try:
-        if not os.path.exists(path=_path):
+        if not os.path.exists(path=file_path):
             os.makedirs(dir_path)
-            with open(_path,
-                      'wb') as file:  # this is where we caught the error after we try to a file that does not exist
+            with open(file_path,'wb') as file:  # this is where we caught the error after we try to a file that does not exist
                 file.write(data)
         else:
-            os.rmdir(_path)
-            os.makedirs(dir_path)
-            with open(_path, 'wb') as g:
+            os.remove(file_path)
+            with open(file_path, 'wb') as g:
                 g.write(data)
-        return _path
+        return file_path
     except Exception as e:
         print(f"failed to save file with error {e}")
 
@@ -172,7 +177,10 @@ class ProxyHandler:
             sys.exit()
         self.socket.listen(5)
         self.downlaodMozillaCAs = downloadMozillaCAs
-        self.runDir = "/media/program/01DA55CA5F28E000/MYAPPLICATIONS/AWE/AWE/crawn/src"
+        if sys.platform == "WIN32":
+            self.runDir = rundir  = "D:\\MYAPPLICATIONS\\AWE\\AWE\\crawn\\src"
+        else:
+            self.runDir = "/media/program/01DA55CA5F28E000/MYAPPLICATIONS/AWE/AWE/crawn/src"
         if self.downlaodMozillaCAs:
             self.MozillarootCAsUrl = "https://github.com/gisle/mozilla-ca/blob/master/lib/Mozilla/CA/cacert.pem"
             self.MozillaCACertsVerifyFile = self.runDir + "/proxycert/Mozilla/cacert.pem"
@@ -206,6 +214,9 @@ class ProxyHandler:
         self.error_file_count = 0
         self.useUrllib = useUrllib
         self.PoolManager = httpClient.Client(follow_redirects=True, timeout=15)
+
+        self.logging  = True
+        self.scope = ["."] # default regex pattern that can match for all hostnames
 
     def constructResponsePacket(self, u_response: httpx.Response = None,
                                 usedRequests: bool = False):
@@ -412,8 +423,14 @@ class ProxyHandler:
                 usehttpLibs=usehttpLibs,
                 http=http)
             if self.save_traffic:
-                req_res_data = self.createReqResData(dec_browserRequest, dec_browserResponse)
-                writeLinkContentToFIle(hostDir, requestUrl, req_res_data, hostname)
+                # remember in the gui the scope are regex patterns
+                if self.logging:
+                    if self.scope is not None:
+                        for scope_regex in self.scope:
+                            pattern = re.compile(scope_regex)
+                            if len(pattern.findall(hostname)) != 0:
+                                req_res_data = self.createReqResData(dec_browserRequest, dec_browserResponse)
+                                writeLinkContentToFIle(hostDir, requestUrl, req_res_data, hostname)
             print(f"{yellow('dest_response:')}{ResponsePacket[:200]}")
             try:
                 writtenBytes = ClientSslSocket.sendall(ResponsePacket)  # replace with sendall during debugging
@@ -429,12 +446,35 @@ class ProxyHandler:
             self.closeTunnel(browser_socket)
 
     def HandleConnection(self, browser_socket: socket.socket, unix=True):
-        print("Waiting for initial browser request")
+        print("Waiting for initial browser request\n")
         initial_browser_request = browser_socket.recv(160000).decode("utf-8")
         print(cyan("Browser Intercept Request: "))
         print(initial_browser_request)
+
+        if self.is_proxyCommand(initial_browser_request):
+            command_dict = json.loads(initial_browser_request)
+            if list(command_dict.keys())[0] == "scope":
+                logging.info("Trying to set the hostname's scope")
+                self.scope = list(command_dict.values())
+                logging.info(f"Successfully set scope to {self.scope}")
+
+            elif list(command_dict.keys())[0] == "log":
+                if list(command_dict.values())[0] == 1:
+                    logging.info("Recieved disable logging request \n Trying to disable logging")
+                    try:
+                        self.logging  = False
+                        logging.info("Successfully disabled logging")
+                    except Exception as e:
+                        logging.error("Failed to disable logging with error {e}")
+                else:
+                    logging.info("Recieved enable logging request \n Trying to enable logging")
+                    try:
+                        self.logging  =True    
+                        logging.info("Successfully enabled logging")
+                    except Exception as e:
+                        logging.error(f"Failed to enable logging with error {e}")
     
-        if initial_browser_request != "":
+        elif initial_browser_request != "":
             if self.isRequest(initial_browser_request.encode("utf-8")):
                 print(yellow("Received valid request as initial browser request"))
                 (requestMethod,
@@ -520,6 +560,14 @@ class ProxyHandler:
         else:
             print(red("Initial Browser Request is Invalid"))
 
+    def is_proxyCommand(self, initial_browser_req):
+        try:
+            if isinstance(json.loads(initial_browser_req), dict):
+                return True
+            else:
+                return False
+        except Exception:
+            return False
 
     def startServerInstance(self):
         print(yellow(f"Proxy running on {self.host}, port {self.port}"))
@@ -534,6 +582,9 @@ class ProxyHandler:
 
 
 if __name__ == "__main__":
+
+    logging.basicConfig(level=logging.DEBUG, format="%(asctime)s -%(levelname)s - %(filename)s:%(lineno)d - %(message)s")
+
     proxy = ProxyHandler(
         verifyDstServerCerts=False,
         UsehttpLibs=True,

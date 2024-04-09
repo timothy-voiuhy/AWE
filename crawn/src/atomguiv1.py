@@ -37,7 +37,11 @@ from urllib.parse import urlsplit
 import copy
 import queue
 import tracemalloc
-import psutil
+# import psutil
+import sys
+import logging
+import timeit
+import time
 
 """ functionalities so far:
 program output
@@ -58,8 +62,10 @@ note: https://iconscout.com/
 
 """
 
+# logging.basicConfig()
 rundir = "/media/program/01DA55CA5F28E000/MYAPPLICATIONS/AWE/AWE/crawn/"
-
+if sys.platform == "WIN32":
+    rundir  = "D:\\MYAPPLICATIONS\\AWE\\AWE\\crawn\\"
 
 class AmassFailure(Exception):
     pass
@@ -1424,7 +1430,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.newBrowserTabButton = QtWidgets.QPushButton()
         self.newBrowserTabButton.setText("NewBrowserTab")
         self.newBrowserTabButton.clicked.connect(self.openNewBrowserTab)
-        self.newBrowserTabButton.setFixedWidth(150)
+        self.newBrowserTabButton.setFixedWidth(160)
         self.uppperCentralLayout.addWidget(self.newBrowserTabButton)
 
         # close Browser Tab
@@ -1647,20 +1653,30 @@ class SiteMapUpdater(QThread, QtCore.QObject):
         self.old_proxyDumpDirComponents = set()
         self.new_proxyDumpDirComponents = set()
         self.stateNotChanged = 0
+        self.program_start_mins = int(time.asctime().split(":")[1])
 
     def checkDirChange(self):
         while True:
+            self.program_go_mins = int(time.asctime().split(":")[1])
+            self.spentMins = abs(self.program_go_mins - self.program_start_mins)
             self.new_proxyDumpDirComponents.clear()
             for _, dirs, files in os.walk(self.proxyDumpDir):
                 [self.new_proxyDumpDirComponents.add(dir_) for dir_ in dirs]
                 [self.new_proxyDumpDirComponents.add(file) for file in files]
 
             if not self.old_proxyDumpDirComponents == self.new_proxyDumpDirComponents:
-                # print(red("structure changed"))
                 self.fileStructureChanged.emit()
                 self.old_proxyDumpDirComponents = self.new_proxyDumpDirComponents.copy()  # set the old list to equal to the new list such that it becomes the new old
+                self.stateNotChanged = 0
+                self.program_start_mins = int(time.asctime().split(":")[1])
             else:
-                # self.stateNotChanged++
+                if self.spentMins >= 2:
+                    self.stateNotChanged += 1
+                    if self.stateNotChanged == 10:
+                        logging.info("File structure not Changed=> SiteMapUpdater Thread Sleeping...")
+                        milliseconds = lambda x: (x*60)
+                        self.sleep(milliseconds(3))
+                        self.stateNotChanged = 0
                 pass
 
     def run(self) -> None:
@@ -1764,7 +1780,7 @@ class RepeaterWindow(QtWidgets.QMainWindow, QtCore.QObject):
 
     def sendRepReqToProxy(self):
         try:
-            self.guiProxyClient = GuiProxyClient(self.responseEditor, self.requestsEditor.toPlainText())
+            self.guiProxyClient = GuiProxyClient(self.requestsEditor.toPlainText())
             self.guiProxyClient.finished.connect(self.updateResponseEditor)
             self.guiProxyClient.start()
         except ConnectionAbortedError or ConnectionResetError:
@@ -1777,17 +1793,17 @@ class RepeaterWindow(QtWidgets.QMainWindow, QtCore.QObject):
         self.responseEditor.setText(response)
 
 class GuiProxyClient(QThread):
-    def __init__(self, responseEditor: RepeaterReqResTextEditor, request:str):
+    def __init__(self, request:str, is_command=False):
         super().__init__()
+        self.is_command = is_command    
         self.responseDir = rundir+"tmp/"
         self.respose_file = os.path.join(self.responseDir, "response.txt")
-        # self.responseQueue = responseQueue
         self.request = self.makeRequestPacket(request)
-        self.responseEditor = responseEditor
         self.proxyAddress = ("127.0.0.1", 8081)
         try:
             self.socket = socket.create_connection(self.proxyAddress,timeout=10)
-        except ConnectionRefusedError or ConnectionAbortedError or ConnectionResetError:
+        except ConnectionRefusedError or ConnectionAbortedError or ConnectionResetError as e:
+            logging.error(f"Connection error: {e}")
             self.exit()
 
     def makeRequestPacket(self, request:str):
@@ -1803,11 +1819,14 @@ class GuiProxyClient(QThread):
     def send(self):
         try:
             self.socket.sendall(self.request.encode("utf-8"))
-            response = self.socket.recv(496000).decode("utf-8")
-            # self.responseQueue.put(response)
-            with open(self.respose_file, 'w') as file:
-                file.write(response)
-        except:
+            self.socket.close()
+            self.exit()
+            if not self.is_command:
+                response = self.socket.recv(496000).decode("utf-8")
+                with open(self.respose_file, 'w') as file:
+                    file.write(response)
+        except Exception as e:
+            logging.error(f"Encountered error: {e}")
             self.exit()
 
     def run(self):
@@ -1822,6 +1841,8 @@ class SiteMapWindow(QtWidgets.QMainWindow):
         self.siteMapMainWidgetLayout = QtWidgets.QVBoxLayout()
         self.siteMapMainWidget.setLayout(self.siteMapMainWidgetLayout)
         self.proxyDumpDir = "/home/program/AtomProjects/Proxy/"
+        if not os.path.isdir(self.proxyDumpDir):
+            os.makedirs(self.proxyDumpDir)
         self.siteDirs = []
         self.siteMapScope = ["."]
 
@@ -1853,6 +1874,14 @@ class SiteMapWindow(QtWidgets.QMainWindow):
         self.siteMapListViewSettingsButton.clicked.connect(self.openSiteMapSettings)
         self.siteMapUpperLayout.addWidget(self.siteMapListViewSettingsButton, alignment=Qt.AlignRight)
 
+        self.siteMapLoggingLabel = QtWidgets.QLabel()
+        self.siteMapLoggingLabel.setText("Logging:")
+        self.siteMapUpperLayout.addWidget(self.siteMapLoggingLabel)
+
+        self.siteMapLoggingCheckBox  = QtWidgets.QCheckBox()
+        self.siteMapLoggingCheckBox.stateChanged.connect(self.HandleLoggingChange)
+        self.siteMapUpperLayout.addWidget(self.siteMapLoggingCheckBox)
+
         self.siteMapTreeModel = QStandardItemModel()
         self.siteMapTreeView = QtWidgets.QTreeView()
         self.siteMapTreeView.setAlternatingRowColors(True)
@@ -1879,6 +1908,22 @@ class SiteMapWindow(QtWidgets.QMainWindow):
         self.responseEditor.setFixedWidth(650)
         self.siteMapReqResTabManager.addTab(self.responseEditor, "response")
         self.highlighter = SyntaxHighlighter(self.responseEditor.document())
+
+        self.siteMapScopeCommand = False
+        self.logggingOnCommand = False
+        self.loggingOffCommand = False
+
+    def HandleLoggingChange(self):
+        if self.siteMapLoggingCheckBox.isChecked():
+            self.loggingOffCommand  =False
+            self.logggingOnCommand = True
+            logging.info("Proxy logging has been enabled")
+            self.sendCommandToProxy()
+        else:
+            self.logggingOnCommand = False
+            self.loggingOffCommand = True
+            logging.info("Proxy logging has been disabled")
+            self.sendCommandToProxy()
 
     def openSiteMapSettings(self):
         self.siteMapSettingsWidget = QtWidgets.QWidget()
@@ -1910,6 +1955,23 @@ class SiteMapWindow(QtWidgets.QMainWindow):
         self.siteMapSettingsWidget.setFixedHeight(600)
         self.siteMapSettingsWidget.setWindowTitle("siteMap scope settings")
         self.siteMapSettingsWidget.show()
+
+    def sendCommandToProxy(self):
+        try:
+            if self.siteMapScopeCommand:
+                command  = {"scope":self.siteMapScope}
+                request = json.dumps(command)
+            elif self.logggingOnCommand:
+                command = {"log":0}
+                request = json.dumps(command)
+            elif self.loggingOffCommand:
+                command = {"log":1}
+                request = json.dumps(command)
+            self.guiProxyClient = GuiProxyClient(request, is_command=True)
+            self.guiProxyClient.start()
+        except ConnectionAbortedError or ConnectionResetError:
+            logging.warn("Connection error in socket")
+            pass
 
     def readReqResData(self, index: QtCore.QModelIndex):
         parent_idx = index.parent()
@@ -2043,7 +2105,7 @@ class MainWin(QtWidgets.QMainWindow):
         self.mainTabLayout.addWidget(self.openBarFrame, alignment=Qt.AlignCenter)
 
         self.buttonAddTab.setText("Add Target")
-        self.buttonAddTab.setFixedWidth(110)
+        self.buttonAddTab.setFixedWidth(120)
         self.buttonAddTab.clicked.connect(self.AddTargetWindow)
         self.mainTabLayout.addWidget(self.buttonAddTab)
         self.mainTabLayout.setAlignment(self.buttonAddTab, Qt.AlignCenter)
@@ -2103,9 +2165,11 @@ class MainWin(QtWidgets.QMainWindow):
         with os.scandir(self.defaultWorkspaceDir) as entries:
             for entry in entries:
                 if entry.is_dir():
-                    available_dirs.append(entry.name)
+                    if not entry.name == "Proxy":
+                        available_dirs.append(entry.name)
         self.dirsModel = QtCore.QStringListModel(available_dirs)
         self.dirListView = QtWidgets.QListView()
+        self.dirListView.setEditTriggers(QtWidgets.QListView.NoEditTriggers)
         self.dirListView.setModel(self.dirsModel)
         self.dirListView.clicked.connect(self.projectDirClicked)
 
@@ -2178,6 +2242,9 @@ class MainWin(QtWidgets.QMainWindow):
 
 
 if __name__ == "__main__":
+
+    logging.basicConfig(level=logging.DEBUG, format= '%(asctime)s - %(levelname)s - %(filename)s:%(lineno)d - %(message)s')
+
     App = QtWidgets.QApplication()
     main_window = MainWin()
     main_window.showMaximized()
