@@ -28,6 +28,8 @@ import json
 from urllib import parse as urlparser
 import logging
 
+import random
+import argparse
 
 def is_brotli_compressed(data):
     brotli_magic_number = b'\x1b'
@@ -160,7 +162,7 @@ def processUrl(url: str):
 
 class ProxyHandler:
     def __init__(self, host="127.0.0.1",
-                 port=8081,
+                 port=random.randint(8000, 10000),
                  downloadMozillaCAs=False,
                  UsehttpLibs=False,
                  verifyDstServerCerts=True,
@@ -585,15 +587,23 @@ if __name__ == "__main__":
 
     logging.basicConfig(level=logging.DEBUG, format="%(asctime)s -%(levelname)s - %(filename)s:%(lineno)d - %(message)s")
 
-    proxy = ProxyHandler(
-        verifyDstServerCerts=False,
-        UsehttpLibs=True,
-        useUrllib=True,
-        save_traffic=True
-    )
-    try:
-        proxy.startServerInstance()
-    except KeyboardInterrupt:
-        print(red("\nCleaning Up"))
-        proxy.PoolManager.close()
-        proxy.socket.close()
+    parser = argparse.ArgumentParser()
+    parser.add_argument("-p", "--port", help="port on which the proxy should listen")
+    args = parser.parse_args()
+    if args.port:
+        proxy = ProxyHandler(
+            verifyDstServerCerts=False,
+            UsehttpLibs=True,
+            useUrllib=True,
+            save_traffic=True,
+            port=int(args.port)
+        )
+        try:
+            proxy.startServerInstance()
+        except KeyboardInterrupt:
+            print(red("\nCleaning Up"))
+            proxy.PoolManager.close()
+            proxy.socket.close()
+    else:
+        print("you ran this program with few arguments")
+        parser.print_help()

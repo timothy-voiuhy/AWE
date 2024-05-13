@@ -1,7 +1,8 @@
 import socket
 from typing import Optional
+from PySide6.QtWebEngineCore import QWebEnginePage, QWebEngineSettings
 from PySide6 import QtCore, QtWidgets, QtGui, QtWebEngineWidgets
-from PySide6.QtNetwork import QNetworkProxyQuery, QNetworkProxy, QSsl, QSslCertificate, QSslConfiguration
+from PySide6.QtNetwork import QNetworkProxyQuery, QNetworkProxy, QSsl, QSslCertificate, QSslConfiguration, QNetworkProxyFactory
 from PySide6.QtCore import Signal, QRegularExpression
 
 from PySide6.QtGui import QStandardItem, QStandardItemModel
@@ -43,6 +44,8 @@ import logging
 import timeit
 import time
 
+import random
+
 """ functionalities so far:
 program output
 choosing pentest type(network, web, active directory,etc)
@@ -66,6 +69,7 @@ note: https://iconscout.com/
 rundir = "/media/program/01DA55CA5F28E000/MYAPPLICATIONS/AWE/AWE/crawn/"
 if sys.platform == "WIN32":
     rundir  = "D:\\MYAPPLICATIONS\\AWE\\AWE\\crawn\\"
+
 
 class AmassFailure(Exception):
     pass
@@ -889,6 +893,9 @@ class LeftDock(QtCore.QObject):
         clicked_link = self.subdomainsModel.itemFromIndex(index).text()
         self.openLinkInBrw.emit(clicked_link)
 
+class customWebEnginePage(QWebEnginePage):
+    def certificateError(self, error):
+        return True
 
 class BrowserWindow(QtWidgets.QMainWindow):
     def __init__(self, link=None) -> None:
@@ -903,6 +910,14 @@ class BrowserWindow(QtWidgets.QMainWindow):
         centralWidget.setLayout(self.centralWidgetLayout)
 
         self.browser = QtWebEngineWidgets.QWebEngineView()
+        # self.customPage = customWebEnginePage()
+        # self.browser.setPage(self.customPage)
+
+        self.browserSettings = self.browser.settings()
+        self.browserSettings.setAttribute(QWebEngineSettings.WebAttribute.ErrorPageEnabled, False)
+        self.browserSettings.setAttribute(QWebEngineSettings.WebAttribute.ForceDarkMode, True)
+        # self.browserSettings.setAttribute(QWebEngineSettings.WebAttribute.SslErrorOverrideEnabled, True)
+
         self.browser.urlChanged.connect(self.handleUrlChange)
         self.browser.loadProgress.connect(self.handleLoadProgress)
         self.browser.loadFinished.connect(self.closeProgressBarWidget)
@@ -1009,7 +1024,6 @@ class NetworkMap(QtWidgets.QWidget):
 
     def InitializeNetworkMapWidget(self):
         self.NetworkMapWidget = QtWidgets.QWidget()
-
 
 class SubdomainizerThreadRunner(QThread):
     def __init__(self, subDomainizerUrlTarget, projectDirPath):
@@ -1387,7 +1401,7 @@ class TestTargetWindow(QtWidgets.QMainWindow):
 
 
 class MainWindow(QtWidgets.QMainWindow):
-    def __init__(self, projectDirPath: str):
+    def __init__(self, projectDirPath: str, proxy_port):
         super().__init__()
         self.rootCACertificate = None
         self.current_tab_index = None
@@ -1428,17 +1442,26 @@ class MainWindow(QtWidgets.QMainWindow):
 
         # add new browser tab 
         self.newBrowserTabButton = QtWidgets.QPushButton()
-        self.newBrowserTabButton.setText("NewBrowserTab")
+        self.newBrowserTabButton.setText("+")
         self.newBrowserTabButton.clicked.connect(self.openNewBrowserTab)
-        self.newBrowserTabButton.setFixedWidth(160)
+        self.newBrowserTabButton.setFixedWidth(20)
         self.uppperCentralLayout.addWidget(self.newBrowserTabButton)
 
         # close Browser Tab
         self.closeTabButton = QtWidgets.QPushButton()
-        self.closeTabButton.setText("Close Tab")
-        self.closeTabButton.setFixedWidth(120)
+        self.closeTabButton.setText("x")
+        self.closeTabButton.setFixedWidth(20)
         self.closeTabButton.clicked.connect(self.closeBrowserTab)
         self.uppperCentralLayout.addWidget(self.closeTabButton)
+
+        self.proxy_status = False
+
+        # disable proxy tab
+        self.HandleProxyButton = QtWidgets.QPushButton()
+        self.HandleProxyButton.setText("enable Proxy")
+        self.HandleProxyButton.setFixedWidth(140)
+        self.HandleProxyButton.clicked.connect(self.HandleProxy)
+        self.uppperCentralLayout.addWidget(self.HandleProxyButton)
 
         # test target button
         self.testTargetButton = QtWidgets.QPushButton()
@@ -1450,6 +1473,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.setWindowTitle("atom")
 
         self.centralWidgetLayout.addStretch()
+        self.proxy_port  = proxy_port
 
     def openNewBrowserTab(self, link: str = None):
         BrowserWindow_ = BrowserWindow(link=link)
@@ -1482,25 +1506,44 @@ class MainWindow(QtWidgets.QMainWindow):
 
         QSslConfiguration.setDefaultConfiguration(self.sslConfig)
 
-    def enableProxy(self):
-        self.enableProxyCheckBox.setChecked(True)
-        self.proxy_hostname = self.proxyHostNameLineEdit.text()
-        if self.proxy_hostname == " ":
+    def HandleProxy(self):
+        if self.proxy_status is False:
+            self.enableProxy(use_default=True)
+            self.HandleProxyButton.setText("DisableProxy")
+            self.proxy_status = True
+        else:
+            self.HandleProxyButton.setText("EnableProxy")
+            self.proxy_status = False
+            QNetworkProxyFactory.setUseSystemConfiguration(True)
+
+    def enableProxy(self, use_default = False):
+        if use_default:
             self.proxy_hostname = "127.0.0.1"
-        try:
-            self.proxy_port = int(self.proxyPortNameLineEdit.text())
-            if self.proxy_port == " ":
-                self.proxy_port = 8081
+            self.proxy_port = self.proxy_port
             proxy = QNetworkProxy()
             proxy.setType(QNetworkProxy.HttpProxy)
             proxy.setHostName(self.proxy_hostname)
             proxy.setPort(self.proxy_port)
             QNetworkProxy.setApplicationProxy(proxy)
+        else:
             self.enableProxyCheckBox.setChecked(True)
-            # self.LoadCA_Certificate()    
-        except ValueError:
-            self.proxyPortNameLineEdit.setStyleSheet("QLineEdit{border: 2px solid red;}")
-            self.enableProxyCheckBox.setChecked(False)
+            self.proxy_hostname = self.proxyHostNameLineEdit.text()
+            if self.proxy_hostname == " ":
+                self.proxy_hostname = "127.0.0.1"
+            try:
+                self.proxy_port = int(self.proxyPortNameLineEdit.text())
+                if self.proxy_port == " ":
+                    self.proxy_port = self.proxy_port
+                proxy = QNetworkProxy()
+                proxy.setType(QNetworkProxy.HttpProxy)
+                proxy.setHostName(self.proxy_hostname)
+                proxy.setPort(self.proxy_port)
+                QNetworkProxy.setApplicationProxy(proxy)
+                self.enableProxyCheckBox.setChecked(True)
+                # self.LoadCA_Certificate()    
+            except ValueError:
+                self.proxyPortNameLineEdit.setStyleSheet("QLineEdit{border: 2px solid red;}")
+                self.enableProxyCheckBox.setChecked(False)
 
     def OpenTestTargetWindow(self):
         self.testWindow = TestTargetWindow(self.projectDirPath)
@@ -2059,10 +2102,25 @@ class SiteMapWindow(QtWidgets.QMainWindow):
         # return super().closeEvent(event)
         self.siteMapUpdater.exit()
 
+class AtomProxy(QThread):
+    def __init__(self, proxy_port):
+        super().__init__()
+        self.proxy_port = proxy_port
+
+    def start_proxy(self):
+        self.run()
+
+    def run(self):
+        command= f"python {rundir}/src/proxyhandlerv2.py -p {self.proxy_port}"
+        proxy_process = subprocess.Popen(args=command, shell=True, cwd=rundir+"/src/")
+        # proxy_process.communicate()
 
 class MainWin(QtWidgets.QMainWindow):
     def __init__(self) -> None:
         super().__init__()
+
+        self.proxy_port = 0
+        self.startproxy()
 
         self.setWindowTitle("AWE(Atom Web Enumeration Framework)")
         self.homeDirectory = os.path.expanduser("~")
@@ -2132,7 +2190,16 @@ class MainWin(QtWidgets.QMainWindow):
         self.addTabButton.setFixedWidth(120)
         self.addTabButton.clicked.connect(self.AddTargetWindow)
         self.upperTabMenuLayout.addWidget(self.addTabButton)
+
+        # start proxy button
+        self.startProxyButton  = QtWidgets.QPushButton()
+        self.startProxyButton.setText("Start Proxy")
+        self.startProxyButton.setFixedWidth(130)
+        self.startProxyButton.clicked.connect(self.startproxy)
+        self.upperTabMenuLayout.addWidget(self.startProxyButton)
+
         self.upperTabMenuLayout.setAlignment(self.addTabButton, Qt.AlignLeft)
+
         self.MainLayout.addLayout(self.upperTabMenuLayout)
 
         self.MainLayout.addWidget(self.tabManager)
@@ -2143,6 +2210,12 @@ class MainWin(QtWidgets.QMainWindow):
         self.tabManager.addTab(self.repeaterWindow, "Repeater")
         # add site map Target
         self.addSiteMapTab()
+
+    def startproxy(self):
+        self.proxy_port = random.randint(8000, 10000)
+        logging.info("Starting proxy")
+        self.proxy_ = AtomProxy(self.proxy_port)
+        self.proxy_.start()
 
     def addRepeaterInstanceTab(self, request: str = None):
         self.repeaterWindow.addReqResInstanceTabManager(request)
@@ -2220,7 +2293,7 @@ class MainWin(QtWidgets.QMainWindow):
             projectDirectory = os.path.join(self.defaultWorkspaceDir, tab_name)
             if not Path(projectDirectory).exists():
                 os.makedirs(projectDirectory)
-            self.mainWindowInstance = MainWindow(projectDirectory)
+            self.mainWindowInstance = MainWindow(projectDirectory, self.proxy_port)
             self.tabManager.addTab(self.mainWindowInstance, tab_name)
             self.tabManager.setCurrentIndex(
                 self.tabManager.indexOf(self.mainWindowInstance)
@@ -2228,7 +2301,7 @@ class MainWin(QtWidgets.QMainWindow):
             self.newTargetWindow.close()
 
     def AddTargetTab(self, directory=""):
-        self.mainWindowInstance = MainWindow(directory)
+        self.mainWindowInstance = MainWindow(directory, self.proxy_port)
         tab_name = directory.split("/")[-1]
         self.tabManager.addTab(self.mainWindowInstance, tab_name)
         self.tabManager.setCurrentIndex(

@@ -27,6 +27,8 @@ import urllib.parse as urlParser
 import brotli
 import httpx
 
+import argparse
+
 def is_brotli_compressed(data):
     brotli_magic_number = b'\x1b'
     return data[:1] == brotli_magic_number
@@ -517,14 +519,23 @@ class ProxyHandler:
                 # self.HandleConnection(browser_socket)
 
 if __name__ == "__main__":
-    try:
-        proxy = ProxyHandler(
-                             verifyDstServerCerts=False,
-                             UsehttpLibs=True,
-                             useUrllib=True,
-                             )
-        proxy.startServerInstance()
-    except KeyboardInterrupt:
-        print(red("\nCleaning Up"))
-        proxy.PoolManager.clear()
-        proxy.socket.close()
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument("-p", "--port", help="port on which to use for the proxy")
+    args = parser.parse_args()
+    if args.port:
+        try:
+            proxy = ProxyHandler(
+                                verifyDstServerCerts=False,
+                                UsehttpLibs=True,
+                                useUrllib=True,
+                                port= args.port
+                                )
+            proxy.startServerInstance()
+        except KeyboardInterrupt:
+            print(red("\nCleaning Up"))
+            proxy.PoolManager.clear()
+            proxy.socket.close()
+    else:
+        print(f"you ran this program without arguments")
+        parser.print_help()
