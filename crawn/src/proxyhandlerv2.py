@@ -45,6 +45,12 @@ def is_gzip_compressed(data):
     gzip_magic_number = b'\x1f\x8b'
     return data[:2] == gzip_magic_number
 
+class WebSocketHandler:
+    """Handle the whole websocket connection both the browser side and
+    the server side."""
+    def __init__(self, websocket_key):
+        self.websocket_key = websocket_key
+
 
 def DissectBrowserProxyRequests(browser_request: str):
     """Disect the initial browser request and extract the host, port and keep-alive values"""
@@ -318,9 +324,16 @@ class ProxyHandler:
                               usehttpLibs=False,
                               http: bool = False
                               ):
+        headers_end = request.find(b"\r\n\r\n")
+        headers = request[:headers_end]
+        # handle possible websocket comms
+        if b'Upgrade: websocket' in headers or b'upgrade: websocket' in headers:
+            websocket_key = headers_dict.get("Sec-WebSocket-Key")
+            if websocket_key is None:
+                websocket_key = headers_dict.get("sec-websocket-key")
+            print(red(f"Browser asking for websocket support"))
+            webskt_comm = WebSocketHandler(websocket_key)
         try:
-            headers_end = request.find(b"\r\n\r\n")
-            headers = request[:headers_end]
             bodyEncoding = False
             encoded_body = request[headers_end + 4:]
             if b'Content-Encoding: gzip' in headers or b'content-encoding: gzip' in headers:

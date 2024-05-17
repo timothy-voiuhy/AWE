@@ -70,6 +70,21 @@ rundir = "/media/program/01DA55CA5F28E000/MYAPPLICATIONS/AWE/AWE/crawn/"
 if sys.platform == "WIN32":
     rundir  = "D:\\MYAPPLICATIONS\\AWE\\AWE\\crawn\\"
 
+class CustomCheckBox(QtWidgets.QCheckBox):
+    def __init__(self, tootip_text, parent=None):
+        super().__init__(parent)
+        self.setToolTip(tootip_text)
+
+    def enterEvent(self, event: QtGui.QEnterEvent) -> None:
+        QtWidgets.QToolTip().showText(self.mapToGlobal(self.rect().bottomRight()), self.toolTip())
+
+class HoverButton(QtWidgets.QPushButton):
+    def __init__(self, text, tooltip_text, parent=None):
+        super().__init__(text, parent)
+        self.setToolTip(tooltip_text)
+
+    def enterEvent(self, event: QtGui.QEnterEvent) -> None:
+        QtWidgets.QToolTip().showText(self.mapToGlobal(self.rect().bottomLeft()), self.toolTip())
 
 class AmassFailure(Exception):
     pass
@@ -958,8 +973,7 @@ class BrowserWindow(QtWidgets.QMainWindow):
         self.urlText = QtWidgets.QLineEdit()
         self.searchButton = QtWidgets.QPushButton()
         self.searchButton.setText("search")
-        self.clearButton = QtWidgets.QPushButton()
-        self.clearButton.setText("X")
+        self.clearButton = HoverButton("X", "clear the search area")
         self.clearButton.setFixedWidth(32)
         self.clearButton.clicked.connect(self.urlTextClear)
         self.searchButton.clicked.connect(self.searchUrlOnBrowser)
@@ -1441,15 +1455,13 @@ class MainWindow(QtWidgets.QMainWindow):
         self.uppperCentralLayout.addWidget(self.NetworkButton)
 
         # add new browser tab 
-        self.newBrowserTabButton = QtWidgets.QPushButton()
-        self.newBrowserTabButton.setText("+")
+        self.newBrowserTabButton = HoverButton("+","add a new browser tab")
         self.newBrowserTabButton.clicked.connect(self.openNewBrowserTab)
         self.newBrowserTabButton.setFixedWidth(20)
         self.uppperCentralLayout.addWidget(self.newBrowserTabButton)
 
         # close Browser Tab
-        self.closeTabButton = QtWidgets.QPushButton()
-        self.closeTabButton.setText("x")
+        self.closeTabButton = HoverButton("x", "close the curret tab")
         self.closeTabButton.setFixedWidth(20)
         self.closeTabButton.clicked.connect(self.closeBrowserTab)
         self.uppperCentralLayout.addWidget(self.closeTabButton)
