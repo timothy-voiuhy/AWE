@@ -1,7 +1,7 @@
 env/
 venv/
 __pycache__/
-Tools
+Tools/
 other
 bin/
 compiler_compat/
@@ -18,3 +18,9 @@ environment.yml
 .idea/
 unix/
 tmp/
+sites/
+gpt/
+logs/
+other/
+test.py 
+programState/

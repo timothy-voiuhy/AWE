@@ -1,4 +1,16 @@
-from utiliities import red, green, cyan, yellow, makelogger, rm_same, parse_php_code, NoneResException, RxnLinkFinder
+from utiliities import (
+    red, 
+    green, 
+    cyan, 
+    yellow, 
+    makelogger, 
+    rm_same, 
+    parse_php_code, 
+    NoneResException, 
+    RxnLinkFinder, 
+    isInternetAvailable,
+    internet_check
+)
 from browser import Browser, BrHandler
 from args import parse_args
 
@@ -30,6 +42,7 @@ from io import BytesIO
 import logging
 import atexit
 import urllib.parse as url_parser
+import subprocess
 from fileutils import ProcessJsFile, w_data_to_file, DetectXml, extract_html_forms, extract_html_inputs, replace_link
 
 # from slimit import ast
@@ -80,68 +93,77 @@ class MainRunner:
     tab_sleep_time: the time for which each function run asynchronously should sleep
     while waiting for manual intervention"""
 
-    def __init__(self, main_domain="", main_dir="", recursive=False,
+    def __init__(self, main_domain="", main_dir="",projectDirPath=None, recursive=False,
                  use_browser=False, maximum_tabs=20, tab_sleep_time=10,
                  nmax_retry=5, use_http=False, requests_count=10, requests_sleep_time=1) -> None:
-
-        headers = {'Accept': '*/*',
-                   'Accept-Encoding': 'gzip, deflate',
-                   'Accept-Language': 'en-US,en;q=0.9',
-                   'Referrer-Policy': 'origin-when-cross-origin'}
-        user_agents = open(os.getcwd() + "/resources/user-agents.txt").readlines()
-        user_agent = random.choice(user_agents).replace("\n", " ").strip()
-        headers["User-Agent"] = user_agent
-        self.MAIN_DOMAIN = main_domain
-        self.USE_HTTP = use_http
-        if main_domain.startswith(("https://", "http://")):
-            self.MAIN_DOMAIN = main_domain.replace("https://", "").strip()
-            self.MAIN_DOMAIN = main_domain.replace("http://", "").strip()
-        else:
+        if internet_check() is True:
+            self.run_dir = "/media/program/01DA55CA5F28E000/MYAPPLICATIONS/AWE/AWE/crawn/"
+            headers = {'Accept': '*/*',
+                    'Accept-Encoding': 'gzip, deflate',
+                    'Accept-Language': 'en-US,en;q=0.9',
+                    'Referrer-Policy': 'origin-when-cross-origin'}
+            user_agents = open(self.run_dir + "resources/user-agents.txt").readlines()
+            user_agent = random.choice(user_agents).replace("\n", " ").strip()
+            headers["User-Agent"] = user_agent
             self.MAIN_DOMAIN = main_domain
-        # print(self.MAIN_DOMAIN)   
-        self.homeDirectory = os.path.expanduser("~")
-        self.projectDirPath = os.path.join(self.homeDirectory,"AtomProjects/") 
-        self.MAIN_DIR = os.path.join(self.projectDirPath,main_dir)
-        self.headers = headers
-        self.index_file = Path(self.MAIN_DIR + "/index.html")
-        self.init_js_srcs_file = Path(self.MAIN_DIR + "/js_srcs")
-        self.recursive = recursive
-        self.init_htmlhreflinks_file = Path(self.MAIN_DIR + "/href_links")
-        self.session = aiohttp.ClientSession()
-        self.session_cookies = self.session.cookie_jar  # session cookies
-        self.JSON_data_dir = self.MAIN_DIR + "/RESULTS"
-        if os.path.exists(self.JSON_data_dir):
-            pass
+            self.USE_HTTP = use_http
+            if main_domain.startswith(("https://", "http://")):
+                self.MAIN_DOMAIN = main_domain.replace("https://", "").strip()
+                self.MAIN_DOMAIN = main_domain.replace("http://", "").strip()
+            else:
+                self.MAIN_DOMAIN = main_domain
+            # print(self.MAIN_DOMAIN)   
+            self.homeDirectory = os.path.expanduser("~")
+            self.projectDirPath = projectDirPath
+            if self.projectDirPath is None or self.projectDirPath == "None":
+                self.projectDirPath = os.path.join(self.homeDirectory,"AtomProjects/") 
+            self.MAIN_DIR = os.path.join(self.projectDirPath,main_dir)
+            self.headers = headers
+            self.index_file = Path(self.MAIN_DIR + "/index.html")
+            self.init_js_srcs_file = Path(self.MAIN_DIR + "/js_srcs")
+            self.recursive = recursive
+            self.init_htmlhreflinks_file = Path(self.MAIN_DIR + "/href_links")
+            self.session = aiohttp.ClientSession()
+            self.session_cookies = self.session.cookie_jar  # session cookies
+            self.JSON_data_dir = self.MAIN_DIR + "/RESULTS"
+            if os.path.exists(self.JSON_data_dir):
+                pass
+            else:
+                os.makedirs(self.JSON_data_dir)
+            self.Json_data_path = self.JSON_data_dir + "/DATA.json"
+            self.current_dir = self.MAIN_DIR
+            self.Data_dict = {}
+            # atexit.register(self.exit_function)
+            self.ip_load_b = []  # ip_address returned by the packet handler function
+            self.main_domain_ips = []
+            self.pg_failed_urls = []
+            self.use_browser = use_browser
+            self.browser_logger = makelogger("FIREFOX_LOGGER", "firefox_logger", level=logging.ERROR, projectDir=self.MAIN_DIR)
+            Brw = Browser()
+            if self.use_browser:
+                print(cyan("\t\t Opening Browser ........"))
+                self.firefox = Brw.open_firefox()
+                print(yellow("\t\t Browser Open"))
+                self.firefox.set_page_load_timeout(45)
+                # self.firefox.start_client()
+                # self.firefox.start_session()  
+            self.Input_idx = 0
+            self.Form_idx = 0
+            self.finished_urls = set()
+            self.selenium_queue = queue.Queue()
+            self.REQUESTS_COUNT = requests_count
+            self.REQUESTS_SLEEP_TIME = requests_sleep_time
+            self.BROWSER_MAX_TABS = maximum_tabs
+            self.BROWSER_TAB_SLEEP_TIME = tab_sleep_time
+            self.NMAX_RETRY = nmax_retry  # retry these number of times on a site that does not return does not return a
+            # status code
+            self.xnlinkfinder_path =self.MAIN_DIR + "/LinkFinderResults/"
         else:
-            os.makedirs(self.JSON_data_dir)
-        self.Json_data_path = self.JSON_data_dir + "/DATA.json"
-        self.current_dir = self.MAIN_DIR
-        self.Data_dict = {}
-        # atexit.register(self.exit_function)
-        self.ip_load_b = []  # ip_address returned by the packet handler function
-        self.main_domain_ips = []
-        self.pg_failed_urls = []
-        self.use_browser = use_browser
-        self.browser_logger = makelogger("FIREFOX_LOGGER", "firefox_logger", level=logging.ERROR, projectDir=self.MAIN_DIR)
-        Brw = Browser()
-        if self.use_browser:
-            print(cyan("\t\t Opening Browser ........"))
-            self.firefox = Brw.open_firefox()
-            print(yellow("\t\t Browser Open"))
-            self.firefox.set_page_load_timeout(45)
-            # self.firefox.start_client()
-            # self.firefox.start_session()  
-        self.Input_idx = 0
-        self.Form_idx = 0
-        self.finished_urls = set()
-        self.selenium_queue = queue.Queue()
-        self.REQUESTS_COUNT = requests_count
-        self.REQUESTS_SLEEP_TIME = requests_sleep_time
-        self.BROWSER_MAX_TABS = maximum_tabs
-        self.BROWSER_TAB_SLEEP_TIME = tab_sleep_time
-        self.NMAX_RETRY = nmax_retry  # retry these number of times on a site that does not return does not return a
-        # status code
-        self.xnlinkfinder_path =self.MAIN_DIR + "/LinkFinderResults/"
+            logging.error("No internet connection")
+            logging.info("Closing atomcore")
+            sys.exit(1)
+            
+
 
     def open_url_in_tab(self, url):
         """description: opens a new url in a new tab and then waits for manual action on 
@@ -335,13 +357,16 @@ class MainRunner:
         #             self.pg_failed_urls.append(w_url)
         except aiohttp.ClientConnectionError as e:
             print(cyan(f"Encountering error : {e}"))
+            return None
             # print(f"{red('check your internet connection and try again')}")
         # except Exception as excep_n:
         #     print(f"{red('failed to perform get with error:')} {yellow(excep_n)} {red(f'on url {urll}')}")    
         except TimeoutError as error:
             print(f"{yellow('request has been timed out on url: ')} {green(urll)}")
+            return None
         except NoneResException:
             print(yellow("Response is None"))
+            return None
 
     async def ProcessGet(self, urll: str):
 
@@ -688,7 +713,7 @@ class MainRunner:
             return path
         else:
             # use xnLinkFinder to get the rest the html links 
-            RxnLinkFinder(url=self.MAIN_DOMAIN, output_dir=self.xnlinkfinder_path, scope=[self.MAIN_DOMAIN], depth=0,
+            RxnLinkFinder(rundir = self.run_dir,project_dir=self.MAIN_DIR, url=self.MAIN_DOMAIN, output_dir=self.xnlinkfinder_path, scope=[self.MAIN_DOMAIN], depth=0,
                           output_file=str(self.init_htmlhreflinks_file))
             with open(str(self.init_htmlhreflinks_file), "r") as file:
                 lines = file.readlines()
@@ -825,7 +850,11 @@ class MainRunner:
         print("\t\t\t-----------------------------------------")
         print(f"{cyan('Fetching the content from the href_links')}")
         print("\t\t\t-----------------------------------------")
-        await self.CreateIndexFiles()
+        try:
+            await self.CreateIndexFiles()
+        except:
+            logging.error("Failed to create Index files and cannot continue")
+            sys.exit(1)
 
         async def FetchHtmlData(links):
             asyc_tasks = []
@@ -1098,13 +1127,13 @@ class MainRunner:
     def ConstructUrlWithParameters(self, url, parameters_dict):
         pass
 
-async def RunMainAtomFunction(domain, dirr, u_http, use_browser, recur_=False):
+async def RunMainAtomFunction(domain, dirr, u_http, use_browser,projectDirPath = None, recur_=False):
     print(yellow(f"running Atom with command: atomcore -d {domain} --dirr {dirr} --use_http {u_http} --use_browser {use_browser} --rec {recur_}"))
     tracemalloc.start()
     url = str(domain)
     __url__ = str(domain)
     before_mem = tracemalloc.get_traced_memory()[0]
-    cwl = MainRunner(url, dirr, recursive=recur_, use_http=u_http, use_browser=use_browser)
+    cwl = MainRunner(url, dirr,projectDirPath=projectDirPath, recursive=recur_, use_http=u_http, use_browser=use_browser)
 
     # if not use_browser:
     #     await cwl.get_js_links()
@@ -1120,14 +1149,14 @@ async def main(args):  # main function processes the args
         print(red("you have entered non corresponding number of domains or dirs"))
         print(yellow("make sure the number of arguments is the same as the number of directories"))
         sys.exit()
-    if args.domains and args.dirr and not args.rec:
+    if args.domains and args.dirr and args.projectDirPath and not args.rec:
         targets = {}
         idx = 0
         while idx < len(args.domains):
             targets[args.domains[idx]] = args.dirr[idx]
             idx = idx + 1
         for domain, dirr in targets.items():
-            await RunMainAtomFunction(domain, dirr, u_http=args.use_http, use_browser=args.use_browser)
+            await RunMainAtomFunction(domain, dirr,projectDirPath=args.projectDirPath, u_http=args.use_http, use_browser=args.use_browser)
 
     elif args.GetHtmlLinks and args.domain:
         cwl1 = MainRunner(args.domain)
@@ -1142,11 +1171,9 @@ async def main(args):  # main function processes the args
         await cwl.r_get_data(depth=args.depth)
         await cwl.session.close()
 
-
 if __name__ == "__main__":
+    logging.basicConfig(level=logging.DEBUG, format="%(asctime)s -%(levelname)s - %(filename)s:%(lineno)d - %(message)s")
     if len(sys.argv) == 1:
         print(cyan("you ran this program without arguments"))
-    # print(red("\t\tdetecting system"))
-    # check_system()
     args = parse_args()
     asyncio.run(main(args))

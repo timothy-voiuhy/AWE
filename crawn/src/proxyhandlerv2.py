@@ -461,119 +461,122 @@ class ProxyHandler:
             self.closeTunnel(browser_socket)
 
     def HandleConnection(self, browser_socket: socket.socket, unix=True):
-        print("Waiting for initial browser request\n")
-        initial_browser_request = browser_socket.recv(160000).decode("utf-8")
-        print(cyan("Browser Intercept Request: "))
-        print(initial_browser_request)
+        try:
+            print("Waiting for initial browser request\n")
+            initial_browser_request = browser_socket.recv(160000).decode("utf-8")
+            print(cyan("Browser Intercept Request: "))
+            print(initial_browser_request)
 
-        if self.is_proxyCommand(initial_browser_request):
-            command_dict = json.loads(initial_browser_request)
-            if list(command_dict.keys())[0] == "scope":
-                logging.info("Trying to set the hostname's scope")
-                self.scope = list(command_dict.values())
-                logging.info(f"Successfully set scope to {self.scope}")
+            if self.is_proxyCommand(initial_browser_request):
+                command_dict = json.loads(initial_browser_request)
+                if list(command_dict.keys())[0] == "scope":
+                    logging.info("Trying to set the hostname's scope")
+                    self.scope = list(command_dict.values())
+                    logging.info(f"Successfully set scope to {self.scope}")
 
-            elif list(command_dict.keys())[0] == "log":
-                if list(command_dict.values())[0] == 1:
-                    logging.info("Recieved disable logging request \n Trying to disable logging")
-                    try:
-                        self.logging  = False
-                        logging.info("Successfully disabled logging")
-                    except Exception as e:
-                        logging.error("Failed to disable logging with error {e}")
-                else:
-                    logging.info("Recieved enable logging request \n Trying to enable logging")
-                    try:
-                        self.logging  =True    
-                        logging.info("Successfully enabled logging")
-                    except Exception as e:
-                        logging.error(f"Failed to enable logging with error {e}")
-    
-        elif initial_browser_request != "":
-            if self.isRequest(initial_browser_request.encode("utf-8")):
-                print(yellow("Received valid request as initial browser request"))
-                (requestMethod,
-                 requestUrl,
-                 requestHeaders,
-                 requestParams,
-                 requestBody,
-                 requestUrlwParams) = DissectBrowserReqPkt(initial_browser_request, http=True)
-                hostname = requestHeaders["Host"]
-                hostDir = os.path.join(self.defaultWorkspaceDir, hostname + "/")
-                self.OpenHttpsCommTunnel(ClientSslSocket=None,
-                                         hostDir=hostDir,
-                                         hostname=hostname,
-                                         hostnameUrl=requestUrl,
-                                         destServerSslServerSocket=None,
-                                         usehttpLibs=self.usehttpLibs,
-                                         browser_socket=browser_socket,
-                                         RequestPacket=initial_browser_request.encode("utf-8"),
-                                         http=True,
-                                         unix=unix)
-            else:
-                host_portlist = DissectBrowserProxyRequests(initial_browser_request)
-                if host_portlist is not None:
-                    keep_alive = host_portlist[2]
-                    hostname = host_portlist[0]
-                    host_cer = self.generateDomainCerts(hostname)
-                    hostnameUrl = processUrl(hostname)[0]
-                    hostDir = os.path.join(self.defaultWorkspaceDir, hostname + "/")
-                    # proxy-destination server connection
-                    if keep_alive:
-                        if self.usehttpLibs == False:
-                            try:
-                                destServerSslServerSocket, Conn_status = self.createDestConnection(host_portlist)
-                                if Conn_status == 0:
-                                    usehttpLibs = False
-                                elif Conn_status == 1:
-                                    print(cyan("Initiating server connection error"))
-                                    if self.useUrllib:
-                                        print(cyan("Resorting to => urllib3 for destination server connection"))
-                                    usehttpLibs = True
-                                destConnection = True
-                            except Exception as e:
-                                print(red(f"Encoutered error {e} when initiating a connection to remote server"))
-                                destConnection = False
-                        elif self.usehttpLibs == True:
-                            print(cyan("Using urllib3 for destination server connection"))
-                            usehttpLibs = True
-                            destConnection = True
-                            destServerSslServerSocket = None
-
-                    # respond to browser after making destination connection
-                    if destConnection:
-                        response = b"HTTP/1.1 200 Connection established\r\n\r\n"
-                        browser_socket.sendall(response)
-                        # upgrade the browser-proxy socket to ssl/tls
-                        browserSocketSslContext = SSL.Context(SSL.TLSv1_2_METHOD)
-                        if self.useFileBasedCerts is False:
-                            browserSocketSslContext.use_certificate(host_cer[0])
-                            browserSocketSslContext.use_privatekey(host_cer[1])
-                        else:
-                            browserSocketSslContext.use_certificate_chain_file(host_cer)
-                        ClientSslSocket = SSL.Connection(browserSocketSslContext, browser_socket)
-                        ClientSslSocket.set_accept_state()
-                        print(cyan("Upgraded browser socket to support ssl"))
-
-                        # open browser-proxy-destination tunnel
-                        self.OpenHttpsCommTunnel(ClientSslSocket,
-                                                 hostDir,
-                                                 hostname,
-                                                 hostnameUrl,
-                                                 destServerSslServerSocket,
-                                                 usehttpLibs,
-                                                 browser_socket,
-                                                 unix=unix)
-
+                elif list(command_dict.keys())[0] == "log":
+                    if list(command_dict.values())[0] == 1:
+                        logging.info("Recieved disable logging request \n Trying to disable logging")
+                        try:
+                            self.logging  = False
+                            logging.info("Successfully disabled logging")
+                        except Exception as e:
+                            logging.error("Failed to disable logging with error {e}")
                     else:
-                        response = b"HTTP/1.1 500 Connection Failed"
-                        browser_socket.sendall(response)
-                        print(red("Connection to remote server failed\n"))
-                        browser_socket.close()
+                        logging.info("Recieved enable logging request \n Trying to enable logging")
+                        try:
+                            self.logging  =True    
+                            logging.info("Successfully enabled logging")
+                        except Exception as e:
+                            logging.error(f"Failed to enable logging with error {e}")
+        
+            elif initial_browser_request != "":
+                if self.isRequest(initial_browser_request.encode("utf-8")):
+                    print(yellow("Received valid request as initial browser request"))
+                    (requestMethod,
+                    requestUrl,
+                    requestHeaders,
+                    requestParams,
+                    requestBody,
+                    requestUrlwParams) = DissectBrowserReqPkt(initial_browser_request, http=True)
+                    hostname = requestHeaders["Host"]
+                    hostDir = os.path.join(self.defaultWorkspaceDir, hostname + "/")
+                    self.OpenHttpsCommTunnel(ClientSslSocket=None,
+                                            hostDir=hostDir,
+                                            hostname=hostname,
+                                            hostnameUrl=requestUrl,
+                                            destServerSslServerSocket=None,
+                                            usehttpLibs=self.usehttpLibs,
+                                            browser_socket=browser_socket,
+                                            RequestPacket=initial_browser_request.encode("utf-8"),
+                                            http=True,
+                                            unix=unix)
                 else:
-                    print(red("Initial Browser Request is Invalid"))
-        else:
-            print(red("Initial Browser Request is Invalid"))
+                    host_portlist = DissectBrowserProxyRequests(initial_browser_request)
+                    if host_portlist is not None:
+                        keep_alive = host_portlist[2]
+                        hostname = host_portlist[0]
+                        host_cer = self.generateDomainCerts(hostname)
+                        hostnameUrl = processUrl(hostname)[0]
+                        hostDir = os.path.join(self.defaultWorkspaceDir, hostname + "/")
+                        # proxy-destination server connection
+                        if keep_alive:
+                            if self.usehttpLibs == False:
+                                try:
+                                    destServerSslServerSocket, Conn_status = self.createDestConnection(host_portlist)
+                                    if Conn_status == 0:
+                                        usehttpLibs = False
+                                    elif Conn_status == 1:
+                                        print(cyan("Initiating server connection error"))
+                                        if self.useUrllib:
+                                            print(cyan("Resorting to => urllib3 for destination server connection"))
+                                        usehttpLibs = True
+                                    destConnection = True
+                                except Exception as e:
+                                    print(red(f"Encoutered error {e} when initiating a connection to remote server"))
+                                    destConnection = False
+                            elif self.usehttpLibs == True:
+                                print(cyan("Using urllib3 for destination server connection"))
+                                usehttpLibs = True
+                                destConnection = True
+                                destServerSslServerSocket = None
+
+                        # respond to browser after making destination connection
+                        if destConnection:
+                            response = b"HTTP/1.1 200 Connection established\r\n\r\n"
+                            browser_socket.sendall(response)
+                            # upgrade the browser-proxy socket to ssl/tls
+                            browserSocketSslContext = SSL.Context(SSL.TLSv1_2_METHOD)
+                            if self.useFileBasedCerts is False:
+                                browserSocketSslContext.use_certificate(host_cer[0])
+                                browserSocketSslContext.use_privatekey(host_cer[1])
+                            else:
+                                browserSocketSslContext.use_certificate_chain_file(host_cer)
+                            ClientSslSocket = SSL.Connection(browserSocketSslContext, browser_socket)
+                            ClientSslSocket.set_accept_state()
+                            print(cyan("Upgraded browser socket to support ssl"))
+
+                            # open browser-proxy-destination tunnel
+                            self.OpenHttpsCommTunnel(ClientSslSocket,
+                                                    hostDir,
+                                                    hostname,
+                                                    hostnameUrl,
+                                                    destServerSslServerSocket,
+                                                    usehttpLibs,
+                                                    browser_socket,
+                                                    unix=unix)
+
+                        else:
+                            response = b"HTTP/1.1 500 Connection Failed"
+                            browser_socket.sendall(response)
+                            print(red("Connection to remote server failed\n"))
+                            browser_socket.close()
+                    else:
+                        print(red("Initial Browser Request is Invalid"))
+            else:
+                print(red("Initial Browser Request is Invalid"))
+        except Exception as error:
+            logging.error(f"Encountered error : {error}")
 
     def is_proxyCommand(self, initial_browser_req):
         try:

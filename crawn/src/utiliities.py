@@ -8,6 +8,8 @@ from colorlog import ColoredFormatter
 import os
 from phply import phplex, phpast
 from pathlib import Path
+from scapy.all import get_if_addr
+from scapy.interfaces import get_working_ifaces
 
 # from utils import is_mac, is_linux, is_windows
 import subprocess
@@ -39,6 +41,8 @@ def cyan(text):
 
 
 def internet_check() -> bool:
+    """sends a get request to https://www.google.com and if the response is 200 then 
+    True is retured indicating that thei is an internet connnection"""
     try:
         response = requests.get("https://www.google.com/")
         if response.status_code == 200:
@@ -474,14 +478,18 @@ def CheckCreatePath(path_: str):
 
 
 def RxnLinkFinder(
+    rundir,
+    project_dir,
     url: str,
     depth=2,
     scope: list = None,
-    output_dir="./LinkFinderResults/",
+    output_dir="/LinkFinderResults/",
     cookies: dict = None,
     n_processes: int = None,
-    output_file="./LinkFinderResults/url_endpoits.txt",
+    output_file="/LinkFinderResults/url_endpoits.txt",
 ):
+    output_dir = os.path.join(project_dir, output_dir)
+    output_file = os.path.join(project_dir, output_file)
     print(output_dir)
     wordlist_path = CheckCreatePath(output_dir + "wordlist.txt")
     params_path = CheckCreatePath(output_dir + "params.txt")
@@ -495,7 +503,7 @@ def RxnLinkFinder(
             else:
                 scopeadd_str = scopeadd_str + "," + domain
         command = (
-            "./Tools/xnLinkFinder/xnLinkFinder.py -i "
+            f"python {rundir}Tools/xnLinkFinder/xnLinkFinder.py -i "
             + url
             + " -o "
             + output_file
@@ -510,7 +518,7 @@ def RxnLinkFinder(
         )
     else:
         command = (
-            "./Tools/xnLinkFinder/xnLinkFinder.py -i "
+            f"python {rundir}Tools/xnLinkFinder/xnLinkFinder.py -i "
             + url
             + " -o "
             + output_file
@@ -539,7 +547,7 @@ def RxnLinkFinder(
         command = command
     command = command + " --no-banner"
     print(f"{yellow('Running ')}{command}{yellow(' on ')}{yellow(domain)}")
-    subprocess.run(command, shell=True, stdout=None, stdin=None, cwd="./")
+    subprocess.run(command, shell=True, stdout=None, stdin=None)
 
 
 def RunNuclei():
@@ -640,9 +648,14 @@ class SubDomainizerRunner:
 
 
 def addHttpsScheme(url: str):
-
+    url = url.replace("\n", "")
     if not url.endswith("/"):  # add trailing line character
         url = url + "/"
     if not url.startswith(("https://", "http://")):  # add scheme if does not exist
         url = "https://" + url
     return url
+
+def isInternetAvailable():
+    if len(get_working_ifaces()) == 0:
+        return True
+    return False

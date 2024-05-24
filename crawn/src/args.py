@@ -16,6 +16,7 @@ def parse_args():
     parser.add_argument("--dirr", dest="dirr",nargs='+',default=(os.curdir), help="specify the directory into which to make the crawl")
     parser.add_argument("--use_http", dest="use_http",default=False, help="whether to use http or https", action="store_true")
     parser.add_argument("--use_browser", dest="use_browser",default=False, help="whether to use a browser for getting pages or not", action="store_true")
+    parser.add_argument("-p", dest="projectDirPath", help="The project dir path incase of atomgui projects", default="None")
     args = parser.parse_args()
     if len(sys.argv) == 1:
         parser.print_help()

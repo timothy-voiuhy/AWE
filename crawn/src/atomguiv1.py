@@ -1,8 +1,7 @@
 import socket
-from typing import Optional
-from PySide6.QtWebEngineCore import QWebEnginePage, QWebEngineSettings
+from PySide6.QtWebEngineCore import QWebEnginePage, QWebEngineSettings, QWebEngineProfile
 from PySide6 import QtCore, QtWidgets, QtGui, QtWebEngineWidgets
-from PySide6.QtNetwork import QNetworkProxyQuery, QNetworkProxy, QSsl, QSslCertificate, QSslConfiguration, QNetworkProxyFactory
+from PySide6.QtNetwork import QNetworkProxy, QSslCertificate, QSslConfiguration, QNetworkProxyFactory
 from PySide6.QtCore import Signal, QRegularExpression
 
 from PySide6.QtGui import QStandardItem, QStandardItemModel
@@ -22,7 +21,6 @@ import sys
 from PySide6.QtGui import QKeyEvent
 from utiliities import addHttpsScheme
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QWidget
 
 from utiliities import (
     red,
@@ -35,15 +33,13 @@ from utiliities import (
 )
 from urllib.parse import urlsplit
 import queue
-# import psutil
 import sys
 import logging
-import timeit
 import time
 
 import random
 import atexit
-import signal
+from multiprocessing import cpu_count
 
 """ functionalities so far:
 program output
@@ -88,6 +84,79 @@ class HoverButton(QtWidgets.QPushButton):
 class AmassFailure(Exception):
     pass
 
+class SocketIPC(QThread, QtCore.QObject):
+    """
+    server: If this is true, a server is going to be created which is supposed to 
+    listen for other processes to communicate to it
+    The server can send kill signals to the running process in some form
+    of controlling them.
+    Even when creating a client the server_port is always used since all the 
+    clients only commmunicate with the server
+    """
+    processFinishedExecution = Signal(QtWidgets.QWidget, str) # the string here is the name of the process wrapper class
+    def __init__(self, create_server = False,
+                 create_client=False,
+                 server_port=57788,
+                 ):
+        super().__init__()
+        self.create_server  = create_server
+        self.create_client = create_client
+        self.server_port = server_port
+        if self.create_server:
+            self.server  = socket.create_server(address=("127.0.0.1", self.server_port),
+                                                family=socket.AF_INET,
+                                                reuse_port=True,
+                                                )
+        if self.create_client:
+            self.client = socket.create_connection(address=("127.0.0.1", self.server_port))
+    
+    def sendFinishedMessage(self, processObjectName:str):
+        if processObjectName == "atomRunner":
+            message = "atomRunner"
+        elif processObjectName == "getAllUrlsRunner":
+            message = "getAllUrlsRunner"
+        self.client.send(message)
+
+    def runServer(self):
+        logging.info(f"IPCServer listening for connections on  {self.server_port}")
+        self.server.listen(100000000)
+        while True:
+            skt, addr = self.server.accept()
+            processObjectName = skt.recv(1000)
+            if processObjectName == b'atomRunner':
+                self.processFinishedExecution.emit("atomRunner")
+            elif processObjectName == b'getAllUrlsRunner':
+                self.processFinishedExecution.emit("getAllUrlsRunner")
+
+    def run(self):
+        """ This method only runs when the SocketIPC has been opened in server
+        mode"""
+        self.runServer()
+
+class MessageBox(QtWidgets.QMessageBox):
+    """Wrapper class for a QMessageBox
+    icon: can be either of [Information, Warning, Critical, Question]
+    buttons: can be one or more of : 
+    ButtonMask, NoButton ,Default ,Escape ,FlagMask, FirstButton, Ok, 
+    Save, SaveAll, Open, Yes, YesAll, YesToAll, No, NoAll, NoToAll, Abort
+    Retry ,Ignore, Close, Cancel, Discard, Help, Apply, Reset, LastButton
+    RestoreDefaults"""
+    def __init__(self, windowTitle:str = None, text:str = None, icon:str = None, buttons:list = None):
+        super().__init__()
+        self.windowTitle_ = windowTitle
+        self.text = text
+        self.icon = icon
+        self.setWindowTitle(self.windowTitle_)
+        self.setText(self.text)
+        if self.icon == "Information":
+            self.setIcon(QtWidgets.QMessageBox.Information)
+        elif self.icon == "Warning":
+            self.setIcon(QtWidgets.QMessageBox.Error)
+        elif self.icon == "Critical":
+            self.setIcon(QtWidgets.QMessageBox.Critical)
+        elif self.icon == "Question":
+            self.setIcon(QtWidgets.QMessageBox.Question)
+        # self.setStandardButtons(self.button)
 
 def iterDir(parentPath, parentItem: QStandardItem):
     for element in os.scandir(parentPath):
@@ -133,130 +202,250 @@ def GetUrls(workingdir):
 
 
 class LInkFinderRunner(QThread):
-    def __init__(self, workingDir, subdomain: str):
+    def __init__(self, workingDir,
+                 subdomain: str,
+                 top_parent,
+                 parent=None,
+                 mainWindow = None
+                 ):
         super().__init__()
-        self.setObjectName("LInkFinderRunner")
+        self.mainWindow = mainWindow
+        self.topParent = top_parent
+        self.parent  = parent
+        self.setObjectName("LinkFinderRunner")
         self.workingDir = workingDir
         self.subdomain = subdomain
-        self.savePathName = "linkFinder" + self.subdomain + "Subdomains.txt"
+        self.pid = 0
+        self.process = 0
+        self.savePathName = "linkFinder_" + self.subdomain + "Subdomains.txt"
         self.savePath = os.path.join(self.workingDir, self.savePathName)
         self.linkfinder = "/media/program/01DA55CA5F28E000/MYAPPLICATIONS/AWE/AWE/crawn/Tools/LinkFinder/linkfinder.py"
+
+    def getPid(self):
+        return self.pid
 
     def linkFinderRun(self):
         self.subdomain = "https://" + self.subdomain.strip()
         command = f"python {self.linkfinder} -i {self.subdomain} -d -o {self.savePath} -t 20"
         print(red(f"running linkFinder with command:\n\t {command}"))
-        subprocess.run(command, shell=True)
-
+        self.process = subprocess.Popen(command, shell=True)
+        self.parent.linkFinderRunnerPid = self.process.pid
+        self.pid  = self.process.pid
+        self.process.wait()
+        
     def run(self) -> None:
         self.linkFinderRun()
+        self.topParent.socketIpc.processFinishedExecution.emit(self.mainWindow, self.objectName())
 
 
 class getAllUrlsRunner(QThread):
-    def __init__(self, workingDir, subdomain):
+    def __init__(self, workingDir,
+                 subdomain,
+                 parent=None,
+                 top_parent = None,
+                 mainWindow = None):
         super().__init__()
+        self.mainWindow = mainWindow
+        self.topParent = top_parent
+        self.parent = parent
         self.setObjectName("getAllUrlsRunner")
         self.subdomain = subdomain
         self.workingDir = workingDir
+        self.pid = 0
+        self.process = 0
         self.savePathName = "getAllUrls_" + self.subdomain + "Subdomains.txt"
-        self.savePath = os.path.join(self.workingDir, self.savePathName)
+        self.savePath  = os.path.join(self.workingDir, self.savePathName)
+        self.mainWindow.threads.append(self)
+        self.topParent.ThreadStarted.emit(self.mainWindow, self.objectName())
 
-    def getAllUrlsRun(self):
-        command = "getallurls " + self.subdomain + " > " + self.savePath
-        print(red(f"Running getallurls with command:\n\t {command}"))
-        subprocess.run(command, shell=True)
-        print(yellow("finished running getallurls"))
+    def getPid(self):
+        return self.pid
+    
+    def parseOutput(self):
         newfileLines = []
-        with open(self.savePath, "r") as f:
-            fileLines = f.readlines()
-            seen_structs = []
-            seen_urls = []
-            for url in fileLines:
-                if not url.endswith((".js", ".pdf", ".css", ".txt", ".png", ".svg", "ico")):
-                    url_cmps = urlsplit(url)
-                    url_path = url_cmps[1] + url_cmps[2]
-                    if "?" in url:
-                        if "&" in url_cmps[3]:
-                            url_paramsets = url_cmps[3].split("&")
+        if Path(self.savePath).exists():
+            with open(self.savePath, "r") as f:
+                fileLines = f.readlines()
+                seen_structs = []
+                seen_urls = []
+                for url in fileLines:
+                    if not url.endswith((".js", ".pdf", ".css", ".txt", ".png", ".svg", "ico")):
+                        url_cmps = urlsplit(url)
+                        url_path = url_cmps[1] + url_cmps[2]
+                        if "?" in url:
+                            if "&" in url_cmps[3]:
+                                url_paramsets = url_cmps[3].split("&")
+                            else:
+                                url_paramsets = url_cmps[3].split(";")
+                            url_params_dict = {}
+                            for url_paramset in url_paramsets:
+                                try:
+                                    split_url_paramset = url_paramset.split("=")
+                                    key = split_url_paramset[0]
+                                    value = split_url_paramset[1]
+                                    url_params_dict[key] = value
+                                except:
+                                    pass
+                            url_params_struct = list(url_params_dict.keys())
+                            url_struct = [url_path, url_params_struct]
+                            if url_struct not in seen_structs:
+                                newfileLines.append(url)
+                                seen_structs.append(url_struct)
                         else:
-                            url_paramsets = url_cmps[3].split(";")
-                        url_params_dict = {}
-                        for url_paramset in url_paramsets:
-                            try:
-                                split_url_paramset = url_paramset.split("=")
-                                key = split_url_paramset[0]
-                                value = split_url_paramset[1]
-                                url_params_dict[key] = value
-                            except:
-                                pass
-                        url_params_struct = list(url_params_dict.keys())
-                        url_struct = [url_path, url_params_struct]
-                        if url_struct not in seen_structs:
-                            newfileLines.append(url)
-                            seen_structs.append(url_struct)
-                    else:
-                        if url_path not in seen_urls:
-                            newfileLines.append(url)
-                            seen_urls.append(url_path)
-        with open(self.savePath, "w") as file:
-            file.writelines(newfileLines)
+                            if url_path not in seen_urls:
+                                newfileLines.append(url)
+                                seen_urls.append(url_path)
+            with open(self.savePath, "w") as file:
+                file.writelines(newfileLines)
 
     def run(self) -> None:
-        self.getAllUrlsRun()
+        command = "getallurls " + self.subdomain + " > " + self.savePath
+        print(red(f"Running getallurls with command:\n\t {command}"))
+        self.process = subprocess.Popen(command, shell=True)
+        self.pid = self.process.pid
+        self.parent.getAllUrlsRunnerPid = self.process.pid
+        # self.sleep(2)
+        self.process.wait()
+        self.topParent.socketIpc.processFinishedExecution.emit(self.mainWindow, self.objectName())
+        self.parseOutput()
 
 
 class AtomRunner(QThread):
-    def __init__(self, subdomain, usehttp, useBrowser) -> None:
+    def __init__(self, subdomain,
+                 usehttp,
+                 useBrowser,
+                 parent = None,
+                 projectDirPath=None,
+                 top_parent = None,
+                 objectName = None,
+                 mainWindow= None) -> None:
+        super().__init__()
+        self.mainWindow = mainWindow
+        self.setObjectName(objectName)
+        self.topParent = top_parent
+        self.parent = parent
+        self.projectDirPath = projectDirPath
         self.subdomain = subdomain
         self.usehttp = usehttp
         self.usebrowser = useBrowser
         self.recursive = True
+        self.pid = 0
+        self.process = 0
+        self.command  = f"python {rundir+'src/atomcore.py'} -d {self.subdomain} --dirr {self.subdomain} -p {self.projectDirPath}"
+        if self.usehttp is True:
+            self.command  = self.command + " --use_http"
+        if self.usebrowser is True:
+            self.command  = self.command + " --use_browser"
+        self.mainWindow.threads.append(self)
+        self.topParent.ThreadStarted.emit(self.mainWindow, self.objectName())
 
-    def runatom(self):
-        directory = self.subdomain
-        usehttp = self.usehttp
-        usebrowser = self.usebrowser
-        with ProcessPoolExecutor(max_workers=1) as executor:
-            executor.submit(
-                asyncio.run(RunMainAtomFunction(self.subdomain, directory, usehttp, usebrowser, recur_=self.recursive))
-            )
-
-    def runAtom(self):
-        with ThreadPoolExecutor(max_workers=4) as executor:
-            executor.submit(self.runatom)
+    def getPid(self):
+        return self.pid
 
     def run(self):
-        self.runAtom()
+        # self.runAtom()
+        self.process = subprocess.Popen(self.command, shell=True)
+        self.pid = self.process.pid
+        self.parent.atomRunnerPid = self.process.pid
+        self.process.wait()
+        self.topParent.socketIpc.processFinishedExecution.emit(self.mainWindow, self.objectName())
 
-def runUrlToolsOnSd(workingDir, subdomain, tool = None, parent = None):
-    if tool == "getAllUrls":
-        getAllUrlsRunner_ = getAllUrlsRunner(workingDir, subdomain)
-        getAllUrlsRunner_.setObjectName("getAllUrlsRunner")
-        parent.threads.append(getAllUrlsRunner_)
-        getAllUrlsRunner_.start()
-    elif tool == "LinkFinder":
-        LInkFinderRunner_ = LInkFinderRunner(workingDir, subdomain)
-        LInkFinderRunner_.setObjectName("LinkFinderRunner")
-        parent.append(LInkFinderRunner_)
-        LInkFinderRunner_.start()
-    elif tool == "Atom":
-        AtomRunner_ = AtomRunner(subdomain, usehttp=False, useBrowser=False)
-        AtomRunner_.setObjectName("AtomRunner")
-        parent.threads.append(AtomRunner_)
-        AtomRunner_.start()
-    if tool is None:
-        getAllUrlsRunner_ = getAllUrlsRunner(workingDir, subdomain)
-        getAllUrlsRunner_.setObjectName("getAllUrlsRunner")
-        parent.threads.append(getAllUrlsRunner_)
-        getAllUrlsRunner_.start()
-        LInkFinderRunner_ = LInkFinderRunner(workingDir, subdomain)
-        LInkFinderRunner_.setObjectName("LinkFinderRunner")
-        parent.append(LInkFinderRunner_)
-        LInkFinderRunner_.start()
-        AtomRunner_ = AtomRunner(subdomain, usehttp=False, useBrowser=False)
-        AtomRunner_.setObjectName("AtomRunner")
-        parent.threads.append(AtomRunner_)
-        AtomRunner_.start()
+class ToolsRunner:
+    def __init__(self, workingDir,
+                 subdomain,
+                 tool = None,
+                 parent = None,
+                 top_parent = None,
+                 mainWindow = None):
+        self.mainWindow = mainWindow
+        self.topParent = top_parent
+        self.getAllUrlsRunnerPid = 0
+        self.linkFinderRunnerPid = 0
+        self.atomRunnerPid = 0
+        self.workingDir = workingDir
+        self.subdomain = subdomain
+        self.tool = tool
+        self.parent = parent
+
+    def runUrlToolsOnSd(self):
+        if self.tool is not None:
+            logging.info(f"Running tool {self.tool}")
+        if self.tool == "getAllUrls":
+            getAllUrlsRunner_ = getAllUrlsRunner(self.workingDir,
+                                                 self.subdomain,
+                                                 parent=self,
+                                                 top_parent = self.topParent,
+                                                 mainWindow=self.mainWindow)
+            getAllUrlsRunner_.start()
+            while True:
+                if self.getAllUrlsRunnerPid == 0:
+                    # handle long delays
+                    continue
+                else:
+                    break
+            return getAllUrlsRunner_.pid
+
+        elif self.tool == "LinkFinder":
+
+            LInkFinderRunner_ = LInkFinderRunner(self.workingDir, self.subdomain, parent = self, top_parent=self.topParent, mainWindow=self.mainWindow)
+            self.parent.threads.append(LInkFinderRunner_)
+            LInkFinderRunner_.start()
+            while True:
+                if self.linkFinderRunnerPid == 0:
+                    # handle long delays
+                    continue
+                else:
+                    break
+            return LInkFinderRunner_.pid
+
+        elif self.tool == "Atom":
+
+            AtomRunner_ = AtomRunner(self.subdomain,
+                                     usehttp=False,
+                                     useBrowser=False,
+                                     parent = self,
+                                     projectDirPath=self.workingDir,
+                                     top_parent=self.topParent,
+                                     objectName="atomRunner",
+                                     mainWindow=self.mainWindow
+                                     )
+            AtomRunner_.start()
+            while True:
+                if self.atomRunnerPid == 0:
+                    # handle long delays
+                    continue
+                else:
+                    break
+            return AtomRunner_.pid
+
+        if self.tool is None:
+
+            getAllUrlsRunner_ = getAllUrlsRunner(self.workingDir,
+                                                 self.subdomain,
+                                                 parent=self,top_parent=self.topParent,
+                                                 mainWindow=self.mainWindow)
+            getAllUrlsRunner_.start()
+            g_pid  = getAllUrlsRunner_.getPid()
+
+            LInkFinderRunner_ = LInkFinderRunner(self.workingDir,
+                                                 self.subdomain,
+                                                 parent=self,
+                                                 top_parent=self.topParent,
+                                                 mainWindow = self.mainWindow)
+            self.parent.append(LInkFinderRunner_)
+            LInkFinderRunner_.start()
+            l_pid = LInkFinderRunner_.getPid()
+
+            AtomRunner_ = AtomRunner(self.subdomain,
+                                     usehttp=False,
+                                     useBrowser=False,
+                                     parent=self,
+                                     top_parent=self.topParent,
+                                     objectName="atomRunner",
+                                     mainWindow=self.mainWindow)
+            AtomRunner_.start()
+            a_pid  = AtomRunner_.getPid()
+            return g_pid, l_pid, a_pid
 
 def getAtomSubdUrls(subdomain, workingDir):
     atomSbdUrls = set()
@@ -271,54 +460,131 @@ def getAtomSubdUrls(subdomain, workingDir):
     return list(atomSbdUrls)
 
 
-def atomGuiGetUrls(subdomain: str, workingDir, parent = None):
+def atomGuiGetUrls(subdomain: str, workingDir, parent = None,
+                   top_parent = None, mainWindow=None):
     # tools: Atom, getallUrls, linkFinder, xnLinkFinder(Atom)
     subdomain = subdomain.replace("\n", "").strip()
     UrlsList_ = set()
-
-    pathName = "getAllUrls" + subdomain + "Subdomains.txt"
+    pids = []
+    pathName = "getAllUrls_" + subdomain + "Subdomains.txt"
     pathName = os.path.join(workingDir, pathName)
     if Path(pathName).exists():
+        logging.info(f"Found {pathName}, Not running getAllUrls")
         with open(pathName, "r") as f:
             UrlsList = f.readlines()
             [UrlsList_.add(url) for url in UrlsList]
     else:
-        runUrlToolsOnSd(workingDir, subdomain, tool = "getAllUrls", parent = parent)
-    pathName0 = "linkFinder"+subdomain+"Subdomains.txt"
+        ToolsRunner_ = ToolsRunner(workingDir,subdomain,
+                                   tool = "getAllUrls",
+                                   parent = parent,
+                                   top_parent = top_parent,
+                                   mainWindow=mainWindow)
+        g_pid= ToolsRunner_.runUrlToolsOnSd()
+        pids.append(g_pid)
+
+    pathName0 = "linkFinder_"+subdomain+"Subdomains.txt"
     pathName0 = os.path.join(workingDir, pathName0)
     if Path(pathName0).exists():
-        with open(pathName0, "r") as f:
-            UrlsList0 = f.readlines()
-            [UrlsList_.add(url) for url in UrlsList0]    
+        logging.info(f"Found {pathName0}, Not running linkFinder")
+        # link finder does not produce any urls it just produces output.html   
     else:
-        runUrlToolsOnSd(workingDir, subdomain, tool="LinkFinder", parent = parent)
+        ToolsRunner_ = ToolsRunner(workingDir,
+                                   subdomain,
+                                   tool="LinkFinder",
+                                   parent = parent,
+                                   top_parent=top_parent,
+                                   mainWindow=mainWindow)
+        l_pid= ToolsRunner_.runUrlToolsOnSd()
+        pids.append(l_pid)
+
     try:
         atomSubdUrls = getAtomSubdUrls(subdomain, workingDir) 
-    except FileNotFoundError:
-        runUrlToolsOnSd(workingDir, subdomain, tool="Atom")
         [UrlsList_.add(url) for url in atomSubdUrls]
+    except UnboundLocalError as error:
+        ToolsRunner_ = ToolsRunner(workingDir, subdomain, tool="Atom",
+                                   parent=parent,
+                                   top_parent = top_parent,
+                                   mainWindow=mainWindow)
+        a_pid = ToolsRunner_.runUrlToolsOnSd()
+        pids.append(a_pid)
 
-    return list(UrlsList_)
+    if len(list(UrlsList_)) == 0:
+        return tuple(pids)
+    else:
+        return list(UrlsList_)
     # runUrlToolsOnSd(workingDir, subdomain)
 
-class UrlGetter(QThread):
-    def __init__(self, subdomainUrlDict: dict, workingDir, parent = None):
+class UrlGetter(QThread, QtCore.QObject):
+    urlGetterFinished = Signal()
+    def __init__(self, subdomainUrlDict: dict,
+                 workingDir,
+                 parent = None,
+                 dict_parent= None,
+                 top_parent = None,
+                 mainWindow = None):
         super().__init__()
         self.setObjectName("UrlGetter")
+        self.mainWindow = mainWindow
+        self.topParent = top_parent
         self.subdomainUrlDict = subdomainUrlDict
         self.workingDir = workingDir
         self.subdomainsUrlDict_ = {}
         self.parent  = parent
+        self.dictParent = dict_parent
+        self.receivedSignals = 0
         self.subdomainsUrlDict_file = os.path.join(workingDir, "subdomainsUrlDict.json")
+        self.topParent.socketIpc.processFinishedExecution.connect(self.processFinishedExecution)
+        self.mainWindow.threads.append(self)
+        self.setTerminationEnabled(True)
+        self.topParent.ThreadStarted.emit(self.mainWindow, self.objectName())
+        self.destroyed.connect(self.closeThread)
+    
+    def closeThread(self):
+        self.topParent.socketIpc.processFinishedExecution.emit(self.mainWindow, self.objectName())
+
+    def processFinishedExecution(self, windowInstance, tool):
+        self.receivedSignals += 1
 
     def run(self):
+        i = 0
+        successful_subdomains = set()
+        error_subdomains = set()
+        logging.info(f"UrlGetter to work on {len(list(self.subdomainUrlDict.keys()))}")
         for subdomain in list(self.subdomainUrlDict.keys()):
-            urls = atomGuiGetUrls(subdomain, self.workingDir, parent  = self.parent)
-            self.subdomainsUrlDict_[subdomain] = urls
-        jsonData = json.dumps(self.subdomainsUrlDict_)
+            subdomain = subdomain.replace("\n", "")
+            logging.info(f"running atomGuiGetUrls on : {subdomain}, Number: {i}")
+            result = atomGuiGetUrls(subdomain, self.workingDir,
+                                    parent= self.parent,
+                                    top_parent = self.topParent,
+                                    mainWindow=self.mainWindow)
+            if type(result) == tuple:
+                result = list(result)
+                print(red(result))
+                print(yellow("Waiting for processes to close"))
+                while True:
+                    if self.receivedSignals == len(result):
+                        self.receivedSignals = 0
+                        break
+            elif type(result) == list:
+                self.subdomainsUrlDict_[subdomain] = result
+                self.dictParent.SubdomainUrlDict[subdomain] = result
+                self.dictParent.modelUpdater.dictChanged.emit()
+                # self.dictParent.subdomainsModel.dataChanged.emit(QtCore.QModelIndex(), QtCore.QModelIndex())
+            i += 1
+            if cpu_count() <= 4:
+                self.sleep(5)
+            elif cpu_count() <= 8:
+                self.sleep(2)
+        self.urlGetterFinished.emit()
+        logging.info(f"Worked on {len(self.subdomainUrlDict.keys())} subdomains")
+        logging.info(f"{len(list(successful_subdomains))} Successful")
+        logging.info(f"{len(list(error_subdomains))} Failed")
+        logging.info(f"failed are {list(error_subdomains)}")
+        # jsonData = json.dumps(self.subdomainsUrlDict_)
+        jsonData = json.dumps(self.dictParent.SubdomainUrlDict)
         with open(self.subdomainsUrlDict_file, "w") as f:
             f.write(jsonData)
-
+        self.topParent.socketIpc.processFinishedExecution.emit(self.mainWindow, self.objectName())
 
 class Qterminal(QtWidgets.QTextEdit):
     def __init__(self) -> None:
@@ -571,14 +837,12 @@ class SyntaxHighlighter(QtGui.QSyntaxHighlighter):
                 self.setFormat(index, length, format)
 
 
-# accessign default icons
-# pixmapi = QtWidgets.QStyle.SP_MessageBoxCritical
-# icon = self.style().standardIcon(pixmapi)
 class RightDock:
     def __init__(self, MainWindow: QtWidgets.QMainWindow, projectsDir) -> None:
         self.projectsDirPath = projectsDir
         self.MainWindow = MainWindow
         self.rightDockNotePadOpenfile = ""
+        self.openEditors = []
 
     def InitializeDock(self):
         # right dock
@@ -602,17 +866,29 @@ class RightDock:
 
         self.rightDockBottomLayout = QtWidgets.QGridLayout()
         self.rightDockLayoutMain.addLayout(self.rightDockBottomLayout)
-        # notepad
-        self.rightDockNotePad = TextEditor()
-        self.rightDockBottomLayout.addWidget(self.rightDockNotePad, 1, 0)
-        # set the highlighter
-        self.highlighter = SyntaxHighlighter(self.rightDockNotePad.document())
+        # tabManager for opening multiple files in different tabs
+        self.tabManager = QtWidgets.QTabWidget()
+        self.rightDockBottomLayout.addWidget(self.tabManager, 1, 0)
+        # self.defaultEditor = self.addEditor()
+        # self.tabManager.addTab(self.addEditor(), "Editor")
+        self.tabManager.currentChanged.connect(self.updateCurretNotepad)
 
         self.rightDockArea = QtCore.Qt.DockWidgetArea()
         self.MainWindow.addDockWidget(
             self.rightDockArea.RightDockWidgetArea, self.RightDock
         )
         return self.RightDock
+
+    def updateCurretNotepad(self):
+        if self.tabManager.currentWidget() is not None:
+            self.rightDockNotePadOpenfile = self.tabManager.currentWidget().objectName()
+
+    def addEditor(self):
+        # notepad
+        self.rightDockNotePad = TextEditor()
+        # set the highlighter
+        self.highlighter = SyntaxHighlighter(self.rightDockNotePad.document())
+        return self.rightDockNotePad
 
     def increaseFont(self):
         Font = self.rightDockNotePad.font()
@@ -657,26 +933,32 @@ class RightDock:
     def AddMainMenu(self):
         def rightDockTextBroserOpenFile():
             rightDockFileDialog = QtWidgets.QFileDialog()
-            self.rightDockNotePadOpenfile = rightDockFileDialog.getOpenFileName(
+            rightDockNotePadOpenfile = rightDockFileDialog.getOpenFileName(
                 None, "Open File", "/", "All Files (*.*)"
             )[0]
-            with open(self.rightDockNotePadOpenfile, "r") as file:
+            with open(rightDockNotePadOpenfile, "r") as file:
                 text = file.read()
                 file.close()
-            self.rightDockNotePad.setAcceptRichText(True)
-            self.rightDockNotePad.setText(text)
+            rightDockNotePad = self.addEditor()
+            rightDockNotePad.setAcceptRichText(True)
+            rightDockNotePad.setText(text)
+            rightDockNotePad.setObjectName(rightDockNotePadOpenfile)
+            self.tabManager.addTab(rightDockNotePad, rightDockNotePadOpenfile)
+            self.openEditors.append(rightDockNotePad)
+            # set the currently opened file to the self
+            self.rightDockNotePadOpenfile = rightDockNotePadOpenfile
 
         def rightDockTextBroserSaveFile():
             if self.rightDockNotePadOpenfile != None:
                 saveMessageBox = QtWidgets.QMessageBox()
                 saveMessageBox.setWindowTitle("Information")
-                saveMessageBox.setText("Do you want to save this file")
+                saveMessageBox.setText(f"Do you want to save {self.rightDockNotePadOpenfile}")
                 saveMessageBox.setIcon(QtWidgets.QMessageBox.Information)
                 saveMessageBox.setStandardButtons(QtWidgets.QMessageBox.Ok)
-                edited_text = self.rightDockNotePad.toPlainText()
+                edited_text = self.tabManager.currentWidget().toPlainText()
                 ret = saveMessageBox.exec()
                 if ret == QtWidgets.QMessageBox.Ok:
-                    with open(self.rightDockNotePadOpenfile, "w") as file:
+                    with open(self.tabManager.currentWidget().objectName(), "w") as file:
                         file.write(edited_text)
                 return ret
 
@@ -684,7 +966,11 @@ class RightDock:
             if self.rightDockNotePadOpenfile is not None:
                 if rightDockTextBroserSaveFile() == QtWidgets.QMessageBox.Ok:
                     self.rightDockNotePadOpenfile = None
-                    self.rightDockNotePad.clear()
+                    self.tabManager.currentWidget().clear()
+                    self.tabManager.removeTab(self.tabManager.currentIndex())
+                    # edit the current open file pointed to by self
+                    if self.tabManager.currentWidget() is not None:
+                        self.rightDockNotePadOpenfile = self.tabManager.currentWidget().objectName()
             else:
                 infoMessageBox = QtWidgets.QMessageBox()
                 infoMessageBox.setWindowTitle("Information")
@@ -719,14 +1005,20 @@ class RightDock:
         self.notesFile = "target_notes"
         self.notesfilepath = os.path.join(self.projectsDirPath, self.notesFile)
         if not Path(self.notesfilepath).exists():
-            # create the notesfile in the notesfilepath
             with open(self.notesfilepath, "a") as file:
                 file.close()
-        # no need to first choose the file using the qtfiledialog
         self.rightDockNotePadOpenfile = self.notesfilepath
-        # open the file and place its contents on the notepad
+
         filecontents = open(self.notesfilepath, "r").read()
-        self.rightDockNotePad.setText(filecontents)
+        rightDockNotePad = self.addEditor()
+        rightDockNotePad.setAcceptRichText(True)
+        rightDockNotePad.setText(filecontents)
+        rightDockNotePad.setObjectName(self.notesFile)
+        self.tabManager.addTab(rightDockNotePad, self.notesFile)
+        self.openEditors.append(rightDockNotePad)
+        # set the currently opened file to the self
+        self.rightDockNotePadOpenfile = self.notesFile
+        # self.rightDockNotePad.setText(filecontents)
 
     # @classmethod
     def ShowSettings(self):
@@ -766,13 +1058,20 @@ class LowerDock:
 class LeftDock(QtCore.QObject):
     openLinkInBrw = Signal(str)
 
-    def __init__(self, mainWindow: QtWidgets.QMainWindow, projectDirPath, parent  = None) -> None:
+    def __init__(self, mainWindow: QtWidgets.QMainWindow,
+                 projectDirPath,
+                 parent  = None,
+                 top_parent = None,
+                 ) -> None:
         super().__init__()
+        self.topParent = top_parent
+        self.urlGetterRunning  = False
         self.main_window = mainWindow
         self.projectDirPath = projectDirPath
         self.SubdomainUrlDict = {}
         self.SubdomainUrlDict_file = os.path.join(self.projectDirPath, "subdomainsUrlDict.json")
         self.parent = parent
+        self.topParent.socketIpc.processFinishedExecution.connect(self.updateModel)
 
     def InitializeLeftDock(self):
 
@@ -801,6 +1100,8 @@ class LeftDock(QtCore.QObject):
                         self.sublist3rSdCountLabel.setText(str(len_subdomains))
 
             tempFilePath = os.path.join(self.projectDirPath, "subdomainTempFile.txt")
+            if Path(tempFilePath).exists():
+                os.remove(tempFilePath)
             with open(tempFilePath, "a") as file:
                 file.write(subdomains)
             rm_same(tempFilePath)
@@ -810,9 +1111,9 @@ class LeftDock(QtCore.QObject):
                 len_subdomains = len(list_sd)
                 sdStr = ""
                 for sd in list_sd:
-                    self.SubdomainUrlDict[sd] = []
+                    self.SubdomainUrlDict[sd.replace("\n", "")] = []
                     sdStr += sd
-
+            self.subdomainsModel.clear()
             if len_subdomains != 0:
                 for subdomain, urls in self.SubdomainUrlDict.items():
                     parentItem = QStandardItem(subdomain)
@@ -832,7 +1133,7 @@ class LeftDock(QtCore.QObject):
                 ret = self.noSubdomainsAlert.exec()
                 if ret == QtWidgets.QMessageBox.Ok:
                     pass
-
+            
         # lower dock
         self.leftDock = QtWidgets.QDockWidget("Target Information")
         self.leftDockWidget = QtWidgets.QWidget()
@@ -894,6 +1195,8 @@ class LeftDock(QtCore.QObject):
 
         # subdomains : urls tree
         self.subdomainsModel = QStandardItemModel()
+        # ? is it possible to update just part of the model without resetting it
+        # self.subdomainsModel.dataChanged.connect(self.updateSubdomainsModel)
         self.subdomainsModel.setHorizontalHeaderLabels(["Subdomain:UrlsMapping"])
         self.subdomainsTreeView = QtWidgets.QTreeView()
         self.subdomainsTreeView.setModel(self.subdomainsModel)
@@ -903,8 +1206,8 @@ class LeftDock(QtCore.QObject):
         self.subdomainsTreeView.setUniformRowHeights(True)
         self.subdomainsTreeView.setEditTriggers(QtWidgets.QTreeView.NoEditTriggers)
         self.leftDockLayout.addWidget(self.subdomainsTreeView)
-
         return self.leftDock
+
 
     def hideGenInfo(self):
         if self.infoShowCheckBox.isChecked():
@@ -919,17 +1222,28 @@ class LeftDock(QtCore.QObject):
                 jsonData = f.read()
             self.SubdomainUrlDict = json.loads(jsonData)
             self.subdomainsModel.dataChanged.emit(QtCore.QModelIndex(), QtCore.QModelIndex())
+            self.updateModel()
         else:
-            self.url_getter = UrlGetter(self.SubdomainUrlDict, self.projectDirPath, parent = self.parent)
-            self.url_getter.setObjectName("url_getter")
-            self.parent.threads.append(self.url_getter)
-            self.url_getter.start()
-            # self.url_getter.subdomainsUrlDict_
-            if self.url_getter.isFinished():
-                with open(self.SubdomainUrlDict_file, "r") as f:
-                    jsonData = f.read()
-            self.SubdomainUrlDict = json.loads(jsonData)
-            self.subdomainsModel.dataChanged.emit(QtCore.QModelIndex(), QtCore.QModelIndex())
+            if self.urlGetterRunning is False:
+                self.urlGetterRunning = True
+                self.url_getter = UrlGetter(self.SubdomainUrlDict,
+                                            self.projectDirPath,
+                                            parent = self.parent,
+                                            dict_parent=self,
+                                            top_parent = self.topParent,
+                                            mainWindow=self.main_window)
+                self.url_getter.urlGetterFinished.connect(self.updateModel)
+                self.url_getter.start()
+            else:
+                UrlGetterMessageBox = MessageBox("Information",
+                                                 "There is a thread of urlGetter still running\nCannont open another thread",
+                                                 "Information")
+                UrlGetterMessageBox.setStandardButtons(QtWidgets.QMessageBox.Ok)
+                ret = UrlGetterMessageBox.exec()
+                if ret == QtWidgets.QMessageBox.Ok:
+                    pass
+
+    def updateModel(self, **args):
         self.subdomainsModel.clear()
         self.subdomainsModel.setHorizontalHeaderLabels(["Subdomain:UrlsMapping"])
         for subdomain, urls in self.SubdomainUrlDict.items():
@@ -946,11 +1260,13 @@ class LeftDock(QtCore.QObject):
 
 class customWebEnginePage(QWebEnginePage):
     def certificateError(self, error):
+        error.ignoreCertificateError()
         return True
 
 class BrowserWindow(QtWidgets.QMainWindow):
     def __init__(self, link=None) -> None:
         super().__init__()
+        self.ca_certs_file = rundir+"src/proxycert/CA/certificate.crt"
 
         self.init_link = link
 
@@ -990,6 +1306,14 @@ class BrowserWindow(QtWidgets.QMainWindow):
             # print(f"clicked link is {self.init_link}")
             self.searchUrlOnBrowser(self.init_link)
 
+    def setupProfile(self):
+        with open(self.ca_certs_file, "r") as cert_file:
+            cert = cert_file.read()
+        self.profile = QWebEngineProfile.defaultProfile()
+        self.profile.httpCacheType(QWebEngineProfile.MemoryHttpCache)
+        self.profile.setPersistentCookiesPolicy(QWebEngineProfile.NoPersistentCookies)
+        self.profile.setCaCertficates()
+
     def closeProgressBarWidget(self):
         self.browserProgressBar.setVisible(False)
 
@@ -1027,14 +1351,16 @@ class BrowserWindow(QtWidgets.QMainWindow):
     def urlTextClear(self):
         self.urlText.clear()
 
-    def searchUrlOnBrowser(self, link=""):
-        self.target_url = self.urlText.text()
-        if link is not False:
+    def searchUrlOnBrowser(self, link=None):
+        if type(link) == bool:
+            link = "google.com"
+        if link is not None:
             self.target_url = link
+        else:
+            self.target_url = self.urlText.text()
         self.target_url = addHttpsScheme(self.target_url)
-
+        logging.info(f"using url : {self.target_url}")
         self.browser.setUrl(QtCore.QUrl(self.target_url))
-
         self.QbrowserURL = self.browser.url()
         self.strUrl = self.QbrowserURL.url()
         self.urlText.setText(self.strUrl)
@@ -1463,20 +1789,22 @@ class TestTargetWindow(QtWidgets.QMainWindow):
 
 
 class MainWindow(QtWidgets.QMainWindow):
-    def __init__(self, projectDirPath: str, proxy_port):
+    def __init__(self, projectDirPath: str, proxy_port, topParent, index):
         super().__init__()
+        self.projectIndex = index
+        self.topParent = topParent
         self.rootCACertificate = None
         self.current_tab_index = None
         self.projectDirPath = projectDirPath
         self.threads = []
-
+        self.setObjectName(self.projectDirPath)
         # Docks
         lowerDock = LowerDock(self, self.projectDirPath)
         self.LowerDock = lowerDock.InitializeLowerDock()
         self.LowerDock.setVisible(False)
         rightDock = RightDock(self, self.projectDirPath)
         self.RightDock = rightDock.InitializeDock()
-        leftdock = LeftDock(self, self.projectDirPath, parent = self)
+        leftdock = LeftDock(self, self.projectDirPath, parent = self, top_parent = self.topParent)
         leftdock.openLinkInBrw.connect(self.openNewBrowserTab)
         self.LeftDock = leftdock.InitializeLeftDock()
 
@@ -1534,6 +1862,11 @@ class MainWindow(QtWidgets.QMainWindow):
 
         self.centralWidgetLayout.addStretch()
         self.proxy_port  = proxy_port
+        self.topParent.newProjectCreated.emit(self)
+
+    def closeEvent(self, event: QtGui.QCloseEvent) -> None:
+        self.topParent.projectClosed.emit(self, self.projectIndex)
+        return super().closeEvent(event)
 
     def openNewBrowserTab(self, link: str = None):
         BrowserWindow_ = BrowserWindow(link=link)
@@ -1584,6 +1917,7 @@ class MainWindow(QtWidgets.QMainWindow):
             proxy.setType(QNetworkProxy.HttpProxy)
             proxy.setHostName(self.proxy_hostname)
             proxy.setPort(self.proxy_port)
+            self.LoadCA_Certificate()
             QNetworkProxy.setApplicationProxy(proxy)
         else:
             self.enableProxyCheckBox.setChecked(True)
@@ -1600,7 +1934,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 proxy.setPort(self.proxy_port)
                 QNetworkProxy.setApplicationProxy(proxy)
                 self.enableProxyCheckBox.setChecked(True)
-                # self.LoadCA_Certificate()    
+                self.LoadCA_Certificate()
             except ValueError:
                 self.proxyPortNameLineEdit.setStyleSheet("QLineEdit{border: 2px solid red;}")
                 self.enableProxyCheckBox.setChecked(False)
@@ -1757,7 +2091,7 @@ class SiteMapUpdater(QThread, QtCore.QObject):
         self.new_proxyDumpDirComponents = set()
         self.stateNotChanged = 0
         self.program_start_mins = int(time.asctime().split(":")[1])
-        atexit.register(self.exit)
+        atexit.register(self.terminate)
 
     def checkDirChange(self):
         while True:
@@ -1790,9 +2124,9 @@ class SiteMapUpdater(QThread, QtCore.QObject):
 class RepeaterWindow(QtWidgets.QMainWindow, QtCore.QObject):
 
     # tabChangeSignal  = Signal(int)
-    def __init__(self):
+    def __init__(self, parent=None):
         super().__init__()
-
+        self.parent = parent
         self.repeaterMainWidget = QtWidgets.QWidget()
         self.setCentralWidget(self.repeaterMainWidget)
         self.repeaterMainWidgetLayout = QtWidgets.QVBoxLayout()
@@ -1884,7 +2218,7 @@ class RepeaterWindow(QtWidgets.QMainWindow, QtCore.QObject):
 
     def sendRepReqToProxy(self):
         try:
-            self.guiProxyClient = GuiProxyClient(self.requestsEditor.toPlainText())
+            self.guiProxyClient = GuiProxyClient(self.requestsEditor.toPlainText(), proxy_port=self.parent.proxy_port)
             self.guiProxyClient.finished.connect(self.updateResponseEditor)
             self.guiProxyClient.start()
         except ConnectionAbortedError or ConnectionResetError:
@@ -1897,14 +2231,15 @@ class RepeaterWindow(QtWidgets.QMainWindow, QtCore.QObject):
         self.responseEditor.setText(response)
 
 class GuiProxyClient(QThread):
-    def __init__(self, request:str, is_command=False):
+    def __init__(self, request:str, is_command=False, proxy_port = None):
         super().__init__()
         self.setObjectName("GuiProxyClient")
         self.is_command = is_command    
         self.responseDir = rundir+"tmp/"
         self.respose_file = os.path.join(self.responseDir, "response.txt")
         self.request = self.makeRequestPacket(request)
-        self.proxyAddress = ("127.0.0.1", 8081)
+        self.proxy_port = proxy_port
+        self.proxyAddress = ("127.0.0.1", self.proxy_port)
         try:
             self.socket = socket.create_connection(self.proxyAddress,timeout=10)
         except ConnectionRefusedError or ConnectionAbortedError or ConnectionResetError as e:
@@ -2075,7 +2410,7 @@ class SiteMapWindow(QtWidgets.QMainWindow):
             elif self.loggingOffCommand:
                 command = {"log":1}
                 request = json.dumps(command)
-            self.guiProxyClient = GuiProxyClient(request, is_command=True)
+            self.guiProxyClient = GuiProxyClient(request, is_command=True, proxy_port=self.parent.proxy_port)
             self.guiProxyClient.start()
         except ConnectionAbortedError or ConnectionResetError:
             logging.warn("Connection error in socket")
@@ -2167,59 +2502,50 @@ class SiteMapWindow(QtWidgets.QMainWindow):
         # return super().closeEvent(event)
         self.siteMapUpdater.exit()
 
-class AtomProxy(QThread):
-    def __init__(self, proxy_port):
+class AtomProxy(QThread, QtCore.QObject):
+    getProxyProcessPid  = Signal(int)
+    def __init__(self, proxy_port, top_parent):
         super().__init__()
+        self.topParent = top_parent
         self.proxy_port = proxy_port
         self.setObjectName("AtomProxy")
         self.process = 0
+        self.topParent.threads.append(self)
+        self.topParent.ThreadStarted.emit(self.topParent, self.objectName())
 
     def run(self):
         command= f"python {rundir}/src/proxyhandlerv2.py -p {self.proxy_port}"
         self.process = subprocess.Popen(args=command, shell=True, cwd=rundir+"/src/")
-        # self.process.communicate()
+        self.getProxyProcessPid.emit(self.process.pid)
+        self.process.wait()
+        self.topParent.socketIpc.processFinishedExecution.emit(self.topParent, self.objectName())
 
-class ThreadMonitorUpdater(QThread):
-    def __init__(self, parent = None, mparent = None):
+class ThreadMon(QtWidgets.QWidget):
+    def __init__(self, thread, top_parent):
         super().__init__()
-        self.parent = parent
-        self.mparent  = mparent
-        self.activeThreads = []
-        [self.activeThreads.append(thread) for thread in self.parent.openMainWindows.threads]
-    
-    def getActiveThreads(self):
-        activeThreads  = []
-        [activeThreads.append(thread) for thread in self.parent.openMainWindows]
-        return activeThreads
-
-    def run(self):
-        while True:
-            for thread in self.activeThreads:
-                try:
-                    if not thread.isRunning():
-                        self.activeThreads.remove(thread)
-                except AttributeError as error:
-                    # if an attribute error is got, this means that the thread is now closed and so it has to be removed from the  list of threads
-                    self.activeThreads.remove(thread)
-            if self.p_threads != self.parent.threads:
-                self.mparent.addTabs()
-                self.activeThreads = self.getActiveThreads()
-
-class ThreadMon(QtWidgets.QFormLayout):
-    def __init__(self, thread):
-        super().__init__()
+        self.topParent = top_parent
+        self.formLayout = QtWidgets.QFormLayout()
         self.thread  = thread
         self.nameLabel = QtWidgets.QLabel()
         self.nameLabel.setText(thread.objectName())
-        self.addRow("Thread Name: ", self.nameLabel)
+        self.formLayout.addRow("Thread Name: ", self.nameLabel)
         self.status = self.getStatus()
         self.label = QtWidgets.QLabel()
         self.label.setText(self.status)
-        self.addRow("Status: ",self.label)
+        self.formLayout.addRow("Status: ",self.label)
         self.threadStopButton = HoverButton("stop thread", "stop the thread from running")
         self.threadStopButton.clicked.connect(self.exitThread)
-        self.addRow("Stop Thread: ", self.threadStopButton)
+        self.formLayout.addRow("Stop Thread: ", self.threadStopButton)
         self.process = 0
+        self.setLayout(self.formLayout)
+        self.topParent.socketIpc.processFinishedExecution.connect(self.closeWidget)
+
+    def closeWidget(self, windowInstance, objectName):
+        if objectName == self.thread.objectName():
+            for thread in windowInstance.threads:
+                if thread.objectName() == objectName:
+                    windowInstance.threads.remove(thread)
+            self.close()
     
     def getStatus(self):
         try:
@@ -2234,38 +2560,46 @@ class ThreadMon(QtWidgets.QFormLayout):
     def exitThread(self):
         try:
             self.pid = self.thread.process.pid
-            # os.kill(self.pid, signal.SIGKILL)
-            os.system(f"kill {self.pid}")
+            os.system(f"kill {int(self.pid+1)}")
             logging.info(f"Terminating subprocess with pid f{self.pid}")
         except AttributeError:
             logging.info(f"Terminating thread {self.thread}")
-            # self.thread.terminate()
-
-            # self.thread.quit()
+            self.thread.terminate()
+            self.thread.quit()
             if self.thread.isRunning():
                 logging.error(f"Failed to terminate thread {self.thread}")
 
 class ThreadMonitor(QtWidgets.QMainWindow):
-    def __init__(self, parent= None):
+    def __init__(self, top_parent= None):
         """ the data should be a dict of the form {"mainWindowInstance":[running_threads]}"""
         super().__init__()
-        self.parent = parent
-        self.windowInstances = self.parent.openMainWindows
+        self.top_parent = top_parent
+        self.windowInstances = self.top_parent.openMainWindows
         self.central_widget = QtWidgets.QWidget()
         self.setCentralWidget(self.central_widget)
         self.threadMonLayout = QtWidgets.QVBoxLayout()
         self.central_widget.setLayout(self.threadMonLayout)
         self.tabManager = QtWidgets.QTabWidget()
         self.threadMonLayout.addWidget(self.tabManager)
-        self.addTabs()
-        # self.threadMonitorUpdater  = ThreadMonitorUpdater(parent = self.parent, mparent = self)
-        # self.threadMonitorUpdater.start()
+        self.windowInstancesLayouts = []
+        self.top_parent.newProjectCreated.connect(self.addTab)
+        self.top_parent.projectClosed.connect(self.closeTab)
+        self.top_parent.ThreadStarted.connect(self.addThreadMon)
 
-    def addTabs(self):
-        for windowInstance in self.windowInstances:
-            self.addTab(windowInstance=windowInstance, threads= windowInstance.threads)
+    def closeTab(self, windowInstance, index):
+        self.tabManager.removeTab(index)
 
-    def addTab(self, windowInstance, threads):
+    def addThreadMon(self, windowInstance, threadName):
+        for thread in windowInstance.threads:
+            if thread.objectName() == threadName:
+                for layout in self.windowInstancesLayouts:
+                    if layout.objectName() == windowInstance.objectName():
+                        threadMonWidget = ThreadMon(thread, self.top_parent)
+                        layout.addWidget(threadMonWidget)                    
+
+    def addTab(self, windowInstance):
+        logging.info(windowInstance)
+        threads = windowInstance.threads
         tabname = windowInstance.objectName().split("/")[-1]
 
         newTabWidget = QtWidgets.QWidget()
@@ -2277,20 +2611,28 @@ class ThreadMonitor(QtWidgets.QMainWindow):
 
         scrollAreaWidget  = QtWidgets.QWidget()
         newTabLayout= QtWidgets.QVBoxLayout()
+        newTabLayout.setObjectName(windowInstance.objectName())
         scrollAreaWidget.setLayout(newTabLayout)
         newTabScrollArea.setWidget(scrollAreaWidget)
         newTabScrollArea.setWidgetResizable(True)
-
+        newTabWidget.setObjectName(windowInstance.objectName())
         for thread in threads:
-            threadMonLayout = ThreadMon(thread)
-            newTabLayout.addLayout(threadMonLayout)
+            threadMonWidget = ThreadMon(thread, top_parent = self.top_parent)
+            newTabLayout.addWidget(threadMonWidget)
         self.tabManager.addTab(newTabWidget, tabname)
-
+        self.windowInstancesLayouts.append(newTabLayout)
     # def stopRunningThread()
 
-class MainWin(QtWidgets.QMainWindow):
+class MainWin(QtWidgets.QMainWindow, QtCore.QObject):
+    newProjectCreated = Signal(QtWidgets.QMainWindow)
+    projectClosed = Signal(QtWidgets.QMainWindow, int)
+    ThreadStarted  = Signal(QtWidgets.QWidget, str)
     def __init__(self) -> None:
         super().__init__()
+        self.openProjectCount = 0
+        # SocketIPC
+        self.socketIpc = SocketIPC(create_server=True)
+        self.socketIpc.start()
         self.setObjectName("mainWindow")
         self.threads = []
         self.openMainWindows = [self]
@@ -2395,15 +2737,20 @@ class MainWin(QtWidgets.QMainWindow):
         self.setCentralWidget(self.centralWidget)
         self.mainTabLayout.addStretch()
         # add repeater tab
-        self.repeaterWindow = RepeaterWindow()
+        self.repeaterWindow = RepeaterWindow(parent=self)
         self.tabManager.addTab(self.repeaterWindow, "Repeater")
         # add site map Target
         self.addSiteMapTab()
         self.addThreadMonitorTab()
         atexit.register(self.saveProgramState)
+        self.socketIpc.processFinishedExecution.connect(self.finishedProcess)
+        self.newProjectCreated.emit(self)
+
+    def finishedProcess(self, windowInstance, tool:str):
+        print(red(f"{tool} finished execution"))
 
     def addThreadMonitorTab(self):
-        self.threadMonitor = ThreadMonitor(parent = self)
+        self.threadMonitor = ThreadMonitor(top_parent= self)
         self.tabManager.addTab(self.threadMonitor, "Thread Monitor")
 
     def saveProgramState(self):
@@ -2414,9 +2761,8 @@ class MainWin(QtWidgets.QMainWindow):
     def startproxy(self):
         self.proxy_port = random.randint(8000, 10000)
         logging.info("Starting proxy")
-        self.proxy_ = AtomProxy(self.proxy_port)
-        self.proxy_.setObjectName("proxy")
-        self.threads.append(self.proxy_)
+        self.proxy_ = AtomProxy(self.proxy_port, top_parent = self)
+        # self.proxy_.getProxyProcessPid.connect()
         self.proxy_.start()
 
     def addRepeaterInstanceTab(self, request: str = None):
@@ -2495,8 +2841,11 @@ class MainWin(QtWidgets.QMainWindow):
             projectDirectory = os.path.join(self.defaultWorkspaceDir, tab_name)
             if not Path(projectDirectory).exists():
                 os.makedirs(projectDirectory)
-            self.mainWindowInstance = MainWindow(projectDirectory, self.proxy_port)
-            self.mainWindowInstance.setObjectName(projectDirectory)
+            self.projectWindowCount += 1
+            self.mainWindowInstance = MainWindow(projectDirectory,
+                                                 self.proxy_port,
+                                                 self,
+                                                 index = self.openProjectCount)
             self.openMainWindows.append(self.mainWindowInstance)
             self.tabManager.addTab(self.mainWindowInstance, tab_name)
             self.tabManager.setCurrentIndex(
@@ -2505,8 +2854,8 @@ class MainWin(QtWidgets.QMainWindow):
             self.newTargetWindow.close()
 
     def AddTargetTab(self, directory=""):
-        self.mainWindowInstance = MainWindow(directory, self.proxy_port)
-        self.mainWindowInstance.setObjectName(directory)
+        self.openProjectCount += 1
+        self.mainWindowInstance = MainWindow(directory, self.proxy_port, self, index = self.openProjectCount)
         self.openMainWindows.append(self.mainWindowInstance)
         tab_name = directory.split("/")[-1]
         self.tabManager.addTab(self.mainWindowInstance, tab_name)
@@ -2516,9 +2865,13 @@ class MainWin(QtWidgets.QMainWindow):
 
     def closeTab(self):
         self.current_tab_index = self.tabManager.currentIndex()
-        if self.current_tab_index > 1:
+        if self.current_tab_index > 3:
+            self.tabManager.currentWidget().close()
             self.tabManager.removeTab(self.current_tab_index)
 
+    def closeEvent(self, event: QtGui.QCloseEvent) -> None:
+        os.system(f"kill {self.proxy_.process.pid+1}")
+        return super().closeEvent(event)
 
 def getLogNumber():
     logs_dir = rundir+"logs/"
@@ -2539,6 +2892,6 @@ if __name__ == "__main__":
     logging.basicConfig(level=logging.DEBUG, format= '%(asctime)s - %(levelname)s - %(filename)s:%(lineno)d - %(message)s')
     App = QtWidgets.QApplication()
     main_window = MainWin()
-    main_window.showMaximized()
+    main_window.showMinimized()
     sys.exit(App.exec())
     
