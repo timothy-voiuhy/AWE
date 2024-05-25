@@ -2,7 +2,7 @@ import socket
 from PySide6.QtWebEngineCore import QWebEnginePage, QWebEngineSettings, QWebEngineProfile
 from PySide6 import QtCore, QtWidgets, QtGui, QtWebEngineWidgets
 from PySide6.QtNetwork import QNetworkProxy, QSslCertificate, QSslConfiguration, QNetworkProxyFactory
-from PySide6.QtCore import Signal, QRegularExpression
+from PySide6.QtCore import Signal, QRegularExpression, QFileSystemWatcher
 
 from PySide6.QtGui import QStandardItem, QStandardItemModel
 import subprocess
@@ -158,16 +158,61 @@ class MessageBox(QtWidgets.QMessageBox):
             self.setIcon(QtWidgets.QMessageBox.Question)
         # self.setStandardButtons(self.button)
 
-def iterDir(parentPath, parentItem: QStandardItem):
-    for element in os.scandir(parentPath):
+class parentItemContainer():
+    def __init__(self, name:str = None, object_= None, obj_dicts:list=None, children:list=None):
+        self.name = name
+        self.object_ = object_
+        self.obj_dicts = obj_dicts
+        if self.obj_dicts is None:
+            self.obj_dicts = []
+        self.children = children
+        if self.children is None:
+            self.children = []
+        self.containerDict = {}
+    
+    def addChild(self, child:dict):
+        self.children.append(child)
+
+    def addContent(self, content:dict):
+        self.obj_dicts.append(content)
+
+    def __dict__(self):
+        self.containerDict["name"] = self.name 
+        self.containerDict["object"] = self.object_ 
+        self.containerDict["contents"] = self.contents
+        self.containerDict["children"] = self.children
+
+def cleanNode(parentPath, pr):
+    """ remove the node_container and the node_containers of the subnodes from the dirNodeContainers"""
+    subnode_dirnames = []
+    for dir_ in os.scandir(parentPath):
+        dirPath = os.path.join(parentPath, dir_.name)
+        subnode_dirnames.append(dirPath)
+    for subnode_dirname in subnode_dirnames:
+        for node_container in pr.dirNodeContainers:
+            if node_container.name  == subnode_dirname:
+                pr.dirNodeContainers.remove(node_container)
+
+def populateNode(parentPath,
+            Item: QStandardItem,
+            nodeContainer:parentItemContainer= None,
+            update=False,
+            pr = None,
+            contents = None):
+    if update:
+        try:
+            # remove all the subnodes from the node and also from the pr.dirNodeContainers
+            cleanNode(parentPath, pr)
+            Item.removeRows(0, Item.rowCount())
+        except RuntimeError:
+            pass
+    for index, element in enumerate(os.scandir(parentPath)):
         if element.is_file():  # if it is a file , append it to the parent item
-            element_item = QStandardItem(element.name)
-            parentItem.appendRow(element_item)
+            filenode = FileNode(pr, element.name, Item, parentPath, nodeContainer, index)
+            filenode.makeNode()
         elif element.is_dir():
-            pPath = os.path.join(parentPath, element.name)
-            pItem = QStandardItem(element.name)
-            parentItem.appendRow(pItem)
-            iterDir(pPath, pItem)
+            node = DirNode(pr, element, parentPath, Item, nodeContainer, index)
+            node.makeNode()
 
 
 def atomGuiGetSubdomains(projectDirPath, toolName):
@@ -2080,47 +2125,6 @@ class RepeaterReqResTextEditor(TextEditor):
         self.setBaseSize(650, 650)
         self.setMaximumWidth(750)
 
-
-class SiteMapUpdater(QThread, QtCore.QObject):
-    fileStructureChanged = Signal()
-
-    def __init__(self, proxyDumpDir):
-        super().__init__()
-        self.proxyDumpDir = proxyDumpDir
-        self.old_proxyDumpDirComponents = set()
-        self.new_proxyDumpDirComponents = set()
-        self.stateNotChanged = 0
-        self.program_start_mins = int(time.asctime().split(":")[1])
-        atexit.register(self.terminate)
-
-    def checkDirChange(self):
-        while True:
-            self.program_go_mins = int(time.asctime().split(":")[1])
-            self.spentMins = abs(self.program_go_mins - self.program_start_mins)
-            self.new_proxyDumpDirComponents.clear()
-            for _, dirs, files in os.walk(self.proxyDumpDir):
-                [self.new_proxyDumpDirComponents.add(dir_) for dir_ in dirs]
-                [self.new_proxyDumpDirComponents.add(file) for file in files]
-
-            if not self.old_proxyDumpDirComponents == self.new_proxyDumpDirComponents:
-                self.fileStructureChanged.emit()
-                self.old_proxyDumpDirComponents = self.new_proxyDumpDirComponents.copy()  # set the old list to equal to the new list such that it becomes the new old
-                self.stateNotChanged = 0
-                self.program_start_mins = int(time.asctime().split(":")[1])
-            else:
-                if self.spentMins >= 2:
-                    self.stateNotChanged += 1
-                    if self.stateNotChanged == 10:
-                        logging.info("File structure not Changed=> SiteMapUpdater Thread Sleeping...")
-                        milliseconds = lambda x: (x*60)
-                        self.sleep(milliseconds(3))
-                        self.stateNotChanged = 0
-                pass
-
-    def run(self) -> None:
-        self.checkDirChange()
-
-
 class RepeaterWindow(QtWidgets.QMainWindow, QtCore.QObject):
 
     # tabChangeSignal  = Signal(int)
@@ -2272,7 +2276,71 @@ class GuiProxyClient(QThread):
     def run(self):
         self.send()
 
+class FileNode():
+    def __init__(self,
+                 pr,
+                 text,
+                 parentItem,
+                 parent_path,
+                 parent_node_container,
+                 index_in_node):
+        self.pr = pr
+        self.parent_node_container = parent_node_container
+        self.parent_path = parent_path
+        self.parentItem = parentItem
+        self.text = text
+        self.item = QStandardItem()
+        self.item.setText(self.text)
+        self.name = os.path.join(self.parent_path, text)
+        self.obj_idx_dict = {}
+        self.index_in_node = index_in_node
 
+    def makeNode(self):
+        self.parentItem.appendRow(self.item)
+        self.obj_idx_dict[self.name] = self.index_in_node
+        self.parent_node_container.addContent(self.obj_idx_dict)
+        self.pr.fileNodes.append(self)
+
+class DirNode():
+    def __init__(self, parent, dir_:os.DirEntry,
+                 parentPath=None,
+                 parentNodeItem:QStandardItem = None,
+                 parent_node_container:parentItemContainer=None,
+                 index_in_node=None):
+        super().__init__()
+        self.parent_node_container = parent_node_container
+        self.parent = parent
+        self.dir_ = dir_
+        self.parentNodeItem = parentNodeItem
+        self.parentpath = parentPath
+        self.node_container = parentItemContainer()
+        self.Item = QStandardItem(self.dir_.name)
+        if self.parentpath is None:
+            self.defaultParentPath = os.path.join(self.parent.proxyDumpDir, self.dir_)
+        else:
+            self.defaultParentPath = os.path.join(self.parentpath, self.dir_)
+        self.node_container.name = self.defaultParentPath
+        self.node_container.object_ = self.Item
+        self.obj_idx_dict = {}
+        self.index_in_node = index_in_node
+
+    def addNode(self):
+        if self.parentNodeItem is None:
+            self.parent.siteMapTreeModel.appendRow(self.Item)
+        else:
+            self.parentNodeItem.appendRow(self.Item)
+        self.parent.dirNodeContainers.append(self.node_container)
+        self.obj_idx_dict[self.node_container.name] = self.index_in_node
+        self.parent_node_container.addContent(self.obj_idx_dict)
+        # self.parent.dirNodes.append(self) #README if you allow this you must make sure a node is deleted if a dir is deleted
+    
+    def expandNode(self):
+        populateNode(self.defaultParentPath, self.Item, self.node_container, pr=self.parent)
+    
+    def makeNode(self):
+        self.addNode()
+        self.expandNode()
+ 
 class SiteMapWindow(QtWidgets.QMainWindow):
     def __init__(self, parent):
         super().__init__()
@@ -2285,7 +2353,11 @@ class SiteMapWindow(QtWidgets.QMainWindow):
         if not os.path.isdir(self.proxyDumpDir):
             os.makedirs(self.proxyDumpDir)
         self.siteDirs = []
+        self.watchPaths = []
         self.siteMapScope = ["."]
+        self.dirNodeContainers = []
+        self.dirNodes = []
+        self.fileNodes = []
 
         self.requestsEditor = ReqResTextEditor()
         self.responseEditor = ReqResTextEditor()
@@ -2331,15 +2403,12 @@ class SiteMapWindow(QtWidgets.QMainWindow):
         self.siteMapTreeView.setUniformRowHeights(True)
         self.siteMapTreeView.setEditTriggers(QtWidgets.QTreeView.NoEditTriggers)
         self.siteMapTreeViewLayout.addWidget(self.siteMapTreeView)
-        # self.siteMapTreeModel.dataChanged.connect(self.getSites())
-        self.getSites()
-        # update siteMap class
-        self.siteMapUpdater = SiteMapUpdater(self.proxyDumpDir)
-        self.siteMapUpdater.fileStructureChanged.connect(self.getSites)
-        self.siteMapUpdater.destroyed.connect(self.closeEvent)
-        self.siteMapUpdater.setObjectName("siteMapUpdater")
-        self.parent.threads.append(self.siteMapUpdater)
-        self.siteMapUpdater.start()
+        # self.siteMapTreeModel.dataChanged.connect(self.createNodeTree())
+        self.proxyFileSystemWatcher = QFileSystemWatcher()
+        self.proxyFileSystemWatcher.directoryChanged.connect(self.updateNode)
+        self.createNodeTree()
+        self.watchPaths = self.getWatchPaths()
+        self.proxyFileSystemWatcher.addPaths(self.watchPaths)
 
         # the request and response area tabs
         self.siteMapReqResTabManager = QtWidgets.QTabWidget()
@@ -2355,6 +2424,15 @@ class SiteMapWindow(QtWidgets.QMainWindow):
         self.siteMapScopeCommand = False
         self.logggingOnCommand = False
         self.loggingOffCommand = False
+
+    def getWatchPaths(self):
+        siteMapDirs = []
+        for root, dirs, files in os.walk(self.proxyDumpDir):
+            for direntry in dirs:
+                path = os.path.join(root, direntry)
+                siteMapDirs.append(path)
+        siteMapDirs.append(self.proxyDumpDir)
+        return siteMapDirs
 
     def HandleLoggingChange(self):
         if self.siteMapLoggingCheckBox.isChecked():
@@ -2472,15 +2550,65 @@ class SiteMapWindow(QtWidgets.QMainWindow):
             scope.append(scope_)
         self.siteMapScope.clear()
         self.siteMapScope.extend(scope)
-        self.getSites(scope=self.siteMapScope)
+        self.createNodeTree(scope=self.siteMapScope)
         self.siteMapSettingsWidget.close()
 
-    def getSites(self, scope: list = None, regex=None):
-        if scope is None:
-            scope = self.siteMapScope
-        # print(red("get sites has been called"))
-        self.siteMapTreeModel.clear()
-        self.siteDirs.clear()
+    @staticmethod
+    def getAllEntries(dir_):
+        paths = []
+        for entry in os.listdir(dir_):
+            paths.append(os.path.join(dir_, entry))
+        return paths
+
+    @staticmethod
+    def getTreeEntries(node_container):
+        paths = []
+        for obj_dict in node_container.obj_dicts:
+            paths.extend(list(obj_dict.keys()))
+        return paths
+
+    # @staticmethod
+    # def getDeletedEntry(self, all_entries:list, tree_entries:list):
+    #     for entry in all_entries:
+
+
+    def updateNode(self, filename):
+        # self.proxyFileSystemWatcher.blockSignals()
+        signaled_filename = filename
+        if not Path(filename).exists():
+            base_dir = ""
+            base_dir_cmps = filename.split("/")[1:-1]
+            for cmp in base_dir_cmps:
+                base_dir += "/"+cmp
+            filename = base_dir
+        print(red(f"updateNode called on {filename}"))
+        for node_container in self.dirNodeContainers:                
+            if node_container.name == filename:
+                print("parent name found")
+                if not Path(signaled_filename).exists():
+                    #todo: delete also the filenodes
+                    self.dirNodeContainers.remove(node_container)
+                all_entries = self.getAllEntries(dir_= filename)
+                tree_entries  = self.getTreeEntries(node_container)
+                if len(all_entries)-len(tree_entries) < 0:
+                    # an entry has been deleted
+                    print(red("entry has been deleted"))
+                    # deleted_entry = self.getDeletedEntry(all_entries, tree_entries)
+                else:
+                    print(red("entry has been added"))
+                Item = node_container.object_
+                populateNode(filename,
+                        Item,
+                        update=True,
+                        nodeContainer=node_container,
+                        pr = self,
+                        contents = node_container.obj_dicts)
+
+        self.proxyFileSystemWatcher.removePaths(self.watchPaths)
+        self.watchPaths = self.getWatchPaths()
+        self.proxyFileSystemWatcher.addPaths(self.watchPaths)
+
+    def getSiteDirs(self, scope):
         for site_dir in os.scandir(self.proxyDumpDir):
             if site_dir.is_dir():
                 if scope is None:
@@ -2491,12 +2619,27 @@ class SiteMapWindow(QtWidgets.QMainWindow):
                         if len(pattern.findall(site_dir.name)) != 0:
                             self.siteDirs.append(site_dir)
 
-        for site_dir in self.siteDirs:
-            parentItem = QStandardItem(site_dir.name)
-            self.siteMapTreeModel.appendRow(parentItem)
-            defaultParentPath = os.path.join(self.proxyDumpDir, site_dir.name + "/")
-            iterDir(defaultParentPath, parentItem)
+    def createNodeTree(self, scope: list = None, regex=None, new_tree = False):
+        if scope is None:
+            scope = self.siteMapScope
+        if new_tree is True:
+            self.proxyFileSystemWatcher.removePaths(self.watchPaths)
+            self.siteMapTreeModel.clear()
+            self.siteDirs.clear()
+        self.getSiteDirs(scope=scope)
+        self.top_model_container = parentItemContainer(name=self.proxyDumpDir)
+        self.top_model_container.object_ = self.siteMapTreeModel
+        for index, site_dir in enumerate(self.siteDirs):
+            node = DirNode(self, site_dir,
+                           parentPath= self.proxyDumpDir,
+                           parent_node_container=self.top_model_container,
+                           index_in_node=index)
+            node.makeNode()
+        self.dirNodeContainers.append(self.top_model_container)
         self.siteMapTreeView.setModel(self.siteMapTreeModel)
+        self.watchPaths = self.getWatchPaths()
+        self.proxyFileSystemWatcher.addPaths(self.watchPaths)
+    
 
     def closeEvent(self, event: QtGui.QCloseEvent) -> None:
         # return super().closeEvent(event)

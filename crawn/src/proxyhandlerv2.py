@@ -31,6 +31,7 @@ import logging
 import random
 import argparse
 
+
 def is_brotli_compressed(data):
     brotli_magic_number = b'\x1b'
     return data[:1] == brotli_magic_number
@@ -45,9 +46,11 @@ def is_gzip_compressed(data):
     gzip_magic_number = b'\x1f\x8b'
     return data[:2] == gzip_magic_number
 
+
 class WebSocketHandler:
     """Handle the whole websocket connection both the browser side and
     the server side."""
+
     def __init__(self, websocket_key):
         self.websocket_key = websocket_key
 
@@ -123,12 +126,14 @@ def DissectBrowserReqPkt(packet: str, http: bool = None):
 
 
 def writeLinkContentToFIle(main_dir, link: str, data, hostname):
-    
+
     link_components = urlparser.urlparse(link)
-    relative_path = link_components[1] + link_components[2] # the netlock + path,  this already has file name if it does not end with "/"
+    # the netlock + path,  this already has file name if it does not end with "/"
+    relative_path = link_components[1] + link_components[2]
 
     if link.endswith("/"):
-        relative_path = relative_path + "index.html" # giving a file name for the index file 
+        # giving a file name for the index file
+        relative_path = relative_path + "index.html"
 
     if relative_path is not None:
         if not main_dir.endswith("/"):
@@ -139,7 +144,8 @@ def writeLinkContentToFIle(main_dir, link: str, data, hostname):
     try:
         if not os.path.exists(path=file_path):
             os.makedirs(dir_path)
-            with open(file_path,'wb') as file:  # this is where we caught the error after we try to a file that does not exist
+            # this is where we caught the error after we try to a file that does not exist
+            with open(file_path, 'wb') as file:
                 file.write(data)
         else:
             os.remove(file_path)
@@ -174,7 +180,9 @@ class ProxyHandler:
                  verifyDstServerCerts=True,
                  save_traffic=False,
                  useFileBasedCerts=False,
-                 useUrllib=False):
+                 useUrllib=False,
+                 use_tor=False):
+        self.use_tor = use_tor
         self.host = host
         self.port = port
         self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -186,7 +194,7 @@ class ProxyHandler:
         self.socket.listen(5)
         self.downlaodMozillaCAs = downloadMozillaCAs
         if sys.platform == "WIN32":
-            self.runDir = rundir  = "D:\\MYAPPLICATIONS\\AWE\\AWE\\crawn\\src"
+            self.runDir = rundir = "D:\\MYAPPLICATIONS\\AWE\\AWE\\crawn\\src"
         else:
             self.runDir = "/media/program/01DA55CA5F28E000/MYAPPLICATIONS/AWE/AWE/crawn/src"
         if self.downlaodMozillaCAs:
@@ -205,26 +213,40 @@ class ProxyHandler:
         self.rootCAcf = os.path.join(self.pyCApath, "rootCAcert.pem")
         if self.useFileBasedCerts is False:
             if not os.path.isfile(self.rootCAcf):
-                self.rootCA = CertificateAuthority("LOCALHOST CA", self.rootCAcf, cert_cache=100)
+                self.rootCA = CertificateAuthority(
+                    "LOCALHOST CA", self.rootCAcf, cert_cache=100)
             else:
-                self.rootCA = CertificateAuthority("LOCALHOST CA", self.rootCAcf, cert_cache=100)
+                self.rootCA = CertificateAuthority(
+                    "LOCALHOST CA", self.rootCAcf, cert_cache=100)
         else:
             if not os.path.isdir(self.certsDir):
                 os.makedirs(self.certsDir)
-            self.rootCA = CertificateAuthority("LOCALHOST CA", self.rootCAcf, cert_cache=self.certsDir)
+            self.rootCA = CertificateAuthority(
+                "LOCALHOST CA", self.rootCAcf, cert_cache=self.certsDir)
             self.rootCAprivatekeyfile = self.runDir + "/proxycert/CA/privatekey.pem"
         self.usehttpLibs = UsehttpLibs
         self.homeDirectory = os.path.expanduser("~")
-        self.defaultWorkspaceDir = os.path.join(self.homeDirectory, "AtomProjects/Proxy/")
+        self.defaultWorkspaceDir = os.path.join(
+            self.homeDirectory, "AtomProjects/Proxy/")
         self.verifyDstServerCerts = verifyDstServerCerts
         self.sessionsDict = {}
         self.save_traffic = save_traffic
         self.error_file_count = 0
         self.useUrllib = useUrllib
-        self.PoolManager = httpClient.Client(follow_redirects=True, timeout=15)
+        if self.use_tor:
+            proxies = {
+                "http://": "socks5://127.0.0.1:9050",
+                "https://": "socks5://127.0.0.1:9050",
+            }
+            self.PoolManager = httpClient.Client(
+                follow_redirets=True, timeout=15, proxies=proxies)
+        else:
+            self.PoolManager = httpClient.Client(
+                follow_redirects=True, timeout=15)
 
-        self.logging  = True
-        self.scope = ["."] # default regex pattern that can match for all hostnames
+        self.logging = True
+        # default regex pattern that can match for all hostnames
+        self.scope = ["."]
 
     def constructResponsePacket(self, u_response: httpx.Response = None,
                                 usedRequests: bool = False):
@@ -258,8 +280,10 @@ class ProxyHandler:
                     body = zlib_encodedBody
                     len_zlib_encoded_body = len(zlib_encodedBody)
                     r_headers["Content-Length"] = str(len_zlib_encoded_body)
-            headers = ''.join([f"{key}: {value}\r\n" for key, value in r_headers.items()])
-            cookies = ''.join([f"{key}: {value};" for key, value in u_response.cookies.items()])
+            headers = ''.join(
+                [f"{key}: {value}\r\n" for key, value in r_headers.items()])
+            cookies = ''.join(
+                [f"{key}: {value};" for key, value in u_response.cookies.items()])
             # print(f"{yellow('response cookies:')}{cookies}")
             responsePacket = f"{status_line}\r\n{headers}"
             if cookies:
@@ -273,7 +297,8 @@ class ProxyHandler:
             return ResponsePacket, decodedResponsePacket
         elif isinstance(body, str):
             responsePacket += body
-            decodedResponsePacket = responsePacket + decodedBody.decode("utf-8")
+            decodedResponsePacket = responsePacket + \
+                decodedBody.decode("utf-8")
             return responsePacket.encode(), decodedResponsePacket
 
     def generateDomainCerts(self, hostname: str):
@@ -282,7 +307,8 @@ class ProxyHandler:
         if self.useFileBasedCerts is False:
             return self.rootCA.load_cert(hostname, wildcard=True)
         else:
-            return self.rootCA.cert_for_host(hostname, wildcard=True)  # filename
+            # filename
+            return self.rootCA.cert_for_host(hostname, wildcard=True)
 
     def createDestConnection(self, host_portlist):
         """create the destination connection with the proxy, upgrade it to ssl and verify certificates"""
@@ -291,16 +317,21 @@ class ProxyHandler:
             dest_server_skt.connect((host_portlist[0], int(host_portlist[1])))
             print("TCP connection to destination server successfull")
             destServerSslContext = SSL.Context(SSL.SSLv23_METHOD)
-            destServerSslServerSkt = SSL.Connection(destServerSslContext, dest_server_skt)
+            destServerSslServerSkt = SSL.Connection(
+                destServerSslContext, dest_server_skt)
             destServerSslServerSkt.set_connect_state()
             if self.verifyDstServerCerts:
-                destServerSslContext.set_verify(SSL.VERIFY_PEER | SSL.VERIFY_FAIL_IF_NO_PEER_CERT, self.verify_callback)
+                destServerSslContext.set_verify(
+                    SSL.VERIFY_PEER | SSL.VERIFY_FAIL_IF_NO_PEER_CERT, self.verify_callback)
             else:
-                destServerSslContext.set_verify(SSL.VERIFY_NONE, self.verify_callback)
-            destServerSslContext.load_verify_locations(self.MozillaCACertsVerifyFile)
+                destServerSslContext.set_verify(
+                    SSL.VERIFY_NONE, self.verify_callback)
+            destServerSslContext.load_verify_locations(
+                self.MozillaCACertsVerifyFile)
             try:
                 destServerSslServerSkt.do_handshake()
-                print("Destination server connection setup successfully with ssl support")
+                print(
+                    "Destination server connection setup successfully with ssl support")
             except Exception as e:
                 print(red(f"SSL HandShake failure with error :{e}"))
             return destServerSslServerSkt, 0
@@ -346,7 +377,8 @@ class ProxyHandler:
                 decompressed_utf_body = decompressed_body.decode("utf-8")
                 len_decompressed_utf_body = len(decompressed_utf_body)
                 headers_dict["Content-Length"] = str(len_decompressed_utf_body)
-                headers = ''.join([f"{key}: {value}\r\n" for key, value in headers_dict.items()])
+                headers = ''.join(
+                    [f"{key}: {value}\r\n" for key, value in headers_dict.items()])
                 browserRequest = headers + decompressed_utf_body
             else:
                 browserRequest = request.decode("utf-8")
@@ -363,7 +395,8 @@ class ProxyHandler:
             if bodyEncoding:
                 requestBody = encoded_body
 
-            print(yellow(f"Connecting to remote server ....... on url: {requestUrlwParams}"))
+            print(
+                yellow(f"Connecting to remote server ....... on url: {requestUrlwParams}"))
             if self.useUrllib:
                 # try:
                 try:
@@ -382,9 +415,11 @@ class ProxyHandler:
                             print(yellow("retrying...."))
                         retries += 1
                 except httpx.ConnectError:
-                    print(red(f"failing to resolve to url {requestUrlwParams}"))
+                    print(
+                        red(f"failing to resolve to url {requestUrlwParams}"))
 
-                responsePacket, decodedResponsePacket = self.constructResponsePacket(u_response=response)
+                responsePacket, decodedResponsePacket = self.constructResponsePacket(
+                    u_response=response)
                 # except Exception as e:
                 # print(red(f"Experiencing error {e} {yellow('<=>')} \n\t restortig to using requests lib" ))
                 #     response = requests.request(requestMethod, requestUrlwParams,
@@ -396,7 +431,8 @@ class ProxyHandler:
 
         else:
             destSrvSkt.sendall(request)
-            responsePacket = destSrvSkt.recv(80000000)  # after sending to server and getting response
+            # after sending to server and getting response
+            responsePacket = destSrvSkt.recv(80000000)
         return responsePacket, requestUrl, browserRequest, decodedResponsePacket
 
     def closeTunnel(self, browser_socket, closeBrowserSocket=True):
@@ -411,7 +447,8 @@ class ProxyHandler:
 
     def createReqResData(self, dec_browserRequest: str, dec_browserResponse: str | bytes):
         if isinstance(dec_browserResponse, bytes):
-            req_res_data = dec_browserRequest.encode("utf-8") + b'\nRESPONSE\n' + dec_browserResponse
+            req_res_data = dec_browserRequest.encode(
+                "utf-8") + b'\nRESPONSE\n' + dec_browserResponse
             return req_res_data
         elif isinstance(dec_browserResponse, str):
             req_res_data = dec_browserRequest + "\nRESPONSE\n" + dec_browserResponse
@@ -426,7 +463,7 @@ class ProxyHandler:
                             browser_socket: socket.socket,
                             RequestPacket: bytes = None,
                             http: bool = False,
-                            unix= False):
+                            unix=False):
         try:
             if RequestPacket is None:
                 RequestPacket = ClientSslSocket.recv(40960)
@@ -444,11 +481,14 @@ class ProxyHandler:
                         for scope_regex in self.scope:
                             pattern = re.compile(scope_regex)
                             if len(pattern.findall(hostname)) != 0:
-                                req_res_data = self.createReqResData(dec_browserRequest, dec_browserResponse)
-                                writeLinkContentToFIle(hostDir, requestUrl, req_res_data, hostname)
+                                req_res_data = self.createReqResData(
+                                    dec_browserRequest, dec_browserResponse)
+                                writeLinkContentToFIle(
+                                    hostDir, requestUrl, req_res_data, hostname)
             print(f"{yellow('dest_response:')}{ResponsePacket[:200]}")
             try:
-                writtenBytes = ClientSslSocket.sendall(ResponsePacket)  # replace with sendall during debugging
+                # replace with sendall during debugging
+                writtenBytes = ClientSslSocket.sendall(ResponsePacket)
             except AttributeError:
                 writtenBytes = browser_socket.send(dec_browserResponse)
             print(f"{yellow('Bytes written to browser socket')}\n\t{writtenBytes}")
@@ -463,7 +503,8 @@ class ProxyHandler:
     def HandleConnection(self, browser_socket: socket.socket, unix=True):
         try:
             print("Waiting for initial browser request\n")
-            initial_browser_request = browser_socket.recv(160000).decode("utf-8")
+            initial_browser_request = browser_socket.recv(
+                160000).decode("utf-8")
             print(cyan("Browser Intercept Request: "))
             print(initial_browser_request)
 
@@ -476,67 +517,79 @@ class ProxyHandler:
 
                 elif list(command_dict.keys())[0] == "log":
                     if list(command_dict.values())[0] == 1:
-                        logging.info("Recieved disable logging request \n Trying to disable logging")
+                        logging.info(
+                            "Recieved disable logging request \n Trying to disable logging")
                         try:
-                            self.logging  = False
+                            self.logging = False
                             logging.info("Successfully disabled logging")
                         except Exception as e:
-                            logging.error("Failed to disable logging with error {e}")
+                            logging.error(
+                                "Failed to disable logging with error {e}")
                     else:
-                        logging.info("Recieved enable logging request \n Trying to enable logging")
+                        logging.info(
+                            "Recieved enable logging request \n Trying to enable logging")
                         try:
-                            self.logging  =True    
+                            self.logging = True
                             logging.info("Successfully enabled logging")
                         except Exception as e:
-                            logging.error(f"Failed to enable logging with error {e}")
-        
+                            logging.error(
+                                f"Failed to enable logging with error {e}")
+
             elif initial_browser_request != "":
                 if self.isRequest(initial_browser_request.encode("utf-8")):
                     print(yellow("Received valid request as initial browser request"))
                     (requestMethod,
-                    requestUrl,
-                    requestHeaders,
-                    requestParams,
-                    requestBody,
-                    requestUrlwParams) = DissectBrowserReqPkt(initial_browser_request, http=True)
+                     requestUrl,
+                     requestHeaders,
+                     requestParams,
+                     requestBody,
+                     requestUrlwParams) = DissectBrowserReqPkt(initial_browser_request, http=True)
                     hostname = requestHeaders["Host"]
-                    hostDir = os.path.join(self.defaultWorkspaceDir, hostname + "/")
+                    hostDir = os.path.join(
+                        self.defaultWorkspaceDir, hostname + "/")
                     self.OpenHttpsCommTunnel(ClientSslSocket=None,
-                                            hostDir=hostDir,
-                                            hostname=hostname,
-                                            hostnameUrl=requestUrl,
-                                            destServerSslServerSocket=None,
-                                            usehttpLibs=self.usehttpLibs,
-                                            browser_socket=browser_socket,
-                                            RequestPacket=initial_browser_request.encode("utf-8"),
-                                            http=True,
-                                            unix=unix)
+                                             hostDir=hostDir,
+                                             hostname=hostname,
+                                             hostnameUrl=requestUrl,
+                                             destServerSslServerSocket=None,
+                                             usehttpLibs=self.usehttpLibs,
+                                             browser_socket=browser_socket,
+                                             RequestPacket=initial_browser_request.encode(
+                                                 "utf-8"),
+                                             http=True,
+                                             unix=unix)
                 else:
-                    host_portlist = DissectBrowserProxyRequests(initial_browser_request)
+                    host_portlist = DissectBrowserProxyRequests(
+                        initial_browser_request)
                     if host_portlist is not None:
                         keep_alive = host_portlist[2]
                         hostname = host_portlist[0]
                         host_cer = self.generateDomainCerts(hostname)
                         hostnameUrl = processUrl(hostname)[0]
-                        hostDir = os.path.join(self.defaultWorkspaceDir, hostname + "/")
+                        hostDir = os.path.join(
+                            self.defaultWorkspaceDir, hostname + "/")
                         # proxy-destination server connection
                         if keep_alive:
                             if self.usehttpLibs == False:
                                 try:
-                                    destServerSslServerSocket, Conn_status = self.createDestConnection(host_portlist)
+                                    destServerSslServerSocket, Conn_status = self.createDestConnection(
+                                        host_portlist)
                                     if Conn_status == 0:
                                         usehttpLibs = False
                                     elif Conn_status == 1:
-                                        print(cyan("Initiating server connection error"))
+                                        print(
+                                            cyan("Initiating server connection error"))
                                         if self.useUrllib:
-                                            print(cyan("Resorting to => urllib3 for destination server connection"))
+                                            print(
+                                                cyan("Resorting to => urllib3 for destination server connection"))
                                         usehttpLibs = True
                                     destConnection = True
                                 except Exception as e:
                                     print(red(f"Encoutered error {e} when initiating a connection to remote server"))
                                     destConnection = False
                             elif self.usehttpLibs == True:
-                                print(cyan("Using urllib3 for destination server connection"))
+                                print(
+                                    cyan("Using urllib3 for destination server connection"))
                                 usehttpLibs = True
                                 destConnection = True
                                 destServerSslServerSocket = None
@@ -546,25 +599,30 @@ class ProxyHandler:
                             response = b"HTTP/1.1 200 Connection established\r\n\r\n"
                             browser_socket.sendall(response)
                             # upgrade the browser-proxy socket to ssl/tls
-                            browserSocketSslContext = SSL.Context(SSL.TLSv1_2_METHOD)
+                            browserSocketSslContext = SSL.Context(
+                                SSL.TLSv1_2_METHOD)
                             if self.useFileBasedCerts is False:
-                                browserSocketSslContext.use_certificate(host_cer[0])
-                                browserSocketSslContext.use_privatekey(host_cer[1])
+                                browserSocketSslContext.use_certificate(
+                                    host_cer[0])
+                                browserSocketSslContext.use_privatekey(
+                                    host_cer[1])
                             else:
-                                browserSocketSslContext.use_certificate_chain_file(host_cer)
-                            ClientSslSocket = SSL.Connection(browserSocketSslContext, browser_socket)
+                                browserSocketSslContext.use_certificate_chain_file(
+                                    host_cer)
+                            ClientSslSocket = SSL.Connection(
+                                browserSocketSslContext, browser_socket)
                             ClientSslSocket.set_accept_state()
                             print(cyan("Upgraded browser socket to support ssl"))
 
                             # open browser-proxy-destination tunnel
                             self.OpenHttpsCommTunnel(ClientSslSocket,
-                                                    hostDir,
-                                                    hostname,
-                                                    hostnameUrl,
-                                                    destServerSslServerSocket,
-                                                    usehttpLibs,
-                                                    browser_socket,
-                                                    unix=unix)
+                                                     hostDir,
+                                                     hostname,
+                                                     hostnameUrl,
+                                                     destServerSslServerSocket,
+                                                     usehttpLibs,
+                                                     browser_socket,
+                                                     unix=unix)
 
                         else:
                             response = b"HTTP/1.1 500 Connection Failed"
@@ -593,7 +651,8 @@ class ProxyHandler:
         while True:
             print(yellow("Waiting for Incoming Connections"))
             browser_socket, browser_address = self.socket.accept()
-            instanceHandlerThread = threading.Thread(target=self.HandleConnection, args=(browser_socket,))
+            instanceHandlerThread = threading.Thread(
+                target=self.HandleConnection, args=(browser_socket,))
             instanceHandlerThread.start()
             # executor.submit(self.HandleConnection, browser_socket)
             # self.HandleConnection(browser_socket)
@@ -601,10 +660,12 @@ class ProxyHandler:
 
 if __name__ == "__main__":
 
-    logging.basicConfig(level=logging.DEBUG, format="%(asctime)s -%(levelname)s - %(filename)s:%(lineno)d - %(message)s")
+    logging.basicConfig(
+        level=logging.DEBUG, format="%(asctime)s -%(levelname)s - %(filename)s:%(lineno)d - %(message)s")
 
     parser = argparse.ArgumentParser()
-    parser.add_argument("-p", "--port", help="port on which the proxy should listen")
+    parser.add_argument(
+        "-p", "--port", help="port on which the proxy should listen")
     args = parser.parse_args()
     if args.port:
         proxy = ProxyHandler(
