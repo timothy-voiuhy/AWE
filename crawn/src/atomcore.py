@@ -98,6 +98,8 @@ class MainRunner:
                  nmax_retry=5, use_http=False, requests_count=10, requests_sleep_time=1) -> None:
         if internet_check() is True:
             self.run_dir = "/media/program/01DA55CA5F28E000/MYAPPLICATIONS/AWE/AWE/crawn/"
+            if sys.platform == "win32":
+                self.run_dir  = "D:\\MYAPPLICATIONS\\AWE\\AWE\\crawn\\"
             headers = {'Accept': '*/*',
                     'Accept-Encoding': 'gzip, deflate',
                     'Accept-Language': 'en-US,en;q=0.9',
@@ -876,9 +878,9 @@ class MainRunner:
             await FetchHtmlData(queue_links)
 
         if html_index_file is not None:
-            print(f"{cyan('file provided')}:{yellow(html_index_file)}")
+            logging.info(f"{cyan('file provided')}:{yellow(html_index_file)}")
             file_path = await self.GetHtmlLinks(from_file=dirr + "/" + html_index_file)
-            print(file_path)
+            logging.info(file_path)
             with open(file_path, 'r') as w:
                 links = w.readlines()
                 w.close()

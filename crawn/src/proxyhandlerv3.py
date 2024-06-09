@@ -1,26 +1,18 @@
 from OpenSSL import SSL
-from certauth.certauth import CertificateAuthority
 from utiliities import red, cyan, yellow
 from concurrent.futures import ThreadPoolExecutor
-
-import certifi
-import requests
 import zlib
 import sys
 
 import socket
 import os
+import subprocess
 import re
 
 import gzip
 import threading
 import random
-import functools
-
 import brotli
-import httpx
-import httpx._client as httpClient
-import asyncio
 
 import threading
 from pathlib import Path
@@ -30,7 +22,11 @@ import logging
 
 import random
 import argparse
+from session import SesssionHandler, SesssionHandlerResponse
+from certauth.certauth import CertificateAuthority
 
+import certifi
+import requests
 
 def is_brotli_compressed(data):
     brotli_magic_number = b'\x1b'
@@ -179,9 +175,7 @@ class ProxyHandler:
                  verifyDstServerCerts=True,
                  save_traffic=False,
                  useFileBasedCerts=False,
-                 useHttpx=False,
-                 use_tor=False):
-        self.use_tor = use_tor
+                 useHttpx=False,):
         self.host = host
         self.port = port
         self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -232,63 +226,49 @@ class ProxyHandler:
         self.save_traffic = save_traffic
         self.error_file_count = 0
         self.useHttpx = useHttpx
-        if self.use_tor:
-            proxies = {
-                "http://": "socks5://127.0.0.1:9050",
-                "https://": "socks5://127.0.0.1:9050",
-            }
-            self.PoolManager = httpClient.Client(
-                follow_redirets=True, timeout=15, proxies=proxies)
-        else:
-            self.PoolManager = httpClient.Client(
-                follow_redirects=True, timeout=15)
-
         self.logging = True
         # default regex pattern that can match for all hostnames
         self.scope = ["."]
 
+    def constructResponsePacket(self, u_response:SesssionHandlerResponse = None):
+        body = u_response.content
+        decodedBody = body
+        # body_encoding = u_response.encoding
+        len_body = len(body)
+        status_line = f"HTTP/{str(u_response.http_version)[-3]}.{str(u_response.http_version)[-1]} {u_response.status_code} {u_response.reason_phrase}"
+        r_headers = u_response.headers
 
-    def constructResponsePacket(self, u_response: httpx.Response = None,
-                                usedRequests: bool = False):
-        if self.useHttpx or usedRequests:
-            body = u_response.content
-            decodedBody = body
-            # body_encoding = u_response.encoding
-            len_body = len(body)
-            status_line = f"HTTP/{str(u_response.http_version)[-3]}.{str(u_response.http_version)[-1]} {u_response.status_code} {u_response.reason_phrase}"
-            r_headers = u_response.headers
+        if "Transfer-Encoding" in list(r_headers.keys()) or "transfer-encoding" in list(r_headers.keys()):
+            r_headers.pop("Transfer-Encoding")
+            r_headers["Content-Length"] = str(len_body)
 
-            if "Transfer-Encoding" in list(r_headers.keys()) or "transfer-encoding" in list(r_headers.keys()):
-                r_headers.pop("Transfer-Encoding")
-                r_headers["Content-Length"] = str(len_body)
-
-            if "br" in list(r_headers.values()):
-                if not is_brotli_compressed(body):
-                    br_encodedBody = brotli.compress(body)
-                    body = br_encodedBody
-                    len_br_encodedBody = len(br_encodedBody)
-                    r_headers["Content-Length"] = str(len_br_encodedBody)
-            elif "gzip" in list(r_headers.values()):
-                if not is_gzip_compressed(body):
-                    gzip_encodedBody = gzip.compress(body)
-                    body = gzip_encodedBody
-                    len_gzip_encoded_body = len(gzip_encodedBody)
-                    r_headers["Content-Length"] = str(len_gzip_encoded_body)
-            elif "zlib" in list(r_headers.values()):
-                if not is_zlib_compressed(body):
-                    zlib_encodedBody = zlib.compress(body)
-                    body = zlib_encodedBody
-                    len_zlib_encoded_body = len(zlib_encodedBody)
-                    r_headers["Content-Length"] = str(len_zlib_encoded_body)
-            headers = ''.join(
-                [f"{key}: {value}\r\n" for key, value in r_headers.items()])
-            cookies = ''.join(
-                [f"{key}: {value};" for key, value in u_response.cookies.items()])
-            # print(f"{yellow('response cookies:')}{cookies}")
-            responsePacket = f"{status_line}\r\n{headers}"
-            if cookies:
-                responsePacket += f"Set-Cookie: {cookies}\r\n"
-        # try:
+        if "br" in list(r_headers.values()):
+            if not is_brotli_compressed(body):
+                br_encodedBody = brotli.compress(body)
+                body = br_encodedBody
+                len_br_encodedBody = len(br_encodedBody)
+                r_headers["Content-Length"] = str(len_br_encodedBody)
+        elif "gzip" in list(r_headers.values()):
+            if not is_gzip_compressed(body):
+                gzip_encodedBody = gzip.compress(body)
+                body = gzip_encodedBody
+                len_gzip_encoded_body = len(gzip_encodedBody)
+                r_headers["Content-Length"] = str(len_gzip_encoded_body)
+        elif "zlib" in list(r_headers.values()):
+            if not is_zlib_compressed(body):
+                zlib_encodedBody = zlib.compress(body)
+                body = zlib_encodedBody
+                len_zlib_encoded_body = len(zlib_encodedBody)
+                r_headers["Content-Length"] = str(len_zlib_encoded_body)
+        headers = ''.join(
+            [f"{key}: {value}\r\n" for key, value in r_headers.items()])
+        cookies = ''.join(
+            [f"{key}: {value};" for key, value in u_response.cookies.items()])
+        # print(f"{yellow('response cookies:')}{cookies}")
+        responsePacket = f"{status_line}\r\n{headers}"
+        if cookies:
+            responsePacket += f"Set-Cookie: {cookies}\r\n"
+    # try:
         responsePacket += "\r\n"
         if isinstance(body, bytes):
             responsePacketBytes = responsePacket.encode("utf-8")
@@ -300,59 +280,6 @@ class ProxyHandler:
             decodedResponsePacket = responsePacket + \
                 decodedBody.decode("utf-8")
             return responsePacket.encode(), decodedResponsePacket
-
-
-    def generateDomainCerts(self, hostname: str):
-        """generate a certificate for a specific host and sign it with the root certificate. Return the path to the certficate (.crt) file"""
-        hostname = hostname.strip()
-        if self.useFileBasedCerts is False:
-            return self.rootCA.load_cert(hostname, wildcard=True)
-        else:
-            # filename
-            return self.rootCA.cert_for_host(hostname, wildcard=True)
-
-
-    def createDestConnection(self, host_portlist):
-        """create the destination connection with the proxy, upgrade it to ssl and verify certificates"""
-        dest_server_skt = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        try:
-            dest_server_skt.connect((host_portlist[0], int(host_portlist[1])))
-            logging.info("TCP connection to destination server successfull")
-            destServerSslContext = SSL.Context(SSL.SSLv23_METHOD)
-            destServerSslServerSkt = SSL.Connection(
-                destServerSslContext, dest_server_skt)
-            destServerSslServerSkt.set_connect_state()
-            if self.verifyDstServerCerts:
-                destServerSslContext.set_verify(
-                    SSL.VERIFY_PEER | SSL.VERIFY_FAIL_IF_NO_PEER_CERT, self.verify_callback)
-            else:
-                destServerSslContext.set_verify(
-                    SSL.VERIFY_NONE, self.verify_callback)
-            destServerSslContext.load_verify_locations(
-                self.MozillaCACertsVerifyFile)
-            try:
-                destServerSslServerSkt.do_handshake()
-                logging.info(
-                    "Destination server connection setup successfully with ssl support")
-            except Exception as e:
-                logging.error(red(f"SSL HandShake failure with error :{e}"))
-            return destServerSslServerSkt, 0
-        except Exception:
-            return None, 1
-
-
-    def verify_callback(self, connection, x509, errno, depth, preverify_ok):
-        # Implement your verification logic here
-        if self.verifyDstServerCerts:
-            if preverify_ok:
-                logging.info("Certificate verification passed")
-                return True
-            else:
-                logging.error(red("Certificate verification failed"))
-                return False
-        else:
-            return True
-
 
     def ForwardClientRequest(self, request: bytes,
                               destSrvSkt: SSL.Connection = None,
@@ -399,32 +326,17 @@ class ProxyHandler:
                 requestBody = encoded_body
             logging.info(
                 yellow(f"Connecting to remote server ....... on url: {requestUrlwParams}"))
-            if self.useHttpx:
-                try:
-                    if requestBody == "":
-                        requestBody = None
-                    retries = 0
-                    while retries < 5:
-                        response = self.PoolManager.request(method=requestMethod,
-                                                            url=requestUrlwParams,
-                                                            headers=requestHeaders,
-                                                            data=requestBody,
-                                                            follow_redirects=True)
-                        if response:
-                            break
-                        else:
-                            logging.info(yellow("retrying...."))
-                        retries += 1
-                except httpx.ConnectError:
-                    logging.error(red(f"failing to resolve to url {requestUrlwParams}"))
+            if requestBody == "":
+                requestBody = None
 
-                responsePacket, decodedResponsePacket = self.constructResponsePacket(
-                    u_response=response)
+            session_handler = SesssionHandler()
+            response = session_handler.makeRequest(request_method=requestMethod,
+                                    request_url=requestUrlwParams,
+                                    request_headers= requestHeaders,
+                                    request_data=requestBody)
 
-        else:
-            destSrvSkt.sendall(request)
-            # after sending to server and getting response
-            responsePacket = destSrvSkt.recv(80000000)
+            responsePacket, decodedResponsePacket = self.constructResponsePacket(
+                u_response=response)
         return responsePacket, requestUrl, clientRequest, decodedResponsePacket
 
 
@@ -529,8 +441,7 @@ class ProxyHandler:
             requestBody,
             requestUrlwParams) = DissectClientReqPkt(initial_client_request, http=True)
         hostname = requestHeaders["Host"]
-        hostDir = os.path.join(
-            self.defaultWorkspaceDir, hostname + "/")
+        hostDir = os.path.join(self.defaultWorkspaceDir, hostname + "/")
         self.OpenHttpsCommTunnel(ClientSslSocket=None,
                                     hostDir=hostDir,
                                     hostname=hostname,
@@ -542,6 +453,15 @@ class ProxyHandler:
                                         "utf-8"),
                                     http=True,
                                     unix=unix)
+
+    def generateDomainCerts(self, hostname: str):
+        """generate a certificate for a specific host and sign it with the root certificate. Return the path to the certficate (.crt) file"""
+        hostname = hostname.strip()
+        if self.useFileBasedCerts is False:
+            return self.rootCA.load_cert(hostname, wildcard=True)
+        else:
+            # filename
+            return self.rootCA.cert_for_host(hostname, wildcard=True)
 
     def HandleProxyClientRequest(self, initial_client_request, client_socket, unix):
         host_portlist = DissectClientProxyRequests(initial_client_request)
@@ -639,8 +559,7 @@ class ProxyHandler:
         except Exception:
             return False
 
-
-    def startServerInstance(self):
+    def startServer(self):
         logging.info(yellow(f"Proxy running on {self.host}, port {self.port}"))
         while True:
             logging.info(yellow("Waiting for Incoming Connections"))
@@ -649,6 +568,11 @@ class ProxyHandler:
                 target=self.HandleConnection, args=(client_socket,))
             instanceHandlerThread.start()
 
+    def notifyThreadMonitor(self):
+        pass
+
+    def startServerInstance(self):
+        self.startServer()
 
 if __name__ == "__main__":
 
@@ -661,9 +585,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
     if args.port:
         proxy = ProxyHandler(
-            verifyDstServerCerts=False,
             UsehttpLibs=True,
-            useHttpx=True,
             save_traffic=True,
             port=int(args.port)
         )
@@ -671,7 +593,6 @@ if __name__ == "__main__":
             proxy.startServerInstance()
         except KeyboardInterrupt:
             logging.info(cyan("\nCleaning Up"))
-            proxy.PoolManager.close()
             proxy.socket.close()
     else:
         print("you ran this program with few arguments")

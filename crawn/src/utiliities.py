@@ -659,3 +659,23 @@ def isInternetAvailable():
     if len(get_working_ifaces()) == 0:
         return True
     return False
+
+def is_brotli_compressed(data):
+    brotli_magic_number = b'\x1b'
+    return data[:1] == brotli_magic_number
+
+
+def is_zlib_compressed(data):
+    zlib_magic_number = b'x\x9c'
+    return data[:2] == zlib_magic_number
+
+
+def is_gzip_compressed(data):
+    gzip_magic_number = b'\x1f\x8b'
+    return data[:2] == gzip_magic_number
+
+
+class OpenProcess(subprocess.Popen):
+    def __init__(self, process_name, shell, cwd, args):
+        super().__init__(args=args, shell=shell, cwd=cwd)
+        self.process_name = process_name

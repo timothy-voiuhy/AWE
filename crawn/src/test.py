@@ -1,9 +1,14 @@
-import os
-import subprocess
+class testClass:
+    def __init__(self) -> None:
+        self.test_prm = "timothy"
 
-
-
-try:
-    os.pidfd_open(640)
-except OSError as e :
-    print(f"found exception")
+    @property
+    def int_property(self):
+        return 6
+    
+    @property
+    def bool_propery(self):
+        return True   
+    
+example = testClass()
+print(example.__dict__)
