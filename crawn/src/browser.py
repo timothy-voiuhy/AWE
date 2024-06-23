@@ -1,15 +1,13 @@
-from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
-from utiliities import makelogger
+import logging
+from concurrent.futures import ProcessPoolExecutor
+
+import cloudscraper
+from cloudscraper.cloudflare import Cloudflare
 from selenium import webdriver
-import selenium.common.exceptions as selenium_exceptions
 from selenium.webdriver.chrome.service import Service as ChromeService
 from selenium.webdriver.firefox.service import Service as FirefoxService
-import logging
-import cloudscraper.captcha.anticaptcha as anticaptcha
-import cloudscraper.captcha as captcha
-from cloudscraper.cloudflare import Cloudflare
-from cloudscraper import CloudScraper
-import cloudscraper
+
+from utiliities import makelogger
 
 
 class Browser:

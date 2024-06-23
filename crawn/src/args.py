@@ -1,6 +1,7 @@
 import argparse
-import sys
 import os
+import sys
+
 
 def parse_args():
     parser = argparse.ArgumentParser(add_help=True, description="crawl and mirror the whole front-end including all javascript and html onto a local directory")

@@ -3,8 +3,8 @@ import re
 from pathlib import Path
 from typing import Text
 
-from jsbeautifier import beautify
 from bs4 import BeautifulSoup
+from jsbeautifier import beautify
 
 
 def replace_link(file, link, path):

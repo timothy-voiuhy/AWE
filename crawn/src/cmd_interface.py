@@ -1,9 +1,8 @@
-import sys
-from atomcore import MainRunner
 import asyncio
-from utiliities import green, yellow, red, cyan 
 import subprocess
-from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
+
+from atomcore import MainRunner
+from utiliities import green, cyan
 
 print("\n")
 print(green("Fill the main runner configuration settings"))

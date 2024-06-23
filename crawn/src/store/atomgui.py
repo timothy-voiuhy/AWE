@@ -1,23 +1,19 @@
-from typing import Optional
-from aiohttp import ThreadedResolver
-from PySide6 import QtCore, QtWidgets, QtGui, QtWebEngineWidgets
-from PySide6.QtNetwork import QNetworkProxyQuery, QNetworkProxy, QSsl, QSslCertificate, QSslConfiguration
-import subprocess
-from PySide6.QtCore import QThread
-from pathlib import Path
 import asyncio
-
-from attr import s
-from atomcore import RunMainAtomFunction
-from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 import os
-import json
 import re
+import subprocess
 import sys
-from PySide6.QtGui import QKeyEvent
-from utiliities import addHttpsScheme
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
+from pathlib import Path
+
+from PySide6 import QtCore, QtWidgets, QtGui, QtWebEngineWidgets
+from PySide6.QtCore import QThread
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QWidget
+from PySide6.QtGui import QKeyEvent
+from PySide6.QtNetwork import QNetworkProxy, QSslCertificate, QSslConfiguration
+
+from atomcore import RunMainAtomFunction
+from utiliities import addHttpsScheme
 from utiliities import (
     red,
     cyan,

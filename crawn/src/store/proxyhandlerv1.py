@@ -1,33 +1,28 @@
-from OpenSSL import SSL
-from certauth.certauth import CertificateAuthority
-from utiliities import red, cyan, yellow
-from concurrent.futures import ThreadPoolExecutor
-
-import certifi
-import requests
-import zlib
-import sys
-
-import socket
+import argparse
+import gzip
 import os
 import re
-
-import gzip
+import socket
+import sys
 import threading
+import zlib
+from concurrent.futures import ThreadPoolExecutor
+
+import brotli
+import certifi
+import requests
+import urllib3
+from OpenSSL import SSL
+from certauth.certauth import CertificateAuthority
 from websockets.client import ClientConnection
-from websockets.server import ServerConnection
 # from websockets.connection import Request as WebSktRequest
 # from websockets.connection import Response as WebSktResponse
 from websockets.datastructures import Headers as WebSktHeaders
+from websockets.server import ServerConnection
 from websockets.uri import WebSocketURI
-import functools
 
-import urllib3
-import urllib.parse as urlParser
-import brotli
-import httpx
+from utiliities import red, cyan, yellow
 
-import argparse
 
 def is_brotli_compressed(data):
     brotli_magic_number = b'\x1b'

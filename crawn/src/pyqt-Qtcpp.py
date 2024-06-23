@@ -1,7 +1,5 @@
+import json
 import re
-import functools
-import json 
-import os
 
 function_regex = "(?<!\s)def(?=\s).*\(.*\).*\:"
 class_regex = "class(?=\s) .*\:|class .*\(.*\)\:"

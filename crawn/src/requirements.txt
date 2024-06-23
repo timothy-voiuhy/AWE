@@ -1,0 +1,17 @@
+PySide6~=6.6.1
+Brotli~=1.1.0
+certifi~=2024.2.2
+requests~=2.31.0
+urllib3~=2.2.0
+certauth~=1.3.0
+jsbeautifier~=1.14.11
+cloudscraper~=1.2.71
+selenium~=4.17.2
+httpx~=0.27.0
+aiohttp~=3.9.3
+pillow~=10.2.0
+bs4~=0.0.2
+beautifulsoup4~=4.12.3
+colorlog~=6.8.2
+phply~=1.2.6
+termcolor~=2.4.0

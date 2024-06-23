@@ -1,30 +1,35 @@
-import httpx
-import httpx._client as httpClient
-import socket
 import json
 import logging
-from utiliities import (yellow, cyan, red,
-                        is_brotli_compressed, is_gzip_compressed, is_zlib_compressed)
-from urllib import parse as UrlParser
-import threading
 import os
-import requests
-import certifi
-from certauth.certauth import CertificateAuthority
+import socket
 import sys
+import threading
+from urllib import parse as url_parser
+
+import certifi
+import httpx
+import httpx._client as http_client
+import requests
 from OpenSSL import SSL
+from certauth.certauth import CertificateAuthority
+
+from utiliities import (yellow, cyan, red)
+
 
 class SesssionHandlerResponse(httpx.Response):
     """response(http.Response) is encoded using a json decoder into a str that can be sent to a socket.
     The response_str is encoded into a response-like object which is the class itself
     """
-    def __init__(self, response_str=None) -> None:
+    def __init__(self, status_code: int, response_str=None) -> None:
+        super().__init__(status_code)
         self.response_str = response_str
 
     def decodeResponse(self):
         response_dict = json.loads(self.response_str)
         # assign the keys to the respective http.Response properties
-        self.__dict__ == response_dict
+        # set the __dict__ attribute of the httpx.Response object hence assigning
+        # the keys to the respective http.Response properties.
+        self.__dict__ = response_dict
 
 class SesssionHandler():
     def __init__(self, host_address:str= None,
@@ -49,10 +54,10 @@ class SesssionHandler():
                 "http://": "socks5://127.0.0.1:9050",
                 "https://": "socks5://127.0.0.1:9050",
             }
-            self.PoolManager = httpClient.Client(
+            self.PoolManager = http_client.Client(
                 follow_redirets=True, timeout=15, proxies=proxies)
         else:
-            self.PoolManager = httpClient.Client(
+            self.PoolManager = http_client.Client(
                 follow_redirects=True, timeout=15)
         self.downloadMozillaCAs = downloadMozillaCAs
         if self.downloadMozillaCAs:
@@ -158,7 +163,7 @@ class SesssionHandler():
 
     @staticmethod
     def joinUrlwParams(self, url:str, params:dict):
-        params_str = UrlParser.urlencode(params)
+        params_str = url_parser.urlencode(params)
         return url+"?"+params_str
 
     def closeTunnel(self, client_socket, closeClientSocket=True):

@@ -1,49 +1,41 @@
-from utiliities import (
-    red, 
-    green, 
-    cyan, 
-    yellow, 
-    makelogger, 
-    rm_same, 
-    parse_php_code, 
-    NoneResException, 
-    RxnLinkFinder, 
-    isInternetAvailable,
-    internet_check
-)
-from browser import Browser, BrHandler
-from args import parse_args
-
-import selenium.common.exceptions as sel_exceptions
+import asyncio
+import json
+import logging
+import os
+import queue
+import random
+import sys
+import time
+import tracemalloc
+import urllib.parse as url_parser
 from concurrent.futures import ProcessPoolExecutor
-from bs4 import BeautifulSoup
-import requests
+from io import BytesIO
+from pathlib import Path
 
 import aiohttp
-import json
-import re
-import queue
-
-import tracemalloc
-from typing import Text
-import time
-import asyncio
-
-import sys
-from pathlib import Path
-from jsbeautifier import beautify
 import css_html_js_minify
-
-import os
-import random
+import requests
+import selenium.common.exceptions as sel_exceptions
 from PIL import Image
-from io import BytesIO
+from bs4 import BeautifulSoup
+from jsbeautifier import beautify
 
-import logging
-import atexit
-import urllib.parse as url_parser
-import subprocess
-from fileutils import ProcessJsFile, w_data_to_file, DetectXml, extract_html_forms, extract_html_inputs, replace_link
+from args import parse_args
+from browser import Browser, BrHandler
+from fileutils import w_data_to_file, DetectXml, extract_html_forms, extract_html_inputs, replace_link
+from utiliities import (
+    red,
+    green,
+    cyan,
+    yellow,
+    makelogger,
+    rm_same,
+    parse_php_code,
+    NoneResException,
+    RxnLinkFinder,
+    internet_check
+)
+
 
 # from slimit import ast
 # from slimit.parser import Parser

@@ -1,32 +1,25 @@
-from OpenSSL import SSL
-from utiliities import red, cyan, yellow
-from concurrent.futures import ThreadPoolExecutor
-import zlib
-import sys
-
-import socket
-import os
-import subprocess
-import re
-
-import gzip
-import threading
-import random
-import brotli
-
-import threading
-from pathlib import Path
-import json
-from urllib import parse as urlparser
-import logging
-
-import random
 import argparse
-from session import SesssionHandler, SesssionHandlerResponse
-from certauth.certauth import CertificateAuthority
+import gzip
+import json
+import logging
+import os
+import random
+import re
+import socket
+import sys
+import threading
+import zlib
+from urllib import parse as urlparser
 
+import brotli
 import certifi
 import requests
+from OpenSSL import SSL
+from certauth.certauth import CertificateAuthority
+
+from session import SesssionHandler, SesssionHandlerResponse
+from utiliities import red, cyan, yellow
+
 
 def is_brotli_compressed(data):
     brotli_magic_number = b'\x1b'

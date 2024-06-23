@@ -1,35 +1,25 @@
-from OpenSSL import SSL
-from certauth.certauth import CertificateAuthority
-from utiliities import red, cyan, yellow
-from concurrent.futures import ThreadPoolExecutor
-
-import certifi
-import requests
-import zlib
-import sys
-
-import socket
-import os
-import re
-
+import argparse
 import gzip
-import threading
+import json
+import logging
+import os
 import random
-import functools
+import re
+import socket
+import sys
+import threading
+import zlib
+from urllib import parse as urlparser
 
 import brotli
+import certifi
 import httpx
 import httpx._client as httpClient
-import asyncio
+import requests
+from OpenSSL import SSL
+from certauth.certauth import CertificateAuthority
 
-import threading
-from pathlib import Path
-import json
-from urllib import parse as urlparser
-import logging
-
-import random
-import argparse
+from utiliities import red, cyan, yellow
 
 
 def is_brotli_compressed(data):

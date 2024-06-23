@@ -1,7 +1,10 @@
+import socket
+
 import requests
 import scapy.all as scapy
-from utiliities import red, green, yellow,cyan
-import socket
+
+from utiliities import red, yellow, cyan
+
 
 class Network():
     def __init__(self,main_domain=""):

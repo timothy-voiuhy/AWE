@@ -1,19 +1,16 @@
-from termcolor import colored
-import requests
-import timeit
-import logging
 import json
-import re
-from colorlog import ColoredFormatter
+import logging
 import os
-from phply import phplex, phpast
-from pathlib import Path
-from scapy.all import get_if_addr
-from scapy.interfaces import get_working_ifaces
-
+import re
 # from utils import is_mac, is_linux, is_windows
 import subprocess
-from concurrent.futures.process import ProcessPoolExecutor
+from pathlib import Path
+
+import requests
+from colorlog import ColoredFormatter
+from phply import phplex, phpast
+from scapy.interfaces import get_working_ifaces
+from termcolor import colored
 
 
 # def check_system():
@@ -676,6 +673,6 @@ def is_gzip_compressed(data):
 
 
 class OpenProcess(subprocess.Popen):
-    def __init__(self, process_name, shell, cwd, args):
+    def __init__(self, process_name, shell, cwd=None, args=None):
         super().__init__(args=args, shell=shell, cwd=cwd)
         self.process_name = process_name
