@@ -6,38 +6,39 @@ from pathlib import Path
 from PySide6.QtCore import QObject, Signal, Qt, QModelIndex, Slot, QThread
 from PySide6.QtGui import QStandardItem, QStandardItemModel
 from PySide6.QtWidgets import QMainWindow, QMessageBox, QDockWidget, QWidget, QVBoxLayout, QFormLayout, QCheckBox, \
-    QFrame, QLabel, QHBoxLayout, QPushButton, QTreeView
+    QFrame, QLabel, QHBoxLayout, QPushButton, QTreeView, QScrollArea, QTextBrowser, QSplitter, QTableWidget, QTableView
 
 from gui.functionUtils import atomGuiGetSubdomains, atomGuiGetUrls
-from gui.guiUtilities import MessageBox
-from utiliities import red, rm_same, yellow
+from gui.guiUtilities import MessageBox, HoverButton
+from utiliities import red, rm_same, yellow, runWhoisOnTarget
 
 
 class UrlGetter(QThread, QObject):
     urlGetterFinished = Signal()
-    def __init__(self, subdomainUrlDict: dict,
-                 workingDir,
-                 parent = None,
-                 dict_parent= None,
-                 top_parent = None,
-                 mainWindow = None):
+
+    def __init__(self, subdomain_url_dict: dict,
+                 working_dir,
+                 parent=None,
+                 dict_parent=None,
+                 top_parent=None,
+                 main_window=None):
         super().__init__()
         self.setObjectName("UrlGetter")
-        self.mainWindow = mainWindow
+        self.mainWindow = main_window
         self.topParent = top_parent
-        self.subdomainUrlDict = subdomainUrlDict
-        self.workingDir = workingDir
+        self.subdomainUrlDict = subdomain_url_dict
+        self.workingDir = working_dir
         self.subdomainsUrlDict_ = {}
-        self.parent  = parent
+        self.parent = parent
         self.dictParent = dict_parent
         self.receivedSignals = 0
-        self.subdomainsUrlDict_file = os.path.join(workingDir, "subdomainsUrlDict.json")
+        self.subdomainsUrlDict_file = os.path.join(working_dir, "subdomainsUrlDict.json")
         self.topParent.socketIpc.processFinishedExecution.connect(self.processFinishedExecution)
         self.mainWindow.threads.append(self)
         self.setTerminationEnabled(True)
         self.topParent.ThreadStarted.emit(self.mainWindow, self.objectName())
         self.destroyed.connect(self.closeThread)
-    
+
     def closeThread(self):
         self.topParent.socketIpc.processFinishedExecution.emit(self.mainWindow, self.objectName())
 
@@ -53,8 +54,8 @@ class UrlGetter(QThread, QObject):
             subdomain = subdomain.replace("\n", "")
             logging.info(f"running atomGuiGetUrls on : {subdomain}, Number: {i}")
             result = atomGuiGetUrls(subdomain, self.workingDir,
-                                    parent= self.parent,
-                                    top_parent = self.topParent,
+                                    parent=self.parent,
+                                    top_parent=self.topParent,
                                     mainWindow=self.mainWindow)
             if type(result) == tuple:
                 result = list(result)
@@ -72,7 +73,7 @@ class UrlGetter(QThread, QObject):
             i += 1
             if os.cpu_count() <= 4:
                 self.sleep(5)
-            elif os.cpu_count() <= 8:
+            elif 8 >= os.cpu_count() > 4:
                 self.sleep(2)
         self.urlGetterFinished.emit()
         logging.info(f"Worked on {len(self.subdomainUrlDict.keys())} subdomains")
@@ -86,26 +87,24 @@ class UrlGetter(QThread, QObject):
         self.topParent.socketIpc.processFinishedExecution.emit(self.mainWindow, self.objectName())
 
 
-
 class LeftDock(QObject):
     openLinkInBrw = Signal(str)
 
-    def __init__(self, mainWindow: QMainWindow,
-                 projectDirPath,
+    def __init__(self, main_window,
+                 project_dir_path,
                  parent=None,
                  top_parent=None,
                  ) -> None:
         super().__init__()
+        self.whois_text_results = None
         self.topParent = top_parent
         self.urlGetterRunning = False
-        self.main_window = mainWindow
-        self.projectDirPath = projectDirPath
+        self.main_window = main_window
+        self.projectDirPath = project_dir_path
         self.SubdomainUrlDict = {}
         self.SubdomainUrlDict_file = os.path.join(self.projectDirPath, "subdomainsUrlDict.json")
         self.parent = parent
         self.topParent.socketIpc.processFinishedExecution.connect(self.updateModel)
-
-    def InitializeLeftDock(self):
 
         def showSbdUrlTree():
             toolNames = ["amass", "sublist3r", "subdomainizer"]
@@ -181,25 +180,48 @@ class LeftDock(QObject):
             self.leftDockArea.LeftDockWidgetArea, self.leftDock
         )
         # layout
-        self.leftDockLayout = QVBoxLayout()
-        self.leftDockWidget.setLayout(self.leftDockLayout)
-        # hide or show gen info
+        self.left_dock_layout = QVBoxLayout()
+        self.leftDockWidget.setLayout(self.left_dock_layout)
+
+        self.left_dock_splitter = QSplitter()
+        self.left_dock_layout.addWidget(self.left_dock_splitter)
+        # self.left_dock_splitter.
+        self.left_dock_splitter.setLayoutDirection(Qt.LayoutDirection.LeftToRight)
+
+        self.left_dock_up_widget = QWidget()
+        # self.left_dock_up_widget.setBaseSize(100, 600)
+        self.left_dock_splitter.addWidget(self.left_dock_up_widget)
+        self.left_dock_up_widget_layout = QVBoxLayout()
+        self.left_dock_up_widget.setLayout(self.left_dock_up_widget_layout)
+
+        # general information scroll area
+        self.gen_info_scroll_area = QScrollArea()
+        self.left_dock_up_widget_layout.addWidget(self.gen_info_scroll_area)
+        self.gen_info_scroll_bar_widget = QWidget()
+        self.gen_info_scroll_bar_wid_layout = QVBoxLayout()
+        self.gen_info_scroll_bar_widget.setLayout(self.gen_info_scroll_bar_wid_layout)
+        self.gen_info_scroll_area.setWidget(self.gen_info_scroll_bar_widget)
+        self.gen_info_scroll_area.setWidgetResizable(True)
+
+        # hide or show gen info checkbox
         self.infoshowLayout = QFormLayout()
         self.infoShowCheckBox = QCheckBox()
         self.infoShowCheckBox.setChecked(True)
         self.infoShowCheckBox.stateChanged.connect(self.hideGenInfo)
         self.infoshowLayout.addRow("hide info", self.infoShowCheckBox)
-        self.leftDockLayout.addLayout(self.infoshowLayout)
-        # general information layout
-        self.generalInformationLayout = QFormLayout()
-        self.generalInformationFrame = QFrame()
-        self.generalInformationFrame.setLayout(self.generalInformationLayout)
-        self.generalInformationFrame.setHidden(True)
-        self.leftDockLayout.addWidget(self.generalInformationFrame)
+        self.gen_info_scroll_bar_wid_layout.addLayout(self.infoshowLayout)
+
+        # general information frame and layout
+        self.general_information_frame = QFrame()
+        self.gen_info_scroll_bar_wid_layout.addWidget(self.general_information_frame)
+        self.general_information_layout = QFormLayout()
+        self.general_information_frame.setLayout(self.general_information_layout)
+        self.general_information_frame.setHidden(True)
+
         # rows (static information)
-        self.urlTargetName = QLabel("URL: ")
-        self.urlName = QLabel("put here targe name")
-        self.generalInformationLayout.addRow(self.urlTargetName, self.urlName)
+        self.urlTargetName = QLabel("main server: ")
+        self.urlName = QLabel(self.main_window.main_server_name)
+        self.general_information_layout.addRow(self.urlTargetName, self.urlName)
         self.numberOfSubdomains = QLabel("nSubdomains")
         self.nSubd = QLabel("0")
         self.amassSdCount = QLabel(" =>Amass:")
@@ -208,20 +230,56 @@ class LeftDock(QObject):
         self.subdomainizerSdCountLabel = QLabel("0")
         self.sublist3rSdCount = QLabel(" =>sublist3r:")
         self.sublist3rSdCountLabel = QLabel("0")
-        self.generalInformationLayout.addRow(self.numberOfSubdomains, self.nSubd)
+        self.general_information_layout.addRow(self.numberOfSubdomains, self.nSubd)
         self.numberOfUrls = QLabel("nUrls")
         self.nUrls = QLabel("0")
-        self.generalInformationLayout.addRow(self.amassSdCount, self.amassSdCountLabel)
-        self.generalInformationLayout.addRow(
+        self.general_information_layout.addRow(self.amassSdCount, self.amassSdCountLabel)
+        self.general_information_layout.addRow(
             self.subdomainizerSdCount, self.subdomainizerSdCountLabel
         )
-        self.generalInformationLayout.addRow(
+        self.general_information_layout.addRow(
             self.sublist3rSdCount, self.sublist3rSdCountLabel
         )
-        self.generalInformationLayout.addRow(self.numberOfUrls, self.nUrls)
+        self.general_information_layout.addRow(self.numberOfUrls, self.nUrls)
+
+        # whois
+        self.whois_label = QLabel()
+        self.whois_label.setText("<b>whois results<b/>")
+        self.gen_info_scroll_bar_wid_layout.addWidget(self.whois_label, alignment=Qt.AlignLeft)
+        self.whois_frame = QFrame()
+        self.whois_frame.setMaximumWidth(800)
+        self.whois_frame_layout = QVBoxLayout()
+        self.whois_frame.setLayout(self.whois_frame_layout)
+        self.run_whois_button = HoverButton("run whois", "run the whois tool on the target")
+        self.run_whois_button.clicked.connect(self.run_whois)
+        self.whois_frame_layout.addWidget(self.run_whois_button, alignment=Qt.AlignLeft)
+        self.whois_text_widget = QTextBrowser()
+        # self.whois_text_widget.setFixedWidth(800)
+        self.whois_text_widget.setMaximumWidth(800)
+        self.whois_text_widget.setReadOnly(True)
+        self.whois_frame_layout.addWidget(self.whois_text_widget)
+        self.gen_info_scroll_bar_wid_layout.addWidget(self.whois_frame, alignment=Qt.AlignLeft)
+
+        # location
+        self.location_label = QLabel()
+        self.location_label.setText("<b>server locations</b>")
+        self.gen_info_scroll_bar_wid_layout.addWidget(self.location_label)
+
+        # ip:server_name:name_record:geo_location => table
+        self.location_table = QTableWidget()
+        self.gen_info_scroll_bar_wid_layout.addWidget(self.location_table)
+        self.draw_location_table()
+
+        # dns severs
+
         # dynamic information
+        self.left_dock_down_widget = QWidget()
+        self.left_dock_splitter.addWidget(self.left_dock_down_widget)
+        self.left_dock_down_widget_layout = QVBoxLayout()
+        self.left_dock_down_widget.setLayout(self.left_dock_down_widget_layout)
+
         self.USlayout = QHBoxLayout()
-        self.leftDockLayout.addLayout(self.USlayout)
+        self.left_dock_down_widget_layout.addLayout(self.USlayout)
         # show subdomains button
         self.subdomainsButton = QPushButton("SubdUrlTree")
         self.subdomainsButton.clicked.connect(showSbdUrlTree)
@@ -243,14 +301,25 @@ class LeftDock(QObject):
         self.subdomainsTreeView.setAnimated(True)
         self.subdomainsTreeView.setUniformRowHeights(True)
         self.subdomainsTreeView.setEditTriggers(QTreeView.NoEditTriggers)
-        self.leftDockLayout.addWidget(self.subdomainsTreeView)
+        self.left_dock_down_widget_layout.addWidget(self.subdomainsTreeView)
+
+    def InitializeLeftDock(self):
         return self.leftDock
+
+    def draw_location_table(self):
+        self.location_table.setColumnCount(4)
+        # self.location_table.colum
+        # self.location_table.setRowCount()
+
+    def run_whois(self):
+        self.whois_text_results = runWhoisOnTarget(self.main_window.main_server_name, self.projectDirPath)
+        self.whois_text_widget.setText(self.whois_text_results.decode("utf-8"))
 
     def hideGenInfo(self):
         if self.infoShowCheckBox.isChecked():
-            self.generalInformationFrame.setHidden(True)
+            self.general_information_frame.setHidden(True)
         else:
-            self.generalInformationFrame.setHidden(False)
+            self.general_information_frame.setHidden(False)
 
     @Slot()
     def UrlsScan(self):
@@ -268,7 +337,7 @@ class LeftDock(QObject):
                                             parent=self.parent,
                                             dict_parent=self,
                                             top_parent=self.topParent,
-                                            mainWindow=self.main_window)
+                                            main_window=self.main_window)
                 self.url_getter.urlGetterFinished.connect(self.updateModel)
                 self.url_getter.start()
             else:

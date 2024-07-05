@@ -13,13 +13,15 @@ from gui.testtargetwindow import TestTargetWindow
 
 
 class TargetWindow(QtWidgets.QMainWindow):
-    def __init__(self, projectDirPath: str, proxy_port, topParent, index):
+    def __init__(self, project_dir_path: str, proxy_port, top_parent, index):
         super().__init__()
+        self.main_server_name = None
         self.projectIndex = index
-        self.topParent = topParent
+        self.topParent = top_parent
         self.rootCACertificate = None
         self.current_tab_index = None
-        self.projectDirPath = projectDirPath
+        self.projectDirPath = project_dir_path
+        self.getMainSeverName()
         self.threads = []
         self.setObjectName(self.projectDirPath)
         # Docks
@@ -28,7 +30,8 @@ class TargetWindow(QtWidgets.QMainWindow):
         self.LowerDock.setVisible(False)
         rightDock = RightDock(self, self.projectDirPath)
         self.RightDock = rightDock.InitializeDock()
-        leftdock = LeftDock(self, self.projectDirPath, parent = self, top_parent = self.topParent)
+        self.RightDock.setVisible(False)
+        leftdock = LeftDock(self, self.projectDirPath, parent=self, top_parent=self.topParent)
         leftdock.openLinkInBrw.connect(self.openNewBrowserTab)
         self.LeftDock = leftdock.InitializeLeftDock()
 
@@ -85,8 +88,12 @@ class TargetWindow(QtWidgets.QMainWindow):
         self.setWindowTitle("atom")
 
         self.centralWidgetLayout.addStretch()
-        self.proxy_port  = proxy_port
+        self.proxy_port = proxy_port
         self.topParent.newProjectCreated.emit(self)
+
+    def getMainSeverName(self):
+        if not self.projectDirPath.endswith("/"):
+            self.main_server_name = self.projectDirPath.split("/")[-1]
 
     def closeEvent(self, event: QtGui.QCloseEvent) -> None:
         self.topParent.projectClosed.emit(self, self.projectIndex)

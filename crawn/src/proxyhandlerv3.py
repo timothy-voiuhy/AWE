@@ -9,6 +9,7 @@ import socket
 import sys
 import threading
 import zlib
+from concurrent.futures import ThreadPoolExecutor
 from urllib import parse as urlparser
 
 import brotli
@@ -17,7 +18,7 @@ import requests
 from OpenSSL import SSL
 from certauth.certauth import CertificateAuthority
 
-from session import SesssionHandler, SesssionHandlerResponse
+from session import SessionHandler, SesssionHandlerResponse
 from utiliities import red, cyan, yellow
 
 
@@ -114,7 +115,6 @@ def DissectClientReqPkt(packet: str, http: bool = None):
 
 
 def writeLinkContentToFIle(main_dir, link: str, data, hostname):
-
     link_components = urlparser.urlparse(link)
     # the netlock + path,  this already has file name if it does not end with "/"
     relative_path = link_components[1] + link_components[2]
@@ -127,7 +127,7 @@ def writeLinkContentToFIle(main_dir, link: str, data, hostname):
         if not main_dir.endswith("/"):
             file_path = main_dir + "/" + relative_path
         else:
-            file_path = main_dir+relative_path
+            file_path = main_dir + relative_path
     dir_path, file_name = os.path.split(file_path)
     try:
         if not os.path.exists(path=file_path):
@@ -168,7 +168,7 @@ class ProxyHandler:
                  verifyDstServerCerts=True,
                  save_traffic=False,
                  useFileBasedCerts=False,
-                 useHttpx=False,):
+                 useHttpx=False, ):
         self.host = host
         self.port = port
         self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -223,7 +223,7 @@ class ProxyHandler:
         # default regex pattern that can match for all hostnames
         self.scope = ["."]
 
-    def constructResponsePacket(self, u_response:SesssionHandlerResponse = None):
+    def constructResponsePacket(self, u_response: SesssionHandlerResponse = None):
         body = u_response.content
         decodedBody = body
         # body_encoding = u_response.encoding
@@ -261,7 +261,7 @@ class ProxyHandler:
         responsePacket = f"{status_line}\r\n{headers}"
         if cookies:
             responsePacket += f"Set-Cookie: {cookies}\r\n"
-    # try:
+        # try:
         responsePacket += "\r\n"
         if isinstance(body, bytes):
             responsePacketBytes = responsePacket.encode("utf-8")
@@ -271,16 +271,22 @@ class ProxyHandler:
         elif isinstance(body, str):
             responsePacket += body
             decodedResponsePacket = responsePacket + \
-                decodedBody.decode("utf-8")
+                                    decodedBody.decode("utf-8")
             return responsePacket.encode(), decodedResponsePacket
 
     def ForwardClientRequest(self, request: bytes,
-                              destSrvSkt: SSL.Connection = None,
-                              usehttpLibs=False,
-                              http: bool = False
-                              ):
+                             destSrvSkt: SSL.Connection = None,
+                             usehttp_libs=False,
+                             http: bool = False
+                             ):
         headers_end = request.find(b"\r\n\r\n")
         headers = request[:headers_end]
+        headers_str = headers.decode("utf-8")
+        headers_list = headers_str.split("\r\n")[1:]
+        headers_dict = {}
+        for header in headers_list:
+            key, value = header.split(":")
+            headers_dict[key] = value
         # handle possible websocket comms
         if b'Upgrade: websocket' in headers or b'upgrade: websocket' in headers:
             websocket_key = headers_dict.get("Sec-WebSocket-Key")
@@ -314,36 +320,33 @@ class ProxyHandler:
             self.error_file_count += 1
         (requestMethod, requestUrl, requestHeaders, requestParams, requestBody,
          requestUrlwParams) = DissectClientReqPkt(clientRequest, http)
-        if usehttpLibs:
+        if usehttp_libs:
             if bodyEncoding:
                 requestBody = encoded_body
             logging.info(
-                yellow(f"Connecting to remote server ....... on url: {requestUrlwParams}"))
+                f"Connecting to remote server ....... on url: {requestUrlwParams}")
             if requestBody == "":
                 requestBody = None
 
-            session_handler = SesssionHandler()
+            session_handler = SessionHandler()
             response = session_handler.makeRequest(request_method=requestMethod,
-                                    request_url=requestUrlwParams,
-                                    request_headers= requestHeaders,
-                                    request_data=requestBody)
+                                                   request_url=requestUrlwParams,
+                                                   request_headers=requestHeaders,
+                                                   request_data=requestBody)
 
             responsePacket, decodedResponsePacket = self.constructResponsePacket(
                 u_response=response)
         return responsePacket, requestUrl, clientRequest, decodedResponsePacket
 
-
     def closeTunnel(self, client_socket, closeClientSocket=True):
         if closeClientSocket:
             client_socket.close()
-
 
     def isRequest(self, request: bytes):
         if b'Accept-Encoding:' in request and b'Accept:' in request:
             return True
         else:
             return False
-
 
     def createReqResData(self, dec_clientRequest: str, dec_clientResponse: str | bytes):
         if isinstance(dec_clientResponse, bytes):
@@ -354,25 +357,24 @@ class ProxyHandler:
             req_res_data = dec_clientRequest + "\nRESPONSE\n" + dec_clientResponse
             return req_res_data.encode("utf-8")
 
-
-    def OpenHttpsCommTunnel(self, ClientSslSocket: SSL.Connection,
-                            hostDir,
+    def OpenHttpsCommTunnel(self, client_ssl_socket: SSL.Connection,
+                            host_dir,
                             hostname,
-                            hostnameUrl,
-                            destServerSslServerSocket: SSL.Connection,
-                            usehttpLibs: bool,
+                            hostname_url,
+                            dest_server_ssl_server_socket: SSL.Connection,
+                            usehttp_libs: bool,
                             client_socket: socket.socket,
                             RequestPacket: bytes = None,
                             http: bool = False,
                             unix=False):
         try:
             if RequestPacket is None:
-                RequestPacket = ClientSslSocket.recv(40960)
+                RequestPacket = client_ssl_socket.recv(40960)
 
             ResponsePacket, requestUrl, dec_clientRequest, dec_clientResponse = self.ForwardClientRequest(
                 RequestPacket,
-                destServerSslServerSocket,
-                usehttpLibs=usehttpLibs,
+                dest_server_ssl_server_socket,
+                usehttp_libs=usehttp_libs,
                 http=http)
             if self.save_traffic:
                 # remember in the gui the scope are regex patterns
@@ -384,10 +386,10 @@ class ProxyHandler:
                                 req_res_data = self.createReqResData(
                                     dec_clientRequest, dec_clientResponse)
                                 writeLinkContentToFIle(
-                                    hostDir, requestUrl, req_res_data, hostname)
+                                    host_dir, requestUrl, req_res_data, hostname)
             try:
                 # replace with sendall during debugging
-                writtenBytes = ClientSslSocket.sendall(ResponsePacket)
+                writtenBytes = client_ssl_socket.sendall(ResponsePacket)
             except AttributeError:
                 writtenBytes = client_socket.sendall(dec_clientResponse)
             # logging.info(f"{yellow('Bytes written to client socket')}\n\t{writtenBytes}")
@@ -398,7 +400,6 @@ class ProxyHandler:
         except SSL.Error as e:
             logging.error(f"{red('Client failed to accept certificates')}\n\t{yellow('Error:')}{red(e)}")
             self.closeTunnel(client_socket)
-
 
     def HandleProxyCommands(self, initial_client_request):
         command_dict = json.loads(initial_client_request)
@@ -426,26 +427,26 @@ class ProxyHandler:
                     logging.error(red(f"Failed to enable logging with error {e}"))
 
     def HandleValidClientRequest(self, initial_client_request, client_socket, unix):
-        logging.info(yellow("Received valid request as initial client request"))
+        logging.info("Received valid request as initial client request")
         (requestMethod,
-            requestUrl,
-            requestHeaders,
-            requestParams,
-            requestBody,
-            requestUrlwParams) = DissectClientReqPkt(initial_client_request, http=True)
+         requestUrl,
+         requestHeaders,
+         requestParams,
+         requestBody,
+         requestUrlwParams) = DissectClientReqPkt(initial_client_request, http=True)
         hostname = requestHeaders["Host"]
         hostDir = os.path.join(self.defaultWorkspaceDir, hostname + "/")
-        self.OpenHttpsCommTunnel(ClientSslSocket=None,
-                                    hostDir=hostDir,
-                                    hostname=hostname,
-                                    hostnameUrl=requestUrl,
-                                    destServerSslServerSocket=None,
-                                    usehttpLibs=self.usehttpLibs,
-                                    client_socket=client_socket,
-                                    RequestPacket=initial_client_request.encode(
-                                        "utf-8"),
-                                    http=True,
-                                    unix=unix)
+        self.OpenHttpsCommTunnel(client_ssl_socket=None,
+                                 host_dir=hostDir,
+                                 hostname=hostname,
+                                 hostname_url=requestUrl,
+                                 dest_server_ssl_server_socket=None,
+                                 usehttp_libs=self.usehttpLibs,
+                                 client_socket=client_socket,
+                                 RequestPacket=initial_client_request.encode(
+                                     "utf-8"),
+                                 http=True,
+                                 unix=unix)
 
     def generateDomainCerts(self, hostname: str):
         """generate a certificate for a specific host and sign it with the root certificate. Return the path to the certficate (.crt) file"""
@@ -509,13 +510,13 @@ class ProxyHandler:
 
                 # open client-proxy-destination tunnel
                 self.OpenHttpsCommTunnel(ClientSslSocket,
-                                            hostDir,
-                                            hostname,
-                                            hostnameUrl,
-                                            destServerSslServerSocket,
-                                            usehttpLibs,
-                                            client_socket,
-                                            unix=unix)
+                                         hostDir,
+                                         hostname,
+                                         hostnameUrl,
+                                         destServerSslServerSocket,
+                                         usehttpLibs,
+                                         client_socket,
+                                         unix=unix)
 
             else:
                 response = b"HTTP/1.1 500 Connection Failed"
@@ -526,22 +527,21 @@ class ProxyHandler:
             logging.error(red("Initial Client Request is Invalid"))
 
     def HandleConnection(self, client_socket: socket.socket, unix=True):
-        try:
-            logging.info(cyan("Waiting for initial client request\n"))
-            initial_client_request = client_socket.recv(
-                160000).decode("utf-8")
-            if self.is_proxyCommand(initial_client_request):
-                self.HandleProxyCommands(initial_client_request)
-            elif initial_client_request != "":
-                if self.isRequest(initial_client_request.encode("utf-8")):
-                    self.HandleValidClientRequest(initial_client_request, client_socket, unix)
-                else:
-                    self.HandleProxyClientRequest(initial_client_request, client_socket, unix)
+        # try:
+        logging.info("Waiting for initial client request\n")
+        initial_client_request = client_socket.recv(
+            160000).decode("utf-8")
+        if self.is_proxyCommand(initial_client_request):
+            self.HandleProxyCommands(initial_client_request)
+        elif initial_client_request != "":
+            if self.isRequest(initial_client_request.encode("utf-8")):
+                self.HandleValidClientRequest(initial_client_request, client_socket, unix)
             else:
-                logging.error(red("Initial Client Request is Invalid"))
-        except Exception as error:
-            logging.error(red(f"Encountered error : {error} while handling connection"))
-
+                self.HandleProxyClientRequest(initial_client_request, client_socket, unix)
+        else:
+            logging.error(red("Initial Client Request is Invalid"))
+        # except Exception as error:
+        #     logging.error(f"Encountered error : {error} while handling connection")
 
     def is_proxyCommand(self, initial_client_req):
         try:
@@ -553,19 +553,19 @@ class ProxyHandler:
             return False
 
     def startServer(self):
-        logging.info(yellow(f"Proxy running on {self.host}, port {self.port}"))
-        while True:
-            logging.info(yellow("Waiting for Incoming Connections"))
-            client_socket, client_address = self.socket.accept()
-            instanceHandlerThread = threading.Thread(
-                target=self.HandleConnection, args=(client_socket,))
-            instanceHandlerThread.start()
+        logging.info(f"Proxy running on {self.host}, port {self.port}")
+        with ThreadPoolExecutor(max_workers=3084) as executor:
+            while True:
+                logging.info("Waiting for Incoming Connections")
+                client_socket, client_address = self.socket.accept()
+                executor.submit(self.HandleConnection, client_socket)
 
     def notifyThreadMonitor(self):
         pass
 
     def startServerInstance(self):
         self.startServer()
+
 
 if __name__ == "__main__":
 

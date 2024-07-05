@@ -9,6 +9,7 @@ import re
 import socket
 import sys
 import time
+from os.path import isfile
 from pathlib import Path
 
 from PySide6 import QtCore, QtGui
@@ -95,10 +96,10 @@ class SocketIPC(QThread, QtCore.QObject):
         if self.create_client:
             self.client = socket.create_connection(address=("127.0.0.1", self.server_port))
 
-    def sendFinishedMessage(self, processObjectName: str):
-        if processObjectName == "atomRunner":
+    def sendFinishedMessage(self, process_object_name: str):
+        if process_object_name == "atomRunner":
             message = "atomRunner"
-        elif processObjectName == "getAllUrlsRunner":
+        elif process_object_name == "getAllUrlsRunner":
             message = "getAllUrlsRunner"
         self.client.send(message)
 
@@ -752,7 +753,7 @@ class SiteMapWindow(QMainWindow):
             self.guiProxyClient = GuiProxyClient(request, is_command=True, proxy_port=self.parent.proxy_port)
             self.guiProxyClient.start()
         except ConnectionAbortedError or ConnectionResetError:
-            logging.warn("Connection error in socket")
+            logging.warning("Connection error in socket")
             pass
 
     def readReqResData(self, index: QtCore.QModelIndex):
@@ -791,7 +792,7 @@ class SiteMapWindow(QMainWindow):
                     break
             if file_obtained:
                 break
-        if file_obtained:
+        if file_obtained and isfile(clicked_file_path):
             with open(clicked_file_path, "r") as f:
                 file_data = f.read().split("\nRESPONSE\n")
                 request_packet = file_data[0]
@@ -944,11 +945,11 @@ class ThreadMon(QWidget):
         self.setLayout(self.formLayout)
         self.topParent.socketIpc.processFinishedExecution.connect(self.closeWidget)
 
-    def closeWidget(self, windowInstance, objectName):
-        if objectName == self.thread.objectName():
-            for thread in windowInstance.threads:
-                if thread.objectName() == objectName:
-                    windowInstance.threads.remove(thread)
+    def closeWidget(self, window_instance, object_name):
+        if object_name == self.thread.objectName():
+            for thread in window_instance.threads:
+                if thread.objectName() == object_name:
+                    window_instance.threads.remove(thread)
             self.close()
 
     def getStatus(self):
@@ -963,6 +964,7 @@ class ThreadMon(QWidget):
 
     def exitThread(self):
         try:
+            # handle process closure
             self.pid = self.thread.process.pid
             if sys.platform == "win32":
                 os.system(f"taskkill /F /PID {int(self.pid)}")
@@ -974,9 +976,11 @@ class ThreadMon(QWidget):
                 self.topParent.isSessionHandlerRunning = False
             logging.info(f"Terminating subprocess with pid f{self.pid}")
         except AttributeError:
+            # handle thread closure
             logging.info(f"Terminating thread {self.thread}")
             self.thread.terminate()
             self.thread.quit()
+            # todo : there is a problem when closing a thread
             if self.thread.isRunning():
                 logging.error(f"Failed to terminate thread {self.thread}")
 
@@ -1010,7 +1014,6 @@ class ThreadMonitor(QMainWindow):
                         layout.addWidget(threadMonWidget)
 
     def addTab(self, window_instance):
-        logging.info(window_instance)
         threads = window_instance.threads
         tabname = window_instance.objectName().split("/")[-1]
 
@@ -1062,6 +1065,7 @@ class MainWin(QMainWindow, QtCore.QObject):
             # self.restoreState(program_state_bytes)
         self.isProxyRunning = False
         self.proxy_port = 0
+        self.proxy_hostname = 0
         self.isSessionHandlerRunning = False
         self.startSessionHandler()
         time.sleep(3)
@@ -1156,7 +1160,7 @@ class MainWin(QMainWindow, QtCore.QObject):
         self.newProjectCreated.emit(self)
 
     def finishedProcess(self, windowInstance, tool: str):
-        logging.info(yellow(f"{tool} finished execution"))
+        logging.info(f"{tool} finished execution")
 
     def addThreadMonitorTab(self):
         self.threadMonitor = ThreadMonitor(top_parent=self)
@@ -1180,6 +1184,7 @@ class MainWin(QMainWindow, QtCore.QObject):
     def startproxy(self):
         if self.isProxyRunning is False:
             self.proxy_port = random.randint(8000, 10000)
+            self.proxy_hostname = "127.0.0.1"
             logging.info("Starting proxy")
             self.proxy_ = AtomProxy(self.proxy_port, top_parent=self)
             self.proxy_.start()
@@ -1216,6 +1221,7 @@ class MainWin(QMainWindow, QtCore.QObject):
         self.dirListView.setEditTriggers(QListView.NoEditTriggers)
         self.dirListView.setModel(self.dirsModel)
         self.dirListView.clicked.connect(self.projectDirClicked)
+        self.dirListView.doubleClicked.connect(self.openProject)
 
         self.dirsProjectsScrollArea = QScrollArea()
         self.dirsProjectsScrollArea.setWidget(self.dirListView)
@@ -1223,6 +1229,10 @@ class MainWin(QMainWindow, QtCore.QObject):
         self.dirsProjectsScrollArea.setFixedHeight(450)
         self.dirsProjectsScrollArea.setFixedWidth(450)
         self.mainTabLayout.addWidget(self.dirsProjectsScrollArea, alignment=Qt.AlignCenter)
+
+    def openProject(self, index):
+        self.projectDirClicked(index)
+        self.openChoosenProject()
 
     def projectDirClicked(self, index):
         clicked_dir = self.dirsModel.data(index, QtCore.Qt.DisplayRole)
@@ -1294,6 +1304,8 @@ class MainWin(QMainWindow, QtCore.QObject):
             self.tabManager.removeTab(self.current_tab_index)
 
     def closeEvent(self, event: QtGui.QCloseEvent) -> None:
+        # note that the thread monitor is responsible for closing all opened threads and processes
+        # this can be done by closing all present threadMon objects
         if sys.platform == "win32":
             os.system(f"taskkill /F /PID {self.proxy_.process.pid}")
             os.system(f"taskkill /F /PID {self.sessionHandler.process.pid}")
@@ -1329,6 +1341,15 @@ if __name__ == "__main__":
 
 # TODO:
 """
+running all possible tools (for enumeration , recon, testing) possible and showing the results in the application
+tools to be added:
+    dnsrecon
+    dnsmasq
+
+these are to be tested to see how they work before being added
+
+after running a tool, the ip must be changed and user notified.
+
 1.dns server finders
 2.controlled speed during enumeration (random speed but controlled increaments and or decreaments )
 3.configuring of proxy networks from different providers during enumeration(if speed is good enough then then tor can also be used)
@@ -1339,8 +1360,8 @@ if __name__ == "__main__":
 
 7.visualization engine (2d and 3d)
 8.auto-categorization of domain names and urls(pages)
-9.ai-intergration in all aspects of the application(from the gui to the testing)
-10.Analysis engine(analyzing all the traffic concernnig a specific project that 
+9.ai-integration in all aspects of the application(from the gui to the testing)
+10.Analysis engine(analyzing all the traffic concerning a specific project that 
 has passed through the proxy including all the javascript, css, html, images, http headers, etc)
 and the respective presentation gui interface.
 """

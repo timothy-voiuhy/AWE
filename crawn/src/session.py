@@ -4,6 +4,7 @@ import os
 import socket
 import sys
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from urllib import parse as url_parser
 
 import certifi
@@ -12,17 +13,27 @@ import httpx._client as http_client
 import requests
 from OpenSSL import SSL
 from certauth.certauth import CertificateAuthority
+from httpx import Response
 
 from utiliities import (yellow, cyan, red)
 
 
+# from PySide6.QtNetwork import QNetworkRequest
+# request = QNetworkRequest()
+# request.setSslConfiguration()  # note that a ssl configuration can be specified not as httpx, requests, where the ssl
+# configuration cannot be set.
+# request.setUrl()
+
+
 class SesssionHandlerResponse(httpx.Response):
-    """response(http.Response) is encoded using a json decoder into a str that can be sent to a socket.
-    The response_str is encoded into a response-like object which is the class itself
-    """
+
     def __init__(self, status_code: int, response_str=None) -> None:
         super().__init__(status_code)
-        self.response_str = response_str
+        self.response_str_ = response_str
+
+    @property
+    def response_str(self):
+        return self.response_str_
 
     def decodeResponse(self):
         response_dict = json.loads(self.response_str)
@@ -31,12 +42,13 @@ class SesssionHandlerResponse(httpx.Response):
         # the keys to the respective http.Response properties.
         self.__dict__ = response_dict
 
-class SesssionHandler():
-    def __init__(self, host_address:str= None,
-                 listening_port:int= None,
-                 use_tor= False,
-                 useFileBasedCerts = False,
-                 downloadMozillaCAs = False) -> None:
+
+class SessionHandler:
+    def __init__(self, host_address: str = None,
+                 listening_port: int = None,
+                 use_tor=False,
+                 use_file_based_certs=False,
+                 download_mozilla_CAs=False) -> None:
         self.host = host_address
         if self.host is None:
             self.host = "127.0.0.1"
@@ -55,11 +67,11 @@ class SesssionHandler():
                 "https://": "socks5://127.0.0.1:9050",
             }
             self.PoolManager = http_client.Client(
-                follow_redirets=True, timeout=15, proxies=proxies)
+                follow_redirects=True, timeout=15, proxies=proxies)
         else:
             self.PoolManager = http_client.Client(
                 follow_redirects=True, timeout=15)
-        self.downloadMozillaCAs = downloadMozillaCAs
+        self.downloadMozillaCAs = download_mozilla_CAs
         if self.downloadMozillaCAs:
             self.MozillarootCAsUrl = "https://github.com/gisle/mozilla-ca/blob/master/lib/Mozilla/CA/cacert.pem"
             self.MozillaCACertsVerifyFile = self.runDir + "/proxycert/Mozilla/cacert.pem"
@@ -69,7 +81,7 @@ class SesssionHandler():
                     file.write(res.content.decode("utf-8"))
         else:
             self.MozillaCACertsVerifyFile = certifi.where()
-        self.useFileBasedCerts = useFileBasedCerts
+        self.useFileBasedCerts = use_file_based_certs
         self.pyCApath = self.runDir + "/proxycert/CA"
         self.certsDir = self.runDir + "/proxycert/Certs"
         self.rootCAcf = os.path.join(self.pyCApath, "rootCAcert.pem")
@@ -88,7 +100,8 @@ class SesssionHandler():
             self.rootCAprivatekeyfile = self.runDir + "/proxycert/CA/privatekey.pem"
 
     def generateDomainCerts(self, hostname: str):
-        """generate a certificate for a specific host and sign it with the root certificate. Return the path to the certficate (.crt) file"""
+        """generate a certificate for a specific host and sign it with the root certificate. Return the path to the
+        certificate (.crt) file"""
         hostname = hostname.strip()
         if self.useFileBasedCerts is False:
             return self.rootCA.load_cert(hostname, wildcard=True)
@@ -148,73 +161,79 @@ class SesssionHandler():
         response = self.clientRecv()
         return response
 
-    def decodeClientRequest(self, client_request:str):
-        client_request_dict = dict(json.loads(client_request))
-        method = client_request_dict["method"]
-        url = client_request_dict["url"]
-        data = client_request_dict["body"]
-        headers = client_request_dict["headers"]
-        return method, url, data, headers
-
     @staticmethod
     def serializeResponse(response: httpx.Response):
         response_str = json.dumps(response.__dict__)
         return response_str
 
     @staticmethod
-    def joinUrlwParams(self, url:str, params:dict):
+    def joinUrlwParams(self, url: str, params: dict):
         params_str = url_parser.urlencode(params)
-        return url+"?"+params_str
+        return url + "?" + params_str
+
+    def decodeClientRequest(self, client_request: str):
+        client_request_dict = dict(json.loads(client_request))
+        method = client_request_dict["method"]
+        url = client_request_dict["url"]
+        headers = dict(client_request_dict["headers"])
+        data = client_request_dict["data"]
+        return method, url, data, headers
 
     def closeTunnel(self, client_socket, closeClientSocket=True):
         if closeClientSocket:
             client_socket.close()
 
-    def handleClientConnection(self, client_socket:socket.socket):
+    def handleClientConnection(self, client_socket: socket.socket):
+        # try:
         client_request = client_socket.recv(160000).decode("utf-8")
         method, url, data, headers = self.decodeClientRequest(client_request)
-        try:
-            retries = 0
-            while retries < 5:
+        retries = 0
+        while retries < 5:
+            try:
                 response = self.PoolManager.request(method=method,
                                                     url=url,
                                                     headers=headers,
                                                     data=data,
                                                     follow_redirects=True)
-                if response:
-                    break
-                else:
-                    logging.info(yellow("retrying...."))
-                retries += 1
-        except httpx.ConnectError:
-            logging.error(red(f"failing to resolve to url {url}"))
+                break
+            except httpx.ConnectError:
+                logging.warning(f"failing to resolve to url {url}")
+                if retries == 4:
+                    logging.error(f"failed to resolve to url {url}")
+            if retries < 4:
+                logging.info("retrying....")
+            retries += 1
         response_str = self.serializeResponse(response)
         try:
             client_socket.sendall(response_str)
         except Exception as e:
             logging.error(red(f"Encountered error: {e} while processing {url}"))
         self.closeTunnel(client_socket)
-
+        # except Exception as error:
+        #     logging.error(f"Encountered error: {error}")
 
     def createServer(self):
         self.server_socket = socket.create_server(address=(self.host, self.server_port),
                                                   family=socket.AF_INET)
         self.server_socket.listen()
-        logging.info(yellow(f"Session handler listening on port {self.server_port}"))
-        while True:
-            logging.info(yellow("Session Handler waiting for incoming connection ..."))
-            client_socket = self.server_socket.accept()[0]
-            threading.Thread(target=self.handleClientConnection, args=(client_socket,))
+        logging.info(f"Session handler listening on port {self.server_port}")
+        with ThreadPoolExecutor(max_workers=3084) as executor:
+            while True:
+                logging.info("Session Handler waiting for incoming connection ...")
+                client_socket = self.server_socket.accept()[0]
+                executor.submit(self.handleClientConnection, client_socket)
 
     def createClientConnection(self):
         self.client_socket = socket.create_connection(address=("127.0.0.1", self.server_port))
-        
-    def clientSendAll(self, req:str):
+
+    def clientSendAll(self, req: str):
         self.client_socket.sendall(req.encode("utf-8"))
 
     def clientRecv(self):
         res = ""
-        self.client_socket.recv_into(res)
+        # self.client_socket.recv()  # get the length of the data to be received
+        # self.client_socket.recv()  # recv the data
+        self.client_socket.recv_into(res)  # todo: change the recv_into method to recv()
         response = SesssionHandlerResponse(response_str=res)
         response.decodeResponse()
         return response
@@ -226,10 +245,12 @@ class SesssionHandler():
         logging.info(cyan("closing http(s) pool manager"))
         self.PoolManager.close()
 
+
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.DEBUG, format= '%(asctime)s - %(levelname)s - %(filename)s:%(lineno)d - %(message)s')
+    logging.basicConfig(level=logging.DEBUG,
+                        format='%(asctime)s - %(levelname)s - %(filename)s:%(lineno)d - %(message)s')
     try:
-        session_handler = SesssionHandler()
+        session_handler = SessionHandler()
         session_handler.createServer()
     except KeyboardInterrupt:
         session_handler.closeServer()

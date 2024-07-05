@@ -81,7 +81,7 @@ def parse_php_code(php_code):
 
 
 def makelogger(
-    logger_name: str, filename: str, level=logging.INFO, projectDir=None
+        logger_name: str, filename: str, level=logging.INFO, projectDir=None
 ) -> logging.Logger:
     logsDir = os.path.join(projectDir, "LOGS/")
     if os.path.isdir(logsDir):  # save all the log files in the LOGS directory
@@ -93,8 +93,8 @@ def makelogger(
     # Check if a handler with the same filename already exists
     for handler in _logger.handlers:
         if (
-            isinstance(handler, logging.FileHandler)
-            and handler.baseFilename == filename
+                isinstance(handler, logging.FileHandler)
+                and handler.baseFilename == filename
         ):
             return _logger  # Logger already configured for this file
     _logger.setLevel(level)
@@ -216,7 +216,7 @@ class AmassSubdProcessor:
             command = "amass enum -brute -min-for-recursive 2 -d " + self.domain
         else:
             command = "amass enum -d " + self.domain
-        print(f"{green('running ')}{cyan(command)}")
+        logging.info(f"running command {command}")
 
         with open(self.results_file, "a") as file:
             for n in range(self.MAX_RETRIES):
@@ -261,9 +261,9 @@ class AmassSubdProcessor:
             managerAsnDicts = {}
             for line in lines:
                 if (
-                    "managed_by" in line
-                    and not "Not routed " in line
-                    and not "Unknown" in line
+                        "managed_by" in line
+                        and not "Not routed " in line
+                        and not "Unknown" in line
                 ):
                     line = line.replace("--> managed_by -->", "")
                     if re.match(pattern, line) is not None:
@@ -349,8 +349,8 @@ class AmassSubdProcessor:
         idx = 3
         subdomainsCmp = []
         for record_name, ip_list in zip(
-            list(list(dictsData_[idx].values())[0].keys()),
-            list(list(dictsData_[idx].values()[0].values())),
+                list(list(dictsData_[idx].values())[0].keys()),
+                list(list(dictsData_[idx].values()[0].values())),
         ):
             for domain in record_name:
                 domainInfo = {
@@ -416,7 +416,6 @@ class AmassSubdProcessor:
                             with open(name_record + "s", "a") as c:
                                 c.write(line)
 
-
     def SaveAmassSubdomains(self):
         with open(self.emcpDataFile, "r") as file:
             data = file.read()
@@ -475,15 +474,15 @@ def CheckCreatePath(path_: str):
 
 
 def RxnLinkFinder(
-    rundir,
-    project_dir,
-    url: str,
-    depth=2,
-    scope: list = None,
-    output_dir="/LinkFinderResults/",
-    cookies: dict = None,
-    n_processes: int = None,
-    output_file="/LinkFinderResults/url_endpoits.txt",
+        rundir,
+        project_dir,
+        url: str,
+        depth=2,
+        scope: list = None,
+        output_dir="/LinkFinderResults/",
+        cookies: dict = None,
+        n_processes: int = None,
+        output_file="/LinkFinderResults/url_endpoits.txt",
 ):
     output_dir = os.path.join(project_dir, output_dir)
     output_file = os.path.join(project_dir, output_file)
@@ -500,31 +499,31 @@ def RxnLinkFinder(
             else:
                 scopeadd_str = scopeadd_str + "," + domain
         command = (
-            f"python {rundir}Tools/xnLinkFinder/xnLinkFinder.py -i "
-            + url
-            + " -o "
-            + output_file
-            + " -sf "
-            + scopeadd_str
-            + " -d "
-            + str(depth)
-            + " --output-wordlist "
-            + wordlist_path
-            + " --output-params "
-            + params_path
+                f"python {rundir}Tools/xnLinkFinder/xnLinkFinder.py -i "
+                + url
+                + " -o "
+                + output_file
+                + " -sf "
+                + scopeadd_str
+                + " -d "
+                + str(depth)
+                + " --output-wordlist "
+                + wordlist_path
+                + " --output-params "
+                + params_path
         )
     else:
         command = (
-            f"python {rundir}Tools/xnLinkFinder/xnLinkFinder.py -i "
-            + url
-            + " -o "
-            + output_file
-            + " -d "
-            + str(depth)
-            + " --output-wordlist "
-            + wordlist_path
-            + " --output-params "
-            + params_path
+                f"python {rundir}Tools/xnLinkFinder/xnLinkFinder.py -i "
+                + url
+                + " -o "
+                + output_file
+                + " -d "
+                + str(depth)
+                + " --output-wordlist "
+                + wordlist_path
+                + " --output-params "
+                + params_path
         )
     if cookies is not None:
         cookie_keys = list(cookies.keys())
@@ -533,7 +532,7 @@ def RxnLinkFinder(
         key_index = 0
         for key in cookie_keys:
             cookie_str = cookie_str + key + ":" + \
-                cookie_values[key_index] + ";"
+                         cookie_values[key_index] + ";"
             key_index += 1
         command = command + " -c " + cookie_str
     else:
@@ -569,13 +568,13 @@ class SublisterRunner:
     -n, --no-color        Output without color"""
 
     def __init__(
-        self,
-        domain,
-        projectDirPath:str,
-        threads,
-        search_engines:list = None,
-        bruteforce:bool=False,
-        ports:list=None,
+            self,
+            domain,
+            projectDirPath: str,
+            threads,
+            search_engines: list = None,
+            bruteforce: bool = False,
+            ports: list = None,
     ):
         self.domain = domain
         self.projectDirPath = projectDirPath
@@ -595,22 +594,22 @@ class SublisterRunner:
                     search_engine_string = search_engine_string + engine
                 else:
                     search_engine_string = search_engine_string + engine + ","
-            command = command +" -e " +search_engine_string
+            command = command + " -e " + search_engine_string
         if self.bruteforce:
             command = command + " -b "
 
         if self.ports is not None:
             ports = ""
             for port in self.ports:
-                if self.ports.index(port) == len(self.ports)-1:
+                if self.ports.index(port) == len(self.ports) - 1:
                     ports = ports + port
                 else:
-                    ports = ports + port+","
-                
-            command  = command + " -p " + ports
+                    ports = ports + port + ","
+
+            command = command + " -p " + ports
 
         if self.threads is not None:
-            command  = command + " -t " +str(self.threads) 
+            command = command + " -t " + str(self.threads)
 
         print(yellow(f"Running sublist3r with command: {cyan(command)}"))
         subprocess.Popen(
@@ -632,12 +631,12 @@ class SubDomainizerRunner:
 
     def Run(self):
         command = (
-            "python /media/program/01DA55CA5F28E000/MYAPPLICATIONS/AWE/AWE/crawn/Tools/SubDomainizer/SubDomainizer.py "
-            + " -u "
-            + self.url
-            + " -o "
-            + self.subDomainFile
-            + " -k"
+                "python /media/program/01DA55CA5F28E000/MYAPPLICATIONS/AWE/AWE/crawn/Tools/SubDomainizer/SubDomainizer.py "
+                + " -u "
+                + self.url
+                + " -o "
+                + self.subDomainFile
+                + " -k"
         )
         if self.cookies is not None:
             command = command + "-c " + self.cookies
@@ -652,10 +651,12 @@ def addHttpsScheme(url: str):
         url = "https://" + url
     return url
 
+
 def isInternetAvailable():
     if len(get_working_ifaces()) == 0:
         return True
     return False
+
 
 def is_brotli_compressed(data):
     brotli_magic_number = b'\x1b'
@@ -676,3 +677,15 @@ class OpenProcess(subprocess.Popen):
     def __init__(self, process_name, shell, cwd=None, args=None):
         super().__init__(args=args, shell=shell, cwd=cwd)
         self.process_name = process_name
+
+
+def runWhoisOnTarget(server_name, project_dir_path=None):
+    command = f"whois {server_name}"
+    logging.info(f"running command '{command}'")
+    process = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    process.wait()
+    whois_output, whois_error = process.communicate()
+    if whois_output is not None:
+        return whois_output
+    else:
+        return whois_error
