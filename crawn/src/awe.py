@@ -1356,7 +1356,8 @@ after running a tool, the ip must be changed and user notified.
 4.api finders
 5.tech stack categorizing(webapp frameworks and libraries)
 5.location of servers(geographical location, Hosting platform(aws, google, ...))
-6.Network mapper
+6.Network mapper [3d visualization]
+7.jwt detectors [auth detectors]
 
 7.visualization engine (2d and 3d)
 8.auto-categorization of domain names and urls(pages)
@@ -1364,4 +1365,5 @@ after running a tool, the ip must be changed and user notified.
 10.Analysis engine(analyzing all the traffic concerning a specific project that 
 has passed through the proxy including all the javascript, css, html, images, http headers, etc)
 and the respective presentation gui interface.
+
 """

@@ -1,7 +1,10 @@
+from datetime import timedelta
 import json
 import logging
 import os
+import random
 import socket
+import string
 import sys
 import threading
 from concurrent.futures import ThreadPoolExecutor
@@ -25,22 +28,58 @@ from utiliities import (yellow, cyan, red)
 # request.setUrl()
 
 
-class SesssionHandlerResponse(httpx.Response):
+class SessionHandlerResponse(httpx.Response):
 
-    def __init__(self, status_code: int, response_str=None) -> None:
-        super().__init__(status_code)
+    def __init__(self, response_str=None, status_code_=None) -> None:
+        super().__init__(status_code_)
         self.response_str_ = response_str
 
     @property
     def response_str(self):
         return self.response_str_
 
+    def redo_extensions(self, extensions: dict):
+        ext = {}
+        for key, value in zip(extensions.keys(), extensions.values()):
+            if type(value) is str:
+                ext[key] = value.encode("utf-8")
+            else:
+                ext[key] = value
+        return ext
+
+    def redo_body(self, body: str):
+        return body.encode("utf-8")
+
+    def redo_headers(self, headers: dict):
+        return httpx.Headers(headers)
+
+    def redo_request(self, request: tuple):
+        return httpx.Request(method=request[0], url=request[1])
+
+    def redo_elapsed(self, elapsed:list):
+        return timedelta(seconds=elapsed[0],microseconds=elapsed[1], days=elapsed[2] )
+
     def decodeResponse(self):
-        response_dict = json.loads(self.response_str)
-        # assign the keys to the respective http.Response properties
-        # set the __dict__ attribute of the httpx.Response object hence assigning
-        # the keys to the respective http.Response properties.
-        self.__dict__ = response_dict
+        try:
+            response_dict = json.loads(self.response_str.decode("utf-8"))
+            # assign the keys to the respective http.Response properties
+            # set the __dict__ attribute of the httpx.Response object hence assigning
+            # the keys to the respective http.Response properties.
+
+            response_dict["headers"] = self.redo_headers(response_dict["headers"])
+
+            response_dict["extensions"] = self.redo_extensions(response_dict["extensions"])
+
+            response_dict["_request"] = self.redo_request(response_dict["_request"])
+
+            response_dict["_content"] = self.redo_body(response_dict["_content"])
+
+            response_dict["_elapsed"] = self.redo_elapsed(response_dict["_elapsed"])
+
+            self.__dict__ = response_dict
+            logging.debug("response_dict is now self.__dict__")
+        except Exception as exp:
+            logging.error(f"Encountered error : {exp}")
 
 
 class SessionHandler:
@@ -49,6 +88,8 @@ class SessionHandler:
                  use_tor=False,
                  use_file_based_certs=False,
                  download_mozilla_CAs=False) -> None:
+        self.done_bit = 0
+        self.error_bit = 1
         self.host = host_address
         if self.host is None:
             self.host = "127.0.0.1"
@@ -57,8 +98,10 @@ class SessionHandler:
             self.server_port = 8181
         if sys.platform == "WIN32":
             self.runDir = rundir = "D:\\MYAPPLICATIONS\\AWE\\AWE\\crawn\\src"
+            self.exchange_file = self.runDir + "\\tmp\\_tmp"
         else:
             self.runDir = "/media/program/01DA55CA5F28E000/MYAPPLICATIONS/AWE/AWE/crawn/src"
+            self.exchange_file = self.runDir + "/tmp/_tmp"
         self.use_tor = use_tor
         self.client_socket = 0
         if self.use_tor:
@@ -150,21 +193,76 @@ class SessionHandler:
             return True
 
     def makeRequest(self, request_method, request_url, request_headers, request_data=None):
-        self.createClientConnection()
-        proxy_ses_req_dict = {}
-        proxy_ses_req_dict["method"] = request_method
-        proxy_ses_req_dict["url"] = request_url
-        proxy_ses_req_dict["headers"] = request_headers
-        proxy_ses_req_dict["data"] = request_data
-        proxy_ses_request_str = json.dumps(proxy_ses_req_dict)
-        self.clientSendAll(proxy_ses_request_str)
-        response = self.clientRecv()
-        return response
+        try:
+            self.createClientConnection()
+            proxy_ses_req_dict = {}
+            proxy_ses_req_dict["method"] = request_method
+            proxy_ses_req_dict["url"] = request_url
+            proxy_ses_req_dict["headers"] = request_headers
+            proxy_ses_req_dict["data"] = request_data
+            proxy_ses_request_str = json.dumps(proxy_ses_req_dict)
+            self.clientSendAll(proxy_ses_request_str)
+            response = self.clientRecv()
+            if response.status_code is None:
+                logging.error(f"failed to retrieve response :url: {request_url} :status_code: {response.status_code}", exc_info=True)
+            else:
+                logging.debug(f"response retrieved by clientRecv :status_code: {response.status_code}")
+            return response
+        except Exception as e:
+            logging.error(f"makeRequest failed :error: {e}", exc_info=True)
 
-    @staticmethod
-    def serializeResponse(response: httpx.Response):
-        response_str = json.dumps(response.__dict__)
-        return response_str
+    def get_response_headers_dict(self, headers: httpx.Headers):
+        header_keys = headers.keys()
+        header_values = headers.values()
+        headers_dict = {}
+        for key, value in zip(header_keys, header_values):
+            headers_dict[key] = value
+        return headers_dict
+
+    def get_request(self, request: httpx.Request):
+        return request.method, str(request.url)
+
+    def get_content(self, content: bytes):
+        try:
+            return content.decode("utf-8")
+        except Exception as exp:
+            logging.error(f"failed to get response content with error: {exp}", exc_info=True)
+
+    def get_extensions(self, extensions: dict):
+        ext_dict = {}
+        for key, value in zip(extensions.keys(), extensions.values()):
+            if type(value) is bytes:
+                ext_dict[key] = value.decode("utf-8")
+            else:
+                ext_dict[key] = None
+        return ext_dict
+
+    def get_elapsed(self, elapsed:timedelta):
+        return [elapsed.seconds, elapsed.microseconds, elapsed.days]
+
+    def serializeResponse(self, response: httpx.Response):
+        response_dict = response.__dict__
+        response_dict["headers"] = self.get_response_headers_dict(response.headers)
+        response_dict["_request"] = self.get_request(response.request)
+        response_dict["_content"] = self.get_content(response.content)
+        response_dict["stream"] = None  # parse if needed and those below
+        response_dict["_decoder"] = None
+        response_dict["_elapsed"] = self.get_elapsed(response.elapsed)
+        response_dict["extensions"] = self.get_extensions(response_dict["extensions"])
+        # response_dict["extensions"] = None  # bytes extension comes from here
+        # logging.debug(f"response headers: {response.headers}")
+
+        try:
+            logging.debug("serializing response to str")
+            # logging.debug(f"response_dict: {response_dict}")
+            response_str = json.dumps(response_dict)
+            if response_str:
+                logging.debug("successfully serialized response to json_str")
+            else:
+                logging.debug("failed to serialize response to json_str")
+            return response_str
+        except Exception as exp:
+            logging.debug(f"failed to serialize response to a json_str after encountering error {exp}")
 
     @staticmethod
     def joinUrlwParams(self, url: str, params: dict):
@@ -183,6 +281,11 @@ class SessionHandler:
         if closeClientSocket:
             client_socket.close()
 
+    def generate_random_filename(self):
+        chars = string.ascii_letters + string.digits
+        filename = "".join(random.choices(chars, k=72))
+        return filename
+
     def handleClientConnection(self, client_socket: socket.socket):
         # try:
         client_request = client_socket.recv(160000).decode("utf-8")
@@ -199,18 +302,42 @@ class SessionHandler:
             except httpx.ConnectError:
                 logging.warning(f"failing to resolve to url {url}")
                 if retries == 4:
-                    logging.error(f"failed to resolve to url {url}")
+                    logging.error(f"failed to resolve to url {url}", exc_info=True)
             if retries < 4:
                 logging.info("retrying....")
             retries += 1
+        if response:
+            logging.debug("successfully fetched response")
         response_str = self.serializeResponse(response)
         try:
-            client_socket.sendall(response_str)
+            exchange_file = self.exchange_file + self.generate_random_filename()
+            exch_file_dir, exch_file_name = os.path.split(exchange_file)
+
+            if not os.path.isdir(exch_file_dir):
+                os.makedirs(exch_file_dir)
+
+            with open(exchange_file, "wb") as file:
+                file.write(response_str.encode("utf-8"))
+
+            # prepare the data to be sent ie done bit and the filename
+            data = {"bit": self.done_bit, "filename": exchange_file}
+
+            if client_socket.send(json.dumps(data).encode("utf-8")):
+                logging.debug("sent done bit")
+                logging.debug(f"closing client_socket")
+                client_socket.close()
+                logging.debug("session server successfully closed client_socket")
+            else:
+                logging.error("failed to send done bit", exc_info=True)
+            logging.debug("successfully sent response to session client")  # instead of
+            # sending the data, a done message is going to be sent and the data written to a file from
+            # where the other side reads it from.
         except Exception as e:
             logging.error(red(f"Encountered error: {e} while processing {url}"))
         self.closeTunnel(client_socket)
         # except Exception as error:
         #     logging.error(f"Encountered error: {error}")
+        #     self.client_socket.send(self.error_bit)
 
     def createServer(self):
         self.server_socket = socket.create_server(address=(self.host, self.server_port),
@@ -229,14 +356,26 @@ class SessionHandler:
     def clientSendAll(self, req: str):
         self.client_socket.sendall(req.encode("utf-8"))
 
+    def get_status_code(self, ses_resp_str: str):
+        ses_resp_dict = json.loads(ses_resp_str)
+        return ses_resp_dict["status_code"]
+
     def clientRecv(self):
-        res = ""
-        # self.client_socket.recv()  # get the length of the data to be received
-        # self.client_socket.recv()  # recv the data
-        self.client_socket.recv_into(res)  # todo: change the recv_into method to recv()
-        response = SesssionHandlerResponse(response_str=res)
-        response.decodeResponse()
-        return response
+        try:
+            data = self.client_socket.recv(1000).decode("utf-8")
+            data_dict = json.loads(data)
+            if data_dict["bit"] == 0:
+                logging.debug("received response from session server")
+                exchange_file = data_dict["filename"]
+                with open(exchange_file, "rb") as file:
+                    resp_data = file.read()
+                    status_code = self.get_status_code(resp_data.decode("utf-8"))
+                    response = SessionHandlerResponse(response_str=resp_data, status_code_=status_code)
+                    response.decodeResponse()
+                    logging.debug("successfully decoded ses_response")
+                    return response
+        except Exception as exp:
+            logging.error(f"Encountered error: {exp}", exc_info=True)
 
     def closeServer(self):
         logging.info(red("Exiting"))
@@ -257,7 +396,4 @@ if __name__ == "__main__":
 
 """ note: the sendall methods of the socket do not accept string like
 objects.
-The problem may arise in converting a response.__dict__ object to a 
-bytes like object since it includes the content of the response and yet it 
-may be encoded so the problem may arise in trying to convert the data 
-to bytes like object."""
+The problem may arise in converting a response.__dict__ object"""

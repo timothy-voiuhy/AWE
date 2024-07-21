@@ -1,6 +1,7 @@
 from PySide6 import QtWidgets, QtGui
 from PySide6.QtCore import Qt
 from PySide6.QtNetwork import QSslCertificate, QSslConfiguration, QNetworkProxyFactory, QNetworkProxy
+from PySide6.QtWidgets import QMenuBar
 
 from config.config import RUNDIR
 from gui.browserWindow import BrowserWindow
@@ -39,8 +40,8 @@ class TargetWindow(QtWidgets.QMainWindow):
         centralWidget = QtWidgets.QWidget()
         self.centralWidgetLayout = QtWidgets.QVBoxLayout()
 
-        self.uppperCentralLayout = QtWidgets.QHBoxLayout()
-        self.centralWidgetLayout.addLayout(self.uppperCentralLayout)
+        self.upper_central_layout = QtWidgets.QHBoxLayout()
+        self.centralWidgetLayout.addLayout(self.upper_central_layout)
         self.AddTopMenu()
 
         self.browserTabWidget = QtWidgets.QTabWidget()
@@ -50,25 +51,29 @@ class TargetWindow(QtWidgets.QMainWindow):
         centralWidget.setLayout(self.centralWidgetLayout)
         self.setCentralWidget(centralWidget)
 
+        # self.browser_menu_bar = QMenuBar()
+        # self.browser_menu_bar.add
+
         # network button
         self.NetworkButtonIcon = QtGui.QIcon.fromTheme("network-wired")
         self.NetworkButton = QtWidgets.QPushButton()
+        self.NetworkButton.setFlat(True)
         self.NetworkButton.setIcon(self.NetworkButtonIcon)
         self.NetworkButton.setFixedWidth(28)
         self.NetworkButton.clicked.connect(self.OpenNetworkWindow)
-        self.uppperCentralLayout.addWidget(self.NetworkButton)
+        self.upper_central_layout.addWidget(self.NetworkButton)
 
         # add new browser tab
-        self.newBrowserTabButton = HoverButton("+","add a new browser tab")
+        self.newBrowserTabButton = HoverButton("+", "add a new browser tab")
         self.newBrowserTabButton.clicked.connect(self.openNewBrowserTab)
         self.newBrowserTabButton.setFixedWidth(20)
-        self.uppperCentralLayout.addWidget(self.newBrowserTabButton)
+        self.upper_central_layout.addWidget(self.newBrowserTabButton)
 
         # close Browser Tab
-        self.closeTabButton = HoverButton("x", "close the curret tab")
+        self.closeTabButton = HoverButton("x", "close the current tab")
         self.closeTabButton.setFixedWidth(20)
         self.closeTabButton.clicked.connect(self.closeBrowserTab)
-        self.uppperCentralLayout.addWidget(self.closeTabButton)
+        self.upper_central_layout.addWidget(self.closeTabButton)
 
         self.proxy_status = False
 
@@ -76,14 +81,13 @@ class TargetWindow(QtWidgets.QMainWindow):
         self.HandleProxyButton = HoverButton("enable Proxy", "enable or disable the proxy")
         self.HandleProxyButton.setFixedWidth(140)
         self.HandleProxyButton.clicked.connect(self.HandleProxy)
-        self.uppperCentralLayout.addWidget(self.HandleProxyButton)
+        self.upper_central_layout.addWidget(self.HandleProxyButton)
 
         # test target button
-        self.testTargetButton = QtWidgets.QPushButton()
-        self.testTargetButton.setText("Test target")
+        self.testTargetButton = HoverButton("Test target", "test the target on different tools")
         self.testTargetButton.setFixedWidth(140)
         self.testTargetButton.clicked.connect(self.OpenTestTargetWindow)
-        self.uppperCentralLayout.addWidget(self.testTargetButton, alignment=Qt.AlignLeft)
+        self.upper_central_layout.addWidget(self.testTargetButton, alignment=Qt.AlignLeft)
 
         self.setWindowTitle("atom")
 
@@ -99,15 +103,19 @@ class TargetWindow(QtWidgets.QMainWindow):
         self.topParent.projectClosed.emit(self, self.projectIndex)
         return super().closeEvent(event)
 
-    def openNewBrowserTab(self, link = None):
-        BrowserWindow_ = BrowserWindow(link=link)
+    def openNewBrowserTab(self, link=None):
         tab_name = "new"
         try:
-            if link != None:
+            if type(link) is bool:
+                BrowserWindow_ = BrowserWindow("google.com")
+            elif link is not None:
+                BrowserWindow_ = BrowserWindow(link)
                 if link.startswith(("https", "http")):
                     tab_name = link.split("//")[1].split(".")[0]
                 else:
                     tab_name = link.split(".")[0]
+            elif link is None:
+                BrowserWindow_ = BrowserWindow("google.com")
         except:
             tab_name = "new"
         self.browserTabWidget.addTab(BrowserWindow_, tab_name)
@@ -140,7 +148,7 @@ class TargetWindow(QtWidgets.QMainWindow):
             self.proxy_status = False
             QNetworkProxyFactory.setUseSystemConfiguration(True)
 
-    def enableProxy(self, use_default = False):
+    def enableProxy(self, use_default=False):
         if use_default:
             self.proxy_hostname = "127.0.0.1"
             self.proxy_port = self.proxy_port
@@ -171,7 +179,7 @@ class TargetWindow(QtWidgets.QMainWindow):
                 self.enableProxyCheckBox.setChecked(False)
 
     def OpenTestTargetWindow(self):
-        self.testWindow = TestTargetWindow(self.projectDirPath, parent = self)
+        self.testWindow = TestTargetWindow(self.projectDirPath, parent=self)
         self.testWindow.Initialize()
         self.testWindow.setFixedHeight(600)
         self.testWindow.setFixedWidth(800)
@@ -203,10 +211,11 @@ class TargetWindow(QtWidgets.QMainWindow):
         # top menu Button
         self.MenuIcon = QtGui.QIcon(RUNDIR + "resources/icons/settings-icon-gear-3d-render-png.png")
         self.menuButton = QtWidgets.QPushButton()
+        self.menuButton.setFlat(True)
         self.menuButton.setIcon(self.MenuIcon)
         self.menuButton.setFixedWidth(28)
         self.menuButton.clicked.connect(self.ShowMenu)
-        self.uppperCentralLayout.addWidget(self.menuButton)
+        self.upper_central_layout.addWidget(self.menuButton)
 
     def openBrowserSettingsWindow(self):
         self.BrowserSettingsWindow = QtWidgets.QMainWindow()

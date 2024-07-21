@@ -9,6 +9,7 @@ import socket
 import sys
 import threading
 import zlib
+import traceback
 from concurrent.futures import ThreadPoolExecutor
 from urllib import parse as urlparser
 
@@ -18,8 +19,8 @@ import requests
 from OpenSSL import SSL
 from certauth.certauth import CertificateAuthority
 
-from session import SessionHandler, SesssionHandlerResponse
-from utiliities import red, cyan, yellow
+from session import SessionHandler, SessionHandlerResponse
+from utiliities import makelogger, red, log_exceptions
 
 
 def is_brotli_compressed(data):
@@ -64,54 +65,57 @@ def DissectClientProxyRequests(client_request: str):
 
 def DissectClientReqPkt(packet: str, http: bool = None):
     "dissect the packets sent by the individual hosts/domains from the client"
-    headersBodyDis_ = packet.split("\r\n\r\n")
-    headersDis = headersBodyDis_[0].split("\r\n")  # headers
     try:
-        packetBody = headersBodyDis_[1]
-        len_packetBody = len(packetBody)
-    except IndexError:
-        packetBody = None
-    # print(headersDis)
-    packetHeaders = headersDis[1:]
-    packetHeadersDict = {}
-    for packetHeader in packetHeaders:
-        keyValue = packetHeader.split(":")
-        key, value = keyValue[0].strip(), keyValue[1].strip()
-        packetHeadersDict[key] = value
-    if packetBody is not None:
-        packetHeadersDict["Content-Length"] = str(len_packetBody)
-    packetMethod = headersDis[0].split(" ")[0]
-    host = packetHeadersDict["Host"]
-    path = headersDis[0].split(" ")[1]
-    if http:
-        packetUrl = path.split("?")[0]
-        if "https" not in packetUrl:
+        headersBodyDis_ = packet.split("\r\n\r\n")
+        headersDis = headersBodyDis_[0].split("\r\n")  # headers
+        try:
+            packetBody = headersBodyDis_[1]
+            len_packetBody = len(packetBody)
+        except IndexError:
+            packetBody = None
+        # print(headersDis)
+        packetHeaders = headersDis[1:]
+        packetHeadersDict = {}
+        for packetHeader in packetHeaders:
+            keyValue = packetHeader.split(":")
+            key, value = keyValue[0].strip(), keyValue[1].strip()
+            packetHeadersDict[key] = value
+        if packetBody is not None:
+            packetHeadersDict["Content-Length"] = str(len_packetBody)
+        packetMethod = headersDis[0].split(" ")[0]
+        host = packetHeadersDict["Host"]
+        path = headersDis[0].split(" ")[1]
+        if http:
+            packetUrl = path.split("?")[0]
+            if "https" not in packetUrl:
+                packetUrl = host + path.split("?")[0]
+                packetUrl = "https://" + packetUrl.strip()
+        else:
             packetUrl = host + path.split("?")[0]
             packetUrl = "https://" + packetUrl.strip()
-    else:
-        packetUrl = host + path.split("?")[0]
-        packetUrl = "https://" + packetUrl.strip()
-    try:
-        f_packetParams = path.split("?")[1]
-        packetParams = f_packetParams.split("&")
-        packetParamsDict = {}
-        for pP in packetParams:
-            pP_ = pP.split("=")
-            packetParamsDict[pP_[0]] = pP_[1]
-    except IndexError:
-        packetParams = None
-        packetParamsDict = None
-    if packetParams is not None:
-        if http:
-            packetUrlwParams = path
-            if "https" not in path:
+        try:
+            f_packetParams = path.split("?")[1]
+            packetParams = f_packetParams.split("&")
+            packetParamsDict = {}
+            for pP in packetParams:
+                pP_ = pP.split("=")
+                packetParamsDict[pP_[0]] = pP_[1]
+        except IndexError:
+            packetParams = None
+            packetParamsDict = None
+        if packetParams is not None:
+            if http:
+                packetUrlwParams = path
+                if "https" not in path:
+                    packetUrlwParams = "https://" + host.strip() + path.strip()
+            else:
                 packetUrlwParams = "https://" + host.strip() + path.strip()
         else:
-            packetUrlwParams = "https://" + host.strip() + path.strip()
-    else:
-        packetUrlwParams = packetUrl
-    # logging.info(f"{yellow('method:')}{packetMethod}\n{yellow('url:')}{packetUrl}\n{yellow('headers:')}{packetHeadersDict}\n{yellow('params:')}{packetParamsDict}\n{yellow('body:')}{packetBody}\n{yellow('packetUrlWithParams:')}{packetUrlwParams}")
-    return packetMethod, packetUrl, packetHeadersDict, packetParamsDict, packetBody, packetUrlwParams
+            packetUrlwParams = packetUrl
+        # logging.info(f"{yellow('method:')}{packetMethod}\n{yellow('url:')}{packetUrl}\n{yellow('headers:')}{packetHeadersDict}\n{yellow('params:')}{packetParamsDict}\n{yellow('body:')}{packetBody}\n{yellow('packetUrlWithParams:')}{packetUrlwParams}")
+        return packetMethod, packetUrl, packetHeadersDict, packetParamsDict, packetBody, packetUrlwParams
+    except Exception as exp:
+        logging.error(f"Exception in DissectClientReqPkt function :error: {exp}")
 
 
 def writeLinkContentToFIle(main_dir, link: str, data, hostname):
@@ -175,7 +179,7 @@ class ProxyHandler:
         try:
             self.socket.bind((self.host, self.port))
         except OSError as e:
-            logging.error(f"{red('enountered error')} {e}")
+            logging.error(f"'enountered error' {e}")
             sys.exit()
         self.socket.listen(5)
         self.downlaodMozillaCAs = downloadMozillaCAs
@@ -222,121 +226,141 @@ class ProxyHandler:
         self.logging = True
         # default regex pattern that can match for all hostnames
         self.scope = ["."]
+        self.proxy_log_dir = self.runDir+"/logs/"
+        if not os.path.isdir(self.proxy_log_dir):
+            os.makedirs(self.proxy_log_dir)
+        self.proxy_validation_logger = makelogger("proxy_validation_logger",
+                                                  "proxy_validation_logger.log",
+                                                  projectDir=self.proxy_log_dir)
 
-    def constructResponsePacket(self, u_response: SesssionHandlerResponse = None):
-        body = u_response.content
-        decodedBody = body
-        # body_encoding = u_response.encoding
-        len_body = len(body)
-        status_line = f"HTTP/{str(u_response.http_version)[-3]}.{str(u_response.http_version)[-1]} {u_response.status_code} {u_response.reason_phrase}"
-        r_headers = u_response.headers
+    def constructResponsePacket(self, u_response: SessionHandlerResponse):
+        try:
+            body = u_response.content
+            decodedBody = body
+            # body_encoding = u_response.encoding
+            len_body = len(body)
+            status_line = f"HTTP/{str(u_response.http_version)[-3]}.{str(u_response.http_version)[-1]} {u_response.status_code} {u_response.reason_phrase}"
+            if u_response.http_version and u_response.status_code and u_response.reason_phrase:
+                logging.debug("got body, body_len & status_line")
 
-        if "Transfer-Encoding" in list(r_headers.keys()) or "transfer-encoding" in list(r_headers.keys()):
-            r_headers.pop("Transfer-Encoding")
-            r_headers["Content-Length"] = str(len_body)
+            r_headers = u_response.headers
 
-        if "br" in list(r_headers.values()):
-            if not is_brotli_compressed(body):
-                br_encodedBody = brotli.compress(body)
-                body = br_encodedBody
-                len_br_encodedBody = len(br_encodedBody)
-                r_headers["Content-Length"] = str(len_br_encodedBody)
-        elif "gzip" in list(r_headers.values()):
-            if not is_gzip_compressed(body):
-                gzip_encodedBody = gzip.compress(body)
-                body = gzip_encodedBody
-                len_gzip_encoded_body = len(gzip_encodedBody)
-                r_headers["Content-Length"] = str(len_gzip_encoded_body)
-        elif "zlib" in list(r_headers.values()):
-            if not is_zlib_compressed(body):
-                zlib_encodedBody = zlib.compress(body)
-                body = zlib_encodedBody
-                len_zlib_encoded_body = len(zlib_encodedBody)
-                r_headers["Content-Length"] = str(len_zlib_encoded_body)
-        headers = ''.join(
-            [f"{key}: {value}\r\n" for key, value in r_headers.items()])
-        cookies = ''.join(
-            [f"{key}: {value};" for key, value in u_response.cookies.items()])
-        # print(f"{yellow('response cookies:')}{cookies}")
-        responsePacket = f"{status_line}\r\n{headers}"
-        if cookies:
-            responsePacket += f"Set-Cookie: {cookies}\r\n"
-        # try:
-        responsePacket += "\r\n"
-        if isinstance(body, bytes):
-            responsePacketBytes = responsePacket.encode("utf-8")
-            ResponsePacket = responsePacketBytes + body
-            decodedResponsePacket = responsePacketBytes + decodedBody
-            return ResponsePacket, decodedResponsePacket
-        elif isinstance(body, str):
-            responsePacket += body
-            decodedResponsePacket = responsePacket + \
-                                    decodedBody.decode("utf-8")
-            return responsePacket.encode(), decodedResponsePacket
+            if "Transfer-Encoding" in list(r_headers.keys()) or "transfer-encoding" in list(r_headers.keys()):
+                r_headers.pop("Transfer-Encoding")
+                r_headers["Content-Length"] = str(len_body)
+
+            if "br" in list(r_headers.values()):
+                if not is_brotli_compressed(body):
+                    br_encodedBody = brotli.compress(body)
+                    body = br_encodedBody
+                    len_br_encodedBody = len(br_encodedBody)
+                    r_headers["Content-Length"] = str(len_br_encodedBody)
+            elif "gzip" in list(r_headers.values()):
+                if not is_gzip_compressed(body):
+                    gzip_encodedBody = gzip.compress(body)
+                    body = gzip_encodedBody
+                    len_gzip_encoded_body = len(gzip_encodedBody)
+                    r_headers["Content-Length"] = str(len_gzip_encoded_body)
+            elif "zlib" in list(r_headers.values()):
+                if not is_zlib_compressed(body):
+                    zlib_encodedBody = zlib.compress(body)
+                    body = zlib_encodedBody
+                    len_zlib_encoded_body = len(zlib_encodedBody)
+                    r_headers["Content-Length"] = str(len_zlib_encoded_body)
+            headers = ''.join(
+                [f"{key}: {value}\r\n" for key, value in r_headers.items()])
+            cookies = ''.join(
+                [f"{key}: {value};" for key, value in u_response.cookies.items()])
+            # print(f"{yellow('response cookies:')}{cookies}")
+            responsePacket = f"{status_line}\r\n{headers}"
+            if cookies:
+                responsePacket += f"Set-Cookie: {cookies}\r\n"
+            # try:
+            responsePacket += "\r\n"
+            if isinstance(body, bytes):
+                responsePacketBytes = responsePacket.encode("utf-8")
+                ResponsePacket = responsePacketBytes + body
+                decodedResponsePacket = responsePacketBytes + decodedBody
+                return ResponsePacket, decodedResponsePacket
+            elif isinstance(body, str):
+                responsePacket += body
+                decodedResponsePacket = responsePacket + \
+                                        decodedBody.decode("utf-8")
+                return responsePacket.encode(), decodedResponsePacket
+        except Exception as exp:
+            logging.error(f"Encountering error : {exp}", exc_info=True)
 
     def ForwardClientRequest(self, request: bytes,
                              destSrvSkt: SSL.Connection = None,
                              usehttp_libs=False,
                              http: bool = False
                              ):
-        headers_end = request.find(b"\r\n\r\n")
-        headers = request[:headers_end]
-        headers_str = headers.decode("utf-8")
-        headers_list = headers_str.split("\r\n")[1:]
-        headers_dict = {}
-        for header in headers_list:
-            key, value = header.split(":")
-            headers_dict[key] = value
-        # handle possible websocket comms
-        if b'Upgrade: websocket' in headers or b'upgrade: websocket' in headers:
-            websocket_key = headers_dict.get("Sec-WebSocket-Key")
-            if websocket_key is None:
-                websocket_key = headers_dict.get("sec-websocket-key")
-            logging.warn(red(f"Client asking for websocket support"))
-            # webskt_comm = WebSocketHandler(websocket_key)
         try:
-            bodyEncoding = False
-            encoded_body = request[headers_end + 4:]
-            if b'Content-Encoding: gzip' in headers or b'content-encoding: gzip' in headers:
-                bodyEncoding = True
-                headers_dict = {}
-                for header in headers.split("\r\n"):
-                    key, value = header.split(":")
-                    headers_dict[key] = value
-                decompressed_body = gzip.decompress(encoded_body)
-                decompressed_utf_body = decompressed_body.decode("utf-8")
-                len_decompressed_utf_body = len(decompressed_utf_body)
-                headers_dict["Content-Length"] = str(len_decompressed_utf_body)
-                headers = ''.join(
-                    [f"{key}: {value}\r\n" for key, value in headers_dict.items()])
-                clientRequest = headers + decompressed_utf_body
-            else:
-                clientRequest = request.decode("utf-8")
-        except UnicodeDecodeError:
-            filename = "client_reqeust.txt" + str(self.error_file_count)
-            with open(filename, "wb") as file:
-                file.write(request)
-                logging.error(f"{red(f'got unicode decode error in client request , written to file=>')}{filename}")
-            self.error_file_count += 1
-        (requestMethod, requestUrl, requestHeaders, requestParams, requestBody,
-         requestUrlwParams) = DissectClientReqPkt(clientRequest, http)
-        if usehttp_libs:
-            if bodyEncoding:
-                requestBody = encoded_body
-            logging.info(
-                f"Connecting to remote server ....... on url: {requestUrlwParams}")
-            if requestBody == "":
-                requestBody = None
+            headers_end = request.find(b"\r\n\r\n")
+            headers = request[:headers_end]
+            headers_str = headers.decode("utf-8")
+            headers_list = headers_str.split("\r\n")[1:]
+            headers_dict = {}
+            for header in headers_list:
+                key_value_pair = header.split(":")
+                headers_dict[key_value_pair[0]] = key_value_pair[1]
+            # handle possible websocket comms
+            if b'Upgrade: websocket' in headers or b'upgrade: websocket' in headers:
+                websocket_key = headers_dict.get("Sec-WebSocket-Key")
+                if websocket_key is None:
+                    websocket_key = headers_dict.get("sec-websocket-key")
+                logging.warning(f"Client asking for websocket support")
+                # webskt_comm = WebSocketHandler(websocket_key)
+            
+            try:
+                bodyEncoding = False
+                encoded_body = request[headers_end + 4:]
+                if b'Content-Encoding: gzip' in headers or b'content-encoding: gzip' in headers:
+                    bodyEncoding = True
+                    headers_dict = {}
+                    for header in headers.split("\r\n"):
+                        key, value = header.split(":")
+                        headers_dict[key] = value
+                    decompressed_body = gzip.decompress(encoded_body)
+                    decompressed_utf_body = decompressed_body.decode("utf-8")
+                    len_decompressed_utf_body = len(decompressed_utf_body)
+                    headers_dict["Content-Length"] = str(len_decompressed_utf_body)
+                    headers = ''.join(
+                        [f"{key}: {value}\r\n" for key, value in headers_dict.items()])
+                    clientRequest = headers + decompressed_utf_body
+                else:
+                    clientRequest = request.decode("utf-8")
+            except UnicodeDecodeError:
+                filename = "client_reqeust.txt" + str(self.error_file_count)
+                with open(filename, "wb") as file:
+                    file.write(request)
+                    logging.error(f"got unicode decode error in client request , written to file=>'){filename}", exc_info=True)
+                self.error_file_count += 1
+            except Exception as exp:
+                logging.error(f"Encountered error: {exp}", exc_info=True)
+            (requestMethod, requestUrl, requestHeaders, requestParams, requestBody,
+            requestUrlwParams) = DissectClientReqPkt(clientRequest, http)
+            if usehttp_libs:
+                if bodyEncoding:
+                    requestBody = encoded_body
+                logging.info(
+                    f"Connecting to remote server ....... on url: {requestUrlwParams}")
+                if requestBody == "":
+                    requestBody = None
 
-            session_handler = SessionHandler()
-            response = session_handler.makeRequest(request_method=requestMethod,
-                                                   request_url=requestUrlwParams,
-                                                   request_headers=requestHeaders,
-                                                   request_data=requestBody)
-
-            responsePacket, decodedResponsePacket = self.constructResponsePacket(
-                u_response=response)
-        return responsePacket, requestUrl, clientRequest, decodedResponsePacket
+                session_handler = SessionHandler()
+                response = session_handler.makeRequest(request_method=requestMethod,
+                                                    request_url=requestUrlwParams,
+                                                    request_headers=requestHeaders,
+                                                    request_data=requestBody)
+                if response.status_code is None:
+                    logging.error(f"failed to fetch response :url: {requestUrl} :status_code: {response.status_code}", exc_info=True)
+                else:
+                    logging.debug(f"function makeRequest returned valid response :url: {requestUrl} :status_code: {response.status_code}")
+                responsePacket, decodedResponsePacket = self.constructResponsePacket(u_response=response)
+            return responsePacket, requestUrl, clientRequest, decodedResponsePacket
+        except Exception as exp:
+            logging.error(f"failure in forwarding client request :url: {requestUrl} :error: {exp}", exc_info=True)
 
     def closeTunnel(self, client_socket, closeClientSocket=True):
         if closeClientSocket:
@@ -357,25 +381,17 @@ class ProxyHandler:
             req_res_data = dec_clientRequest + "\nRESPONSE\n" + dec_clientResponse
             return req_res_data.encode("utf-8")
 
-    def OpenHttpsCommTunnel(self, client_ssl_socket: SSL.Connection,
-                            host_dir,
-                            hostname,
-                            hostname_url,
-                            dest_server_ssl_server_socket: SSL.Connection,
-                            usehttp_libs: bool,
-                            client_socket: socket.socket,
-                            RequestPacket: bytes = None,
-                            http: bool = False,
-                            unix=False):
+    def handle_forwarding(self,RequestPacket,
+                          dest_server_ssl_server_socket,
+                          usehttp_libs,
+                          http,
+                          hostname,
+                          host_dir,
+                          client_ssl_socket,
+                          client_socket,
+                          ):
         try:
-            if RequestPacket is None:
-                RequestPacket = client_ssl_socket.recv(40960)
-
-            ResponsePacket, requestUrl, dec_clientRequest, dec_clientResponse = self.ForwardClientRequest(
-                RequestPacket,
-                dest_server_ssl_server_socket,
-                usehttp_libs=usehttp_libs,
-                http=http)
+            ResponsePacket, requestUrl, dec_clientRequest, dec_clientResponse = self.ForwardClientRequest(RequestPacket,dest_server_ssl_server_socket,usehttp_libs=usehttp_libs,http=http)
             if self.save_traffic:
                 # remember in the gui the scope are regex patterns
                 if self.logging:
@@ -393,12 +409,57 @@ class ProxyHandler:
             except AttributeError:
                 writtenBytes = client_socket.sendall(dec_clientResponse)
             # logging.info(f"{yellow('Bytes written to client socket')}\n\t{writtenBytes}")
+        except Exception as exp:
+            logging.error(f"fowarding failed :error: {exp}", exc_info=True)
+
+    def OpenHttpsCommTunnel(self, client_ssl_socket: SSL.Connection,
+                            host_dir,
+                            hostname,
+                            hostname_url,
+                            dest_server_ssl_server_socket: SSL.Connection,
+                            usehttp_libs: bool,
+                            client_socket: socket.socket,
+                            RequestPacket: bytes = None,
+                            http: bool = False,
+                            unix=False,
+                            keep_alive = False):
+        try:
+            if RequestPacket is None:
+                # this is the instance where the keep alive is valid
+                if keep_alive:
+                    RequestPacket = client_ssl_socket.recv(40960)
+                    # forward original request
+                    self.handle_forwarding(RequestPacket,dest_server_ssl_server_socket,usehttp_libs,http,hostname,host_dir,client_ssl_socket,client_socket)
+                    # now handle the keep alive connection loop
+                    while keep_alive:
+                        browser_req_data = client_ssl_socket.recv(40960)
+                        host_portlist = DissectClientProxyRequests(browser_req_data.decode("utf-8"))
+                        if host_portlist:
+                            keep_alive = host_portlist[2]
+                        if not browser_req_data:
+                            break
+                        if self.isRequest(browser_req_data):
+                            logging.debug("Browser sent request in keep_alive session")
+                            logging.debug(f"request: {browser_req_data}")
+                            try:
+                                self.handle_forwarding(browser_req_data,dest_server_ssl_server_socket,usehttp_libs,http,hostname,host_dir,client_ssl_socket,client_socket)
+                                # self.HandleValidClientRequest(browser_req_data.decode("utf-8"), client_socket, unix)
+                            except Exception as exp:
+                                logging.error(f"Encountered error during keep_alive loop with error: {exp}", exc_info=True)
+                            # self.handle_forwarding(browser_req_data,dest_server_ssl_server_socket,usehttp_libs,http,hostname,host_dir,client_ssl_socket,client_socket)
+                else:
+                    RequestPacket = client_ssl_socket.recv(40960)
+                    self.handle_forwarding(RequestPacket,dest_server_ssl_server_socket,usehttp_libs,http,hostname,host_dir,client_ssl_socket,client_socket)
+
+            else:
+                self.handle_forwarding(RequestPacket,dest_server_ssl_server_socket,usehttp_libs,http,hostname,host_dir,client_ssl_socket,client_socket)
+
             self.closeTunnel(client_socket)
         except SSL.SysCallError as e:
-            logging.error(f"{red('Client Socket Unexpectedly closed with error:')}{e}")
+            logging.error(f"Client Socket Unexpectedly closed with error:{e}", exc_info=True)
             self.closeTunnel(client_socket)
         except SSL.Error as e:
-            logging.error(f"{red('Client failed to accept certificates')}\n\t{yellow('Error:')}{red(e)}")
+            logging.warning(f"Client failed to accept certificates\n\t'Error:'{e}")
             self.closeTunnel(client_socket)
 
     def HandleProxyCommands(self, initial_client_request):
@@ -416,7 +477,7 @@ class ProxyHandler:
                     self.logging = False
                     logging.info("Successfully disabled logging")
                 except Exception as e:
-                    logging.error(red(f"Failed to disable logging with error {e}"))
+                    logging.error(f"Failed to disable logging with error {e}", exc_info=True)
             else:
                 logging.info(
                     "Recieved enable logging request \n Trying to enable logging")
@@ -424,29 +485,30 @@ class ProxyHandler:
                     self.logging = True
                     logging.info("Successfully enabled logging")
                 except Exception as e:
-                    logging.error(red(f"Failed to enable logging with error {e}"))
+                    logging.error(f"Failed to enable logging with error {e}", True)
 
     def HandleValidClientRequest(self, initial_client_request, client_socket, unix):
+        """this function handles a valid request forexample 
+        GET /resource HTTP/2
+        ....."""
+        """recieve request from browser
+        forward it to the session handler 
+        get response from session handler
+        forward the response from the session handler to the browser"""
         logging.info("Received valid request as initial client request")
-        (requestMethod,
-         requestUrl,
-         requestHeaders,
-         requestParams,
-         requestBody,
-         requestUrlwParams) = DissectClientReqPkt(initial_client_request, http=True)
-        hostname = requestHeaders["Host"]
-        hostDir = os.path.join(self.defaultWorkspaceDir, hostname + "/")
-        self.OpenHttpsCommTunnel(client_ssl_socket=None,
-                                 host_dir=hostDir,
-                                 hostname=hostname,
-                                 hostname_url=requestUrl,
-                                 dest_server_ssl_server_socket=None,
-                                 usehttp_libs=self.usehttpLibs,
-                                 client_socket=client_socket,
-                                 RequestPacket=initial_client_request.encode(
-                                     "utf-8"),
-                                 http=True,
-                                 unix=unix)
+        dissected_req= DissectClientReqPkt(initial_client_request, http=True)
+        requestUrl = dissected_req[1]
+        requestHeaders = dissected_req[2]
+        # self.proxy_validation_logger.info(f"recieved browser request to url : {requestUrl}")
+        try:
+            hostname = requestHeaders["Host"]
+            hostDir = os.path.join(self.defaultWorkspaceDir, hostname + "/")
+            self.OpenHttpsCommTunnel(client_ssl_socket=None,host_dir=hostDir,hostname=hostname,hostname_url=requestUrl,dest_server_ssl_server_socket=None,usehttp_libs=self.usehttpLibs,client_socket=client_socket,RequestPacket=initial_client_request.encode("utf-8"),http=True,unix=unix)
+            # self.proxy_validation_logger.info(f"successfully returned response to browser :url: {requestUrl}")
+            logging.info(f"successfully returned response to browser :url: {requestUrl}")
+        except Exception as exp:
+            # self.proxy_validation_logger.error(f"failed to return response to browser :url: {requestUrl}")
+            logging.error(f"failed to return response to browser :url: {requestUrl} with error: {exp}", exc_info=True)
 
     def generateDomainCerts(self, hostname: str):
         """generate a certificate for a specific host and sign it with the root certificate. Return the path to the certficate (.crt) file"""
@@ -458,6 +520,8 @@ class ProxyHandler:
             return self.rootCA.cert_for_host(hostname, wildcard=True)
 
     def HandleProxyClientRequest(self, initial_client_request, client_socket, unix):
+        """handle a direct request directed to the proxy.
+        This normally starts with CONNECT ..."""
         host_portlist = DissectClientProxyRequests(initial_client_request)
         if host_portlist is not None:
             keep_alive = host_portlist[2]
@@ -475,16 +539,16 @@ class ProxyHandler:
                         if Conn_status == 0:
                             usehttpLibs = False
                         elif Conn_status == 1:
-                            logging.info(cyan("Initiating server connection error"))
+                            logging.info("Initiating server connection error")
                             if self.useHttpx:
-                                logging.info(cyan("Resorting to => urllib3 for destination server connection"))
+                                logging.info("Resorting to => urllib3 for destination server connection")
                             usehttpLibs = True
                         destConnection = True
                     except Exception as e:
-                        logging.error(red(f"Encoutered error {e} when initiating a connection to remote server"))
+                        logging.error(f"Encoutered error {e} when initiating a connection to remote server", exc_info=True)
                         destConnection = False
                 elif self.usehttpLibs == True:
-                    logging.info(cyan("Using httplibs for destination server connection"))
+                    logging.info("Using httplibs for destination server connection")
                     usehttpLibs = True
                     destConnection = True
                     destServerSslServerSocket = None
@@ -506,29 +570,22 @@ class ProxyHandler:
                 ClientSslSocket = SSL.Connection(
                     clientSocketSslContext, client_socket)
                 ClientSslSocket.set_accept_state()
-                logging.info(cyan("Upgraded client socket to support ssl"))
+                logging.info("Upgraded client socket to support ssl")
 
                 # open client-proxy-destination tunnel
-                self.OpenHttpsCommTunnel(ClientSslSocket,
-                                         hostDir,
-                                         hostname,
-                                         hostnameUrl,
-                                         destServerSslServerSocket,
-                                         usehttpLibs,
-                                         client_socket,
-                                         unix=unix)
+                self.OpenHttpsCommTunnel(ClientSslSocket,hostDir,hostname,hostnameUrl,destServerSslServerSocket,usehttpLibs,client_socket,unix=unix,keep_alive=keep_alive)
 
             else:
                 response = b"HTTP/1.1 500 Connection Failed"
                 client_socket.sendall(response)
-                logging.error(red("Connection to remote server failed\n"))
+                logging.error("Connection to remote server failed\n", exc_info=True)
                 client_socket.close()
         else:
-            logging.error(red("Initial Client Request is Invalid"))
+            logging.error("Initial Client Request is Invalid", exc_info=True)
 
     def HandleConnection(self, client_socket: socket.socket, unix=True):
         # try:
-        logging.info("Waiting for initial client request\n")
+        # logging.info("Waiting for initial client request\n")
         initial_client_request = client_socket.recv(
             160000).decode("utf-8")
         if self.is_proxyCommand(initial_client_request):
@@ -539,7 +596,7 @@ class ProxyHandler:
             else:
                 self.HandleProxyClientRequest(initial_client_request, client_socket, unix)
         else:
-            logging.error(red("Initial Client Request is Invalid"))
+            logging.error("Initial Client Request is Invalid", exc_info=True)
         # except Exception as error:
         #     logging.error(f"Encountered error : {error} while handling connection")
 
@@ -556,7 +613,7 @@ class ProxyHandler:
         logging.info(f"Proxy running on {self.host}, port {self.port}")
         with ThreadPoolExecutor(max_workers=3084) as executor:
             while True:
-                logging.info("Waiting for Incoming Connections")
+                # logging.info("Waiting for Incoming Connections")
                 client_socket, client_address = self.socket.accept()
                 executor.submit(self.HandleConnection, client_socket)
 
@@ -570,7 +627,7 @@ class ProxyHandler:
 if __name__ == "__main__":
 
     logging.basicConfig(
-        level=logging.DEBUG, format="%(asctime)s -%(levelname)s - %(filename)s:%(lineno)d - %(message)s")
+        level=logging.DEBUG, format="%(asctime)s -%(levelname)s - %(filename)s:%(lineno)d - %(funcName)s - %(message)s")
 
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -585,8 +642,14 @@ if __name__ == "__main__":
         try:
             proxy.startServerInstance()
         except KeyboardInterrupt:
-            logging.info(cyan("\nCleaning Up"))
+            logging.info("\nCleaning Up")
             proxy.socket.close()
     else:
         print("you ran this program with few arguments")
         parser.print_help()
+
+"""
+handle logging that uses json: for each request made all possible info, incase of failure then show reason.
+handle Connection:close in the keep_alive
+handle errors and status_codes that are not 200 try retrying and so on
+cookies """

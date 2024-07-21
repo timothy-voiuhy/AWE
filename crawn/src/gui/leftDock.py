@@ -263,12 +263,15 @@ class LeftDock(QObject):
         # location
         self.location_label = QLabel()
         self.location_label.setText("<b>server locations</b>")
-        self.gen_info_scroll_bar_wid_layout.addWidget(self.location_label)
+        self.generate_table_button = HoverButton("Generate Table", "generate the summary as a table")
+        self.generate_table_button.clicked.connect(self.draw_location_table)
+        self.gen_info_scroll_bar_wid_layout.addWidget(self.location_label, alignment=Qt.AlignLeft)
+        self.gen_info_scroll_bar_wid_layout.addWidget(self.generate_table_button, alignment=Qt.AlignLeft)
 
         # ip:server_name:name_record:geo_location => table
         self.location_table = QTableWidget()
         self.gen_info_scroll_bar_wid_layout.addWidget(self.location_table)
-        self.draw_location_table()
+        # self.draw_location_table()
 
         # dns severs
 
@@ -281,11 +284,11 @@ class LeftDock(QObject):
         self.USlayout = QHBoxLayout()
         self.left_dock_down_widget_layout.addLayout(self.USlayout)
         # show subdomains button
-        self.subdomainsButton = QPushButton("SubdUrlTree")
+        self.subdomainsButton = HoverButton("SubdUrlTree", "show the subdomain url tree")
         self.subdomainsButton.clicked.connect(showSbdUrlTree)
         self.USlayout.addWidget(self.subdomainsButton)
         # show urls Button
-        self.urlsButton = QPushButton("UrlsScan")
+        self.urlsButton = HoverButton("UrlsScan", "scan all the subdomains for endpoints(urls)")
         self.urlsButton.clicked.connect(self.UrlsScan)
         self.USlayout.addWidget(self.urlsButton)
 

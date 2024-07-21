@@ -12,6 +12,14 @@ from phply import phplex, phpast
 from scapy.interfaces import get_working_ifaces
 from termcolor import colored
 
+def log_exceptions(func):
+    def wrapper(*args, **kwargs):
+        try:
+            return func(*args, **kwargs)
+        except Exception as e:
+            logging.error("Encoutering error", exc_info=True)
+            raise
+        return wrapper
 
 # def check_system():
 #     if is_windows:
@@ -101,19 +109,7 @@ def makelogger(
     filepath = logsDir + filename
     _file_logger = logging.FileHandler(filepath)
     _file_logger.setLevel(level)
-    # formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-    formatter = ColoredFormatter(
-        "%(log_color)s%(levelname)-8s%(reset)s %(log_color)s%(message)s",
-        datefmt=None,
-        reset=True,
-        log_colors={
-            "DEBUG": "cyan",
-            "INFO": "green",
-            "WARNING": "yellow",
-            "ERROR": "red",
-            "CRITICAL": "red,bg_white",
-        },
-    )
+    formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
     _file_logger.setFormatter(formatter)
     _logger.addHandler(_file_logger)
     return _logger

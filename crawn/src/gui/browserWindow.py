@@ -20,7 +20,7 @@ class BrowserWindow(QMainWindow):
         self.downloadPath = RUNDIR + "WebEngineDownloads/"
         if not Path(self.downloadPath).exists():
             os.makedirs(self.downloadPath)
-        self.init_link = "google.com"
+        self.init_link = link
         centralWidget = QWidget()
         self.setCentralWidget(centralWidget)
 
