@@ -1,3 +1,5 @@
+#! /usr/bin/python
+
 import atexit
 import codecs
 import json
@@ -13,7 +15,7 @@ from os.path import isfile
 from pathlib import Path
 
 from PySide6 import QtCore, QtGui
-from PySide6.QtCore import QThread
+from PySide6.QtCore import QThread, QLoggingCategory
 from PySide6.QtCore import Qt
 from PySide6.QtCore import Signal, QFileSystemWatcher
 from PySide6.QtGui import QStandardItem, QStandardItemModel
@@ -864,10 +866,10 @@ class SiteMapWindow(QMainWindow):
             for cmp in base_dir_cmps:
                 base_dir += "/" + cmp
             filename = base_dir
-        print(red(f"updateNode called on {filename}"))
+        # print(red(f"updateNode called on {filename}"))
         for node_container in self.dirNodeContainers:
             if node_container.name == filename:
-                print("parent name found")
+                # print("parent name found")
                 if not Path(signaled_filename).exists():
                     # todo: delete also the filenodes
                     self.dirNodeContainers.remove(node_container)
@@ -1334,6 +1336,7 @@ if __name__ == "__main__":
             os.makedirs(os.path.dirname(log_filename))
     logging.basicConfig(level=logging.DEBUG,
                         format='%(asctime)s - %(levelname)s - %(filename)s:%(lineno)d - %(message)s')
+    # QLoggingCategory.setFilterRules("qt.webengine.*=false")
     App = QApplication()
     main_window = MainWin()
     main_window.showMaximized()

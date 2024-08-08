@@ -1,3 +1,6 @@
+import base64
+import codecs
+from copy import deepcopy
 from datetime import timedelta
 import json
 import logging
@@ -11,11 +14,13 @@ from concurrent.futures import ThreadPoolExecutor
 from urllib import parse as url_parser
 
 import certifi
+import chardet
 import httpx
 import httpx._client as http_client
 import requests
 from OpenSSL import SSL
 from certauth.certauth import CertificateAuthority
+from charset_normalizer import from_bytes
 from httpx import Response
 
 from utiliities import (yellow, cyan, red)
@@ -30,9 +35,11 @@ from utiliities import (yellow, cyan, red)
 
 class SessionHandlerResponse(httpx.Response):
 
-    def __init__(self, response_str=None, status_code_=None) -> None:
+    def __init__(self, response_str=None, status_code_=None, content:bytes = None) -> None:
         super().__init__(status_code_)
         self.response_str_ = response_str
+        self.encoding = None
+        self._content = content
 
     @property
     def response_str(self):
@@ -46,9 +53,6 @@ class SessionHandlerResponse(httpx.Response):
             else:
                 ext[key] = value
         return ext
-
-    def redo_body(self, body: str):
-        return body.encode("utf-8")
 
     def redo_headers(self, headers: dict):
         return httpx.Headers(headers)
@@ -72,7 +76,7 @@ class SessionHandlerResponse(httpx.Response):
 
             response_dict["_request"] = self.redo_request(response_dict["_request"])
 
-            response_dict["_content"] = self.redo_body(response_dict["_content"])
+            response_dict["_content"] = self._content
 
             response_dict["_elapsed"] = self.redo_elapsed(response_dict["_elapsed"])
 
@@ -203,11 +207,14 @@ class SessionHandler:
             proxy_ses_request_str = json.dumps(proxy_ses_req_dict)
             self.clientSendAll(proxy_ses_request_str)
             response = self.clientRecv()
-            if response.status_code is None:
-                logging.error(f"failed to retrieve response :url: {request_url} :status_code: {response.status_code}", exc_info=True)
-            else:
-                logging.debug(f"response retrieved by clientRecv :status_code: {response.status_code}")
-            return response
+            if type(response) is SessionHandlerResponse:
+                if response.status_code is None:
+                    logging.error(f"failed to retrieve response :url: {request_url} :status_code: {response.status_code}", exc_info=True)
+                else:
+                    logging.debug(f"response retrieved by clientRecv :status_code: {response.status_code}")
+                    return response
+            elif type(response) is bytes:
+                return response
         except Exception as e:
             logging.error(f"makeRequest failed :error: {e}", exc_info=True)
 
@@ -222,11 +229,11 @@ class SessionHandler:
     def get_request(self, request: httpx.Request):
         return request.method, str(request.url)
 
-    def get_content(self, content: bytes):
-        try:
-            return content.decode("utf-8")
-        except Exception as exp:
-            logging.error(f"failed to get response content with error: {exp}", exc_info=True)
+    # def get_content(self, response:httpx.Response):
+    #     try:
+    #         return response.text
+    #     except Exception as exp:
+    #         logging.error(f"failed to get response content with error: {exp}", exc_info=True)
 
     def get_extensions(self, extensions: dict):
         ext_dict = {}
@@ -242,14 +249,15 @@ class SessionHandler:
 
     def serializeResponse(self, response: httpx.Response):
         response_dict = response.__dict__
+        response_encoded_content = deepcopy(response._content)
         response_dict["headers"] = self.get_response_headers_dict(response.headers)
         response_dict["_request"] = self.get_request(response.request)
-        response_dict["_content"] = self.get_content(response.content)
+        response_dict["_content"] = None
         response_dict["stream"] = None  # parse if needed and those below
+        response_dict["encoding"] = response.encoding
         response_dict["_decoder"] = None
         response_dict["_elapsed"] = self.get_elapsed(response.elapsed)
         response_dict["extensions"] = self.get_extensions(response_dict["extensions"])
-        # response_dict["extensions"] = None  # bytes extension comes from here
         # logging.debug(f"response headers: {response.headers}")
 
         try:
@@ -260,11 +268,11 @@ class SessionHandler:
                 logging.debug("successfully serialized response to json_str")
             else:
                 logging.debug("failed to serialize response to json_str")
-            return response_str
+            return response_str, response_encoded_content
         except Exception as exp:
             logging.debug(f"failed to serialize response to a json_str after encountering error {exp}")
 
-    @staticmethod
+    # @staticmethod
     def joinUrlwParams(self, url: str, params: dict):
         params_str = url_parser.urlencode(params)
         return url + "?" + params_str
@@ -302,42 +310,50 @@ class SessionHandler:
             except httpx.ConnectError:
                 logging.warning(f"failing to resolve to url {url}")
                 if retries == 4:
-                    logging.error(f"failed to resolve to url {url}", exc_info=True)
-            if retries < 4:
-                logging.info("retrying....")
+                    response = None
+                    logging.error(f"failed to resolve to url {url} after 4 retries, probaly no internet connection or wrong url",)
+                    break
             retries += 1
-        if response:
+        if type(response) is httpx.Response:
             logging.debug("successfully fetched response")
-        response_str = self.serializeResponse(response)
-        try:
-            exchange_file = self.exchange_file + self.generate_random_filename()
-            exch_file_dir, exch_file_name = os.path.split(exchange_file)
+            response_str, resp_content = self.serializeResponse(response)
+            try:
+                exchange_file = self.exchange_file + self.generate_random_filename()
+                exch_file_dir, exch_file_name = os.path.split(exchange_file)
 
-            if not os.path.isdir(exch_file_dir):
-                os.makedirs(exch_file_dir)
+                if not os.path.isdir(exch_file_dir):
+                    os.makedirs(exch_file_dir)
 
-            with open(exchange_file, "wb") as file:
-                file.write(response_str.encode("utf-8"))
+                file_data = response_str.encode() + b'--:::cont:::--' + resp_content
 
-            # prepare the data to be sent ie done bit and the filename
-            data = {"bit": self.done_bit, "filename": exchange_file}
+                with open(exchange_file, "wb") as file:
+                    file.write(file_data)
+              
+                # prepare the data to be sent ie done bit and the filename
+                data = {"bit": self.done_bit, "filename": exchange_file}
 
+                if client_socket.send(json.dumps(data).encode("utf-8")):
+                    logging.debug("sent done bit")
+                    client_socket.close()
+                else:
+                    logging.error("failed to send done bit", exc_info=True)
+                logging.debug("successfully sent response to session client")  # instead of
+                # sending the data, a done message is going to be sent and the data written to a file from
+                # where the other side reads it from.
+            except Exception as e:
+                logging.error(f"Encountered error: {e} while processing {url}", exc_info=True)
+            self.closeTunnel(client_socket)
+            # except Exception as error:
+            #     logging.error(f"Encountered error: {error}")
+            #     self.client_socket.send(self.error_bit)
+        elif response is None:
+            data = {"bit":self.error_bit}
             if client_socket.send(json.dumps(data).encode("utf-8")):
-                logging.debug("sent done bit")
-                logging.debug(f"closing client_socket")
-                client_socket.close()
-                logging.debug("session server successfully closed client_socket")
+                    logging.debug("sent error_bit")
+                    client_socket.close()
             else:
-                logging.error("failed to send done bit", exc_info=True)
-            logging.debug("successfully sent response to session client")  # instead of
-            # sending the data, a done message is going to be sent and the data written to a file from
-            # where the other side reads it from.
-        except Exception as e:
-            logging.error(red(f"Encountered error: {e} while processing {url}"))
-        self.closeTunnel(client_socket)
-        # except Exception as error:
-        #     logging.error(f"Encountered error: {error}")
-        #     self.client_socket.send(self.error_bit)
+                logging.error("failed to send error bit", exc_info=True)
+                logging.debug("successfully sent response to session client")
 
     def createServer(self):
         self.server_socket = socket.create_server(address=(self.host, self.server_port),
@@ -346,7 +362,7 @@ class SessionHandler:
         logging.info(f"Session handler listening on port {self.server_port}")
         with ThreadPoolExecutor(max_workers=3084) as executor:
             while True:
-                logging.info("Session Handler waiting for incoming connection ...")
+                # logging.info("Session Handler waiting for incoming connection ...")
                 client_socket = self.server_socket.accept()[0]
                 executor.submit(self.handleClientConnection, client_socket)
 
@@ -368,12 +384,23 @@ class SessionHandler:
                 logging.debug("received response from session server")
                 exchange_file = data_dict["filename"]
                 with open(exchange_file, "rb") as file:
-                    resp_data = file.read()
+                    _data = file.read()
+                    dat_cont = _data.split(b'--:::cont:::--')
+                    resp_data = dat_cont[0]
+                    resp_content = dat_cont[1]
                     status_code = self.get_status_code(resp_data.decode("utf-8"))
-                    response = SessionHandlerResponse(response_str=resp_data, status_code_=status_code)
+                    response = SessionHandlerResponse(response_str=resp_data, status_code_=status_code, content = resp_content)
                     response.decodeResponse()
                     logging.debug("successfully decoded ses_response")
                     return response
+            elif data_dict["bit"] == 1:
+                response =  ("HTTP/1.1 502 Bad Gateway\r\n"
+                             "Content-Type: text/html; charset=UTF-8\r\n"
+                             "Content-Length: 89\r\n"
+                             "X-Proxy-Server: aweProxy\r\n"
+                             "\r\n"
+                             "<html><body><h1>502 Bad Gateway : Unable to connect to the destination server.</h1></body></html>")
+                return response.encode()
         except Exception as exp:
             logging.error(f"Encountered error: {exp}", exc_info=True)
 
@@ -386,8 +413,13 @@ class SessionHandler:
 
 
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.DEBUG,
+    logging.basicConfig(level=logging.WARNING,
                         format='%(asctime)s - %(levelname)s - %(filename)s:%(lineno)d - %(message)s')
+    
+    for logger_name in logging.root.manager.loggerDict:
+        if logger_name not in ["__main__"]:
+            logging.getLogger(logger_name).setLevel(logging.WARNING)
+
     try:
         session_handler = SessionHandler()
         session_handler.createServer()

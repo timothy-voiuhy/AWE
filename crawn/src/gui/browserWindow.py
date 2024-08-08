@@ -26,8 +26,8 @@ class BrowserWindow(QMainWindow):
 
         self.centralWidgetLayout = QVBoxLayout()
         centralWidget.setLayout(self.centralWidgetLayout)
-
-        self.browser = QtWebEngineWidgets.QWebEngineView()
+        self.engine_profile = self.setupProfile()
+        self.browser = QtWebEngineWidgets.QWebEngineView(self.engine_profile)
         self.Page = QWebEnginePage()
         self.Page.certificateError.connect(self.browserCertificateError)
         # self.Page.setProperty()
@@ -63,11 +63,12 @@ class BrowserWindow(QMainWindow):
 
     def setupProfile(self):
         self.profile = QWebEngineProfile.defaultProfile()
-        self.profile.httpCacheType(QWebEngineProfile.MemoryHttpCache)
-        self.profile.setPersistentCookiesPolicy(QWebEngineProfile.NoPersistentCookies)
+        # self.profile.httpCacheType(QWebEngineProfile.MemoryHttpCache)
+        # self.profile.setPersistentCookiesPolicy(QWebEngineProfile.NoPersistentCookies)
         self.profile.setHttpUserAgent(
             "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36")
         self.profile.setDownloadPath(self.downloadPath)
+        return self.profile
 
     def closeProgressBarWidget(self):
         self.browserProgressBar.setVisible(False)
