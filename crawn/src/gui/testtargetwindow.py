@@ -1,17 +1,22 @@
 import asyncio
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
-
+import os
+from pathlib import Path
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QMainWindow, QMessageBox, QWidget, QVBoxLayout, QTabWidget, QFormLayout, QLineEdit, \
     QLabel, QCheckBox, QPushButton
 
 from atomcore import RunMainAtomFunction
+from gui.guiUtilities import HoverButton
 from gui.threadrunners import Sublist3rThreadRunner, SubdomainizerThreadRunner, AmassThreadRunner
 
 
 class TestTargetWindow(QMainWindow):
-    def __init__(self, projectDirPath, parent) -> None:
+    def __init__(self, projectDirPath, parent, top_parent) -> None:
         super().__init__()
+        self.setWindowTitle("Test Target")
         self.parent = parent
+        self.main_window = self.parent
         self.useHttp = False
         self.useBrowser = False
         self.runAmass = False
@@ -19,6 +24,8 @@ class TestTargetWindow(QMainWindow):
         self.sublisterScanPorts = False
         self.sublisterUseSearchEngines = False
         self.projectDirPath = projectDirPath
+        self.top_parent = top_parent
+        self.amass_run_file = os.path.join(self.projectDirPath, "amass_.txt")
 
     def Initialize(self):
         def runSublist3r():
@@ -94,12 +101,17 @@ class TestTargetWindow(QMainWindow):
 
         def runAmass():
             self.amassRunner = AmassThreadRunner(
-                self.amassUrlTarget.text(), self.projectDirPath
-            )
+                self.amassUrlTarget.text(), self.projectDirPath, self.main_window, self.top_parent)
             self.amassRunner.setObjectName("AmassRunner")
             self.parent.threads.append(self.amassRunner)
             self.amassRunner.start()
             # amassRunner.run()
+        
+        def runAmassParse():
+            self.amass_runner = AmassThreadRunner(amassUrlTarget=None, projectDirPath=self.projectDirPath,main_window=self.main_window, only_parse_data= True, top_parent=self.top_parent)
+            self.amass_runner.setObjectName("AmassRunner")
+            self.parent.threads.append(self.amass_runner)
+            self.amass_runner.start()
 
         self.centralWidget = QWidget()
         self.setCentralWidget(self.centralWidget)
@@ -156,11 +168,23 @@ class TestTargetWindow(QMainWindow):
         self.amassRunnerOptionsLayout.addRow(self.amassUrlLabel, self.amassUrlTarget)
         # add form layout to vbox layout
         self.amassRunnerLayout.addLayout(self.amassRunnerOptionsLayout)
+
+        if Path(self.amass_run_file).exists():
+            self.data_file_exists_label = QLabel()
+            self.data_file_exists_label.setText("<b>data file exits</b>")
+            self.amassRunnerLayout.addWidget(self.data_file_exists_label, alignment=Qt.AlignLeft)
+
+            self.amass_parse_data_button = HoverButton("parse data", "parse the amass data in the data file")
+            self.amass_parse_data_button.clicked.connect(runAmassParse)
+            self.amassRunnerLayout.addWidget(self.amass_parse_data_button, alignment=Qt.AlignLeft)
+
         # run Button
         self.amassRunButton = QPushButton()
         self.amassRunButton.setText("Run Amass")
         self.amassRunButton.clicked.connect(runAmass)
+        self.amassRunButton.setFixedWidth(80)
         self.amassRunnerLayout.addWidget(self.amassRunButton)
+        self.amassRunnerLayout.setAlignment(Qt.AlignTop)
 
         self.tabManager.addTab(self.amassRunner, "Amass")
 

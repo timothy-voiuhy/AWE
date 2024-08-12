@@ -5,11 +5,12 @@ from pathlib import Path
 
 from PySide6.QtCore import QObject, Signal, Qt, QModelIndex, Slot, QThread
 from PySide6.QtGui import QStandardItem, QStandardItemModel
-from PySide6.QtWidgets import QMainWindow, QMessageBox, QDockWidget, QWidget, QVBoxLayout, QFormLayout, QCheckBox, \
-    QFrame, QLabel, QHBoxLayout, QPushButton, QTreeView, QScrollArea, QTextBrowser, QSplitter, QTableWidget, QTableView
+from PySide6.QtWidgets import QMessageBox, QDockWidget, QWidget, QVBoxLayout, QFormLayout, QCheckBox, \
+    QFrame, QLabel, QHBoxLayout, QLineEdit, QTreeView, QScrollArea, QTextBrowser, QSplitter, QTableWidget, QTableView, QTableWidgetItem
 
 from gui.functionUtils import atomGuiGetSubdomains, atomGuiGetUrls
 from gui.guiUtilities import MessageBox, HoverButton
+from gui.threadrunners import WhoisThreadRunner
 from utiliities import red, rm_same, yellow, runWhoisOnTarget
 
 
@@ -101,10 +102,15 @@ class LeftDock(QObject):
         self.urlGetterRunning = False
         self.main_window = main_window
         self.projectDirPath = project_dir_path
+        self.amass_data_json_file  = os.path.join(self.projectDirPath, "emcpData.json")
         self.SubdomainUrlDict = {}
+        self.location_table_drawn = False
         self.SubdomainUrlDict_file = os.path.join(self.projectDirPath, "subdomainsUrlDict.json")
         self.parent = parent
+        self.whois_displaying = False
+        self.location_table_item_dicts = []
         self.topParent.socketIpc.processFinishedExecution.connect(self.updateModel)
+        self.topParent.socketIpc.processFinishedExecution.connect(self.display_whois_results)
 
         def showSbdUrlTree():
             toolNames = ["amass", "sublist3r", "subdomainizer"]
@@ -242,36 +248,47 @@ class LeftDock(QObject):
         )
         self.general_information_layout.addRow(self.numberOfUrls, self.nUrls)
 
-        # whois
-        self.whois_label = QLabel()
-        self.whois_label.setText("<b>whois results<b/>")
-        self.gen_info_scroll_bar_wid_layout.addWidget(self.whois_label, alignment=Qt.AlignLeft)
-        self.whois_frame = QFrame()
-        self.whois_frame.setMaximumWidth(800)
-        self.whois_frame_layout = QVBoxLayout()
-        self.whois_frame.setLayout(self.whois_frame_layout)
-        self.run_whois_button = HoverButton("run whois", "run the whois tool on the target")
-        self.run_whois_button.clicked.connect(self.run_whois)
-        self.whois_frame_layout.addWidget(self.run_whois_button, alignment=Qt.AlignLeft)
-        self.whois_text_widget = QTextBrowser()
-        # self.whois_text_widget.setFixedWidth(800)
-        self.whois_text_widget.setMaximumWidth(800)
-        self.whois_text_widget.setReadOnly(True)
-        self.whois_frame_layout.addWidget(self.whois_text_widget)
-        self.gen_info_scroll_bar_wid_layout.addWidget(self.whois_frame, alignment=Qt.AlignLeft)
-
         # location
         self.location_label = QLabel()
-        self.location_label.setText("<b>server locations</b>")
+        self.location_label.setText("<b>Server Locations Table</b>")
+        self.location_menu_layout = QHBoxLayout()
         self.generate_table_button = HoverButton("Generate Table", "generate the summary as a table")
         self.generate_table_button.clicked.connect(self.draw_location_table)
         self.gen_info_scroll_bar_wid_layout.addWidget(self.location_label, alignment=Qt.AlignLeft)
-        self.gen_info_scroll_bar_wid_layout.addWidget(self.generate_table_button, alignment=Qt.AlignLeft)
+        # self.gen_info_scroll_bar_wid_layout.addWidget(self.generate_table_button, alignment=Qt.AlignLeft)
+        self.location_menu_layout.addWidget(self.generate_table_button)
+
+        # search LineEdit 
+        self.search_line_edit = QLineEdit()
+        self.search_line_edit.setFixedWidth(250)
+        self.location_menu_layout.addWidget(self.search_line_edit)
+
+        # search button
+        self.search_button = HoverButton("search", "search for any matches of a domain name")# to be changed to a search icon
+        self.search_button.clicked.connect(self.search_location_table)
+        self.location_menu_layout.addWidget(self.search_button,alignment=Qt.AlignLeft)
+
+        self.location_menu_layout.setAlignment(Qt.AlignLeft)
+        self.gen_info_scroll_bar_wid_layout.addLayout(self.location_menu_layout)
 
         # ip:server_name:name_record:geo_location => table
         self.location_table = QTableWidget()
         self.gen_info_scroll_bar_wid_layout.addWidget(self.location_table)
         # self.draw_location_table()
+
+        # whois
+        self.whois_label = QLabel()
+        self.whois_label.setText("<b>Whois Results<b/>")
+        self.gen_info_scroll_bar_wid_layout.addWidget(self.whois_label, alignment=Qt.AlignLeft)
+        self.whois_layout = QVBoxLayout()
+        self.run_whois_button = HoverButton("run whois", "run the whois tool on the target")
+        self.run_whois_button.clicked.connect(self.run_whois)
+        self.whois_layout.addWidget(self.run_whois_button, alignment=Qt.AlignLeft)
+        self.whois_text_widget = QTextBrowser()
+        # self.whois_text_widget.setSizeAdjustPolicy()
+        self.whois_text_widget.setReadOnly(True)
+        self.whois_layout.addWidget(self.whois_text_widget)
+        self.gen_info_scroll_bar_wid_layout.addLayout(self.whois_layout)
 
         # dns severs
 
@@ -306,17 +323,138 @@ class LeftDock(QObject):
         self.subdomainsTreeView.setEditTriggers(QTreeView.NoEditTriggers)
         self.left_dock_down_widget_layout.addWidget(self.subdomainsTreeView)
 
+    def search_location_table(self):
+        if self.location_table_drawn:
+            user_search_domain = self.search_line_edit.text()
+            for index, row_dict in enumerate(self.location_table_item_dicts):
+                subdomain = row_dict["subdomain"]
+                if subdomain == user_search_domain:
+                    item = row_dict["WidgetItems"][0]
+                    row_index = row_dict["index"]
+                else:
+                    if index == len(self.location_table_item_dicts) -1:
+                        search_fail_mb = MessageBox("No results found", "No subdomain found that matches the item you searched", "Information")
+                        search_fail_mb.exec()
+            self.location_table.scrollToItem(item)
+            self.location_table.selectRow(row_index)
+        else:
+            mb=MessageBox("Information", "The location table has not been drawn. \nDo you want to generate the table ?", "Question", buttons=["Ok", "Cancel"])
+            ret = mb.exec()
+            if ret == QMessageBox.Ok:
+                self.draw_location_table()
+
     def InitializeLeftDock(self):
         return self.leftDock
 
     def draw_location_table(self):
-        self.location_table.setColumnCount(4)
-        # self.location_table.colum
-        # self.location_table.setRowCount()
+        if not self.location_table_drawn:
+            # get the amass data
+            if Path(self.amass_data_json_file).exists():
+                self.location_table.setColumnCount(6)
+                self.location_table.setFixedHeight(800)
+                with open(self.amass_data_json_file, "r") as data_file:
+                    data_dict  = dict(json.loads(data_file.read()))
+                domain_infodicts = list(data_dict.values())[0]
+                data = []
+                subdomains = []
+                managers = []
+                for domain_infodict in domain_infodicts:
+                    domain_info_list = []
+
+                    domain_name = domain_infodict["subdomain"]
+                    subdomains.append(domain_name)
+
+                    domain_info_list.append(domain_name)
+                    name_record = domain_infodict["namerecord"]
+                    domain_info_list.append(name_record)
+                    ips_str = ""
+                    if len(domain_infodict["ip"]) == 1:
+                        ips_str = list(domain_infodict["ip"])[0]
+                    else:
+                        for index, ip in enumerate(domain_infodict["ip"]):
+                            if index == len(domain_infodict["ip"]):
+                                ips_str = ips_str + ip
+                            else:
+                                ips_str = ips_str + ip + "\n"
+                    domain_info_list.append(ips_str)
+                    netblock = domain_infodict["netblock"]
+                    domain_info_list.append(netblock)
+                    asn = domain_infodict["asn"]
+                    domain_info_list.append(asn)
+
+                    manager = domain_infodict["manager"]
+                    managers.append(manager)
+
+                    domain_info_list.append(manager)
+                    data.append(domain_info_list)
+                self.location_table.setRowCount(len(domain_infodicts))
+
+                # set the column width for the subdomain name column
+                longest_length = 0
+                for domain_name in subdomains:
+                    len_domain_name = len(domain_name)
+                    if len_domain_name > longest_length:
+                        longest_length = len_domain_name
+
+                column_width = 200
+                for column_index in range(6):
+                    if column_index != 4 and column_index != 1:
+                        self.location_table.setColumnWidth(column_index, column_width)
+                self.location_table.setColumnWidth(4, 80) # asn column
+                self.location_table.setColumnWidth(1, 120) #name_record column
+                
+                # self.location_table.setSizeAdjustPolicy()
+                self.location_table.setHorizontalHeaderLabels(["Domain Name", "name record", "Ip(s)", "Netblock", "Asn", "Manager"])
+                for row in range(len(data)):
+                    row_widget_items_dict = {
+                        "index": row,
+                        "subdomain":data[row][0],
+                        "WidgetItems":[]
+                    }
+                    row_table_widget_items = []
+                    for col in range(len(data[row])):
+                        item = QTableWidgetItem(data[row][col])
+                        row_table_widget_items.append(item)
+                        self.location_table.setItem(row, col, item)
+                    row_widget_items_dict["WidgetItems"] = row_table_widget_items
+                    self.location_table_item_dicts.append(row_widget_items_dict)
+                self.location_table_drawn = True
+                
+            else:
+                no_file_messagebox = MessageBox("File not found", "It seems Amass has not been yet. \n Do you want to run it?",buttons=["Ok", "Cancel"])
+                ret_ = no_file_messagebox.exec()
+                if ret_ == QMessageBox.Ok:
+                    self.main_window.OpenTestTargetWindow()
+                    self.main_window.testWindow.tabManager.setCurrentIndex(1)
+            # self.location_table.selectRow(200) # highlight a given row
+            # self.location_table.scrollToBottom() 
+            # Todo: implement the search mechanism using the scroll to mechanism
+            
+        else:
+            drawn_table_messagebox = MessageBox("Table Already Drawn", "Table has already drawn", "Ok")
+            drawn_table_messagebox.exec()
 
     def run_whois(self):
-        self.whois_text_results = runWhoisOnTarget(self.main_window.main_server_name, self.projectDirPath)
-        self.whois_text_widget.setText(self.whois_text_results.decode("utf-8"))
+        self.whois_runner = WhoisThreadRunner(top_parent=self.topParent, server_name=self.main_window.main_server_name, project_dir_path=self.projectDirPath)
+        self.whois_runner.start()
+
+    def display_whois_results(self, parent, objectName):
+        if self.whois_displaying is False:
+            self.whois_results_filename = os.path.join(self.projectDirPath, "whois_results")
+            if objectName == "whois runner":
+                with open(self.whois_results_filename, "rb") as file:
+                    self.whois_text_results = file.read()
+                if not self.whois_text_results == b"":
+                    self.whois_text_widget.setBaseSize(800,600)
+                    self.whois_text_widget.setText(self.whois_text_results.decode("utf-8"))
+                    self.whois_displaying = True
+                else:
+                    fail_message_box = MessageBox("Information", "whois returned no information.\ncheck the domain name or the internet connection", "Ok")
+                    fail_message_box.exec()
+        else:
+            d_message_box = MessageBox("Information", "whois has already been run", "Ok")
+            d_message_box.exec()
+
 
     def hideGenInfo(self):
         if self.infoShowCheckBox.isChecked():

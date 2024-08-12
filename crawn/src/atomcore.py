@@ -22,6 +22,7 @@ from jsbeautifier import beautify
 
 from args import parse_args
 from browser import Browser, BrHandler
+from config.config import RUNDIR
 from fileutils import w_data_to_file, DetectXml, extract_html_forms, extract_html_inputs, replace_link
 from utiliities import (
     red,
@@ -89,9 +90,9 @@ class MainRunner:
                  use_browser=False, maximum_tabs=20, tab_sleep_time=10,
                  nmax_retry=5, use_http=False, requests_count=10, requests_sleep_time=1) -> None:
         if internet_check() is True:
-            self.run_dir = "/media/program/01DA55CA5F28E000/MYAPPLICATIONS/AWE/AWE/crawn/"
+            self.run_dir = RUNDIR
             if sys.platform == "win32":
-                self.run_dir  = "D:\\MYAPPLICATIONS\\AWE\\AWE\\crawn\\"
+                self.run_dir  = RUNDIR
             headers = {'Accept': '*/*',
                     'Accept-Encoding': 'gzip, deflate',
                     'Accept-Language': 'en-US,en;q=0.9',

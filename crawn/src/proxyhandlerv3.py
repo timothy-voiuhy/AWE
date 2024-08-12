@@ -11,6 +11,7 @@ import sys
 import threading
 import zlib
 import mimetypes
+from config.config import RUNDIR
 import traceback
 from concurrent.futures import ThreadPoolExecutor
 from urllib import parse as urlparser
@@ -131,13 +132,14 @@ def writeLinkContentToFIle(main_dir, link: str, data, max_filename_len=255):
         # giving a file name for the index file
         relative_path = os.path.join(relative_path, "index.html")
 
+    # the the extension to be placed on the hashed relative path
     file_extension = os.path.splitext(relative_path)[1] or ".html"
 
     if len(relative_path) > max_filename_len:
         hashed_filename = hashlib.md5(relative_path.encode()).hexdigest()
         file_name = hashed_filename + file_extension
     else:
-        file_name = relative_path + file_extension
+        file_name = relative_path # the relative path already has an extension
 
     file_path = os.path.join(main_dir, file_name)
 
@@ -195,9 +197,9 @@ class ProxyHandler:
         self.socket.listen(5)
         self.downlaodMozillaCAs = downloadMozillaCAs
         if sys.platform == "WIN32":
-            self.runDir = rundir = "D:\\MYAPPLICATIONS\\AWE\\AWE\\crawn\\src"
+            self.runDir = rundir = RUNDIR
         else:
-            self.runDir = "/media/program/01DA55CA5F28E000/MYAPPLICATIONS/AWE/AWE/crawn/src"
+            self.runDir = RUNDIR
         if self.downlaodMozillaCAs:
             self.MozillarootCAsUrl = "https://github.com/gisle/mozilla-ca/blob/master/lib/Mozilla/CA/cacert.pem"
             self.MozillaCACertsVerifyFile = self.runDir + "/proxycert/Mozilla/cacert.pem"
@@ -234,7 +236,7 @@ class ProxyHandler:
         self.save_traffic = save_traffic
         self.error_file_count = 0
         self.useHttpx = useHttpx
-        self.logging = True
+        self.logging = False
         # default regex pattern that can match for all hostnames
         self.scope = ["."]
         self.proxy_log_dir = self.runDir+"/logs/"
@@ -373,6 +375,8 @@ class ProxyHandler:
                         responsePacket, decodedResponsePacket = self.constructResponsePacket(
                             u_response=response)
                         return responsePacket, requestUrl, clientRequest, decodedResponsePacket
+                elif response == "close":
+                    return response
                 elif type(response) is bytes:
                     return response
         except Exception as exp:
@@ -413,7 +417,7 @@ class ProxyHandler:
                 ResponsePacket, requestUrl, dec_clientRequest, dec_clientResponse = forward_response
                 if self.save_traffic:
                     # remember in the gui the scope are regex patterns
-                    if self.logging:
+                    if self.logging is True:
                         if self.scope is not None:
                             for scope_regex in self.scope:
                                 pattern = re.compile(scope_regex)
@@ -428,6 +432,8 @@ class ProxyHandler:
                 except AttributeError:
                     writtenBytes = client_socket.sendall(dec_clientResponse)
                 # logging.info(f"{yellow('Bytes written to client socket')}\n\t{writtenBytes}")
+            elif forward_response == "close":
+                client_socket.close()
             elif type(forward_response) is bytes:
                 client_socket.sendall(forward_response)
         except Exception as exp:

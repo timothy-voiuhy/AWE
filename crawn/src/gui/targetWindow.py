@@ -179,7 +179,7 @@ class TargetWindow(QtWidgets.QMainWindow):
                 self.enableProxyCheckBox.setChecked(False)
 
     def OpenTestTargetWindow(self):
-        self.testWindow = TestTargetWindow(self.projectDirPath, parent=self)
+        self.testWindow = TestTargetWindow(self.projectDirPath, parent=self, top_parent=self.topParent)
         self.testWindow.Initialize()
         self.testWindow.setFixedHeight(600)
         self.testWindow.setFixedWidth(800)

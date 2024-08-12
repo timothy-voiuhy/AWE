@@ -23,6 +23,7 @@ from certauth.certauth import CertificateAuthority
 from charset_normalizer import from_bytes
 from httpx import Response
 
+from config.config import RUNDIR
 from utiliities import (yellow, cyan, red)
 
 
@@ -101,10 +102,10 @@ class SessionHandler:
         if self.server_port is None:
             self.server_port = 8181
         if sys.platform == "WIN32":
-            self.runDir = rundir = "D:\\MYAPPLICATIONS\\AWE\\AWE\\crawn\\src"
+            self.runDir = rundir = RUNDIR
             self.exchange_file = self.runDir + "\\tmp\\_tmp"
         else:
-            self.runDir = "/media/program/01DA55CA5F28E000/MYAPPLICATIONS/AWE/AWE/crawn/src"
+            self.runDir = RUNDIR
             self.exchange_file = self.runDir + "/tmp/_tmp"
         self.use_tor = use_tor
         self.client_socket = 0
@@ -213,6 +214,8 @@ class SessionHandler:
                 else:
                     logging.debug(f"response retrieved by clientRecv :status_code: {response.status_code}")
                     return response
+            elif response == "close":
+                return response
             elif type(response) is bytes:
                 return response
         except Exception as e:
@@ -385,14 +388,16 @@ class SessionHandler:
                 exchange_file = data_dict["filename"]
                 with open(exchange_file, "rb") as file:
                     _data = file.read()
-                    dat_cont = _data.split(b'--:::cont:::--')
-                    resp_data = dat_cont[0]
-                    resp_content = dat_cont[1]
-                    status_code = self.get_status_code(resp_data.decode("utf-8"))
-                    response = SessionHandlerResponse(response_str=resp_data, status_code_=status_code, content = resp_content)
-                    response.decodeResponse()
-                    logging.debug("successfully decoded ses_response")
-                    return response
+                dat_cont = _data.split(b'--:::cont:::--')
+                resp_data = dat_cont[0]
+                resp_content = dat_cont[1]
+                status_code = self.get_status_code(resp_data.decode("utf-8"))
+                response = SessionHandlerResponse(response_str=resp_data, status_code_=status_code, content = resp_content)
+                response.decodeResponse()
+                logging.debug("successfully decoded ses_response")
+                os.remove(exchange_file)
+                return response
+
             elif data_dict["bit"] == 1:
                 response =  ("HTTP/1.1 502 Bad Gateway\r\n"
                              "Content-Type: text/html; charset=UTF-8\r\n"
@@ -401,6 +406,9 @@ class SessionHandler:
                              "\r\n"
                              "<html><body><h1>502 Bad Gateway : Unable to connect to the destination server.</h1></body></html>")
                 return response.encode()
+        except json.decoder.JSONDecodeError:
+            return "close"
+
         except Exception as exp:
             logging.error(f"Encountered error: {exp}", exc_info=True)
 

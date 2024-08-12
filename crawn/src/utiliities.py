@@ -58,7 +58,7 @@ def internet_check() -> bool:
 
 def rm_same(file):
     """definition: reads a file and removes the line duplicates and leaves only one"""
-    try:
+    if os.path.exists(file):
         with open(file, "r") as f:
             links = f.readlines()
             f.close()
@@ -71,8 +71,11 @@ def rm_same(file):
         with open(file, "w") as g:
             g.writelines(newlinks)
             g.close()
-    except FileNotFoundError:
-        print(f"file {file} not found")
+        return True
+    else:
+        logging.error(f"file {file} not found")
+        return False
+
 
 
 def parse_php_code(php_code):
@@ -163,23 +166,18 @@ class AmassSubdProcessor:
             "ptr_record",
             "aaa_record",
         ]
-        self.name_records = []
-        [
-            self.name_records.append(os.path.join(
-                self.projectDir, namerecord + ".txt"))
-            for namerecord in self.namerecords
-        ]
-        self.file_path_names = [
-            "a_records",
-            "cname_records",
-            "mx_records",
-            "ns_records",
-            "ptr_records",
-            "aaa_records",
+
+        self.file_names = [
+            "a_records.txt",
+            "cname_records.txt",
+            "mx_records.txt",
+            "ns_records.txt",
+            "ptr_records.txt",
+            "aaa_records.txt",
         ]
         self.file_namerecord_dict = {}
-        for name_record, filepathname in zip(self.name_records, self.file_path_names):
-            pathname = os.path.join(self.projectDir, filepathname + ".txt")
+        for name_record, file_name in zip(self.namerecords, self.file_names):
+            pathname = os.path.join(self.projectDir, file_name)
             self.file_namerecord_dict[name_record] = pathname
         self.domain = domain
         self.results_file = os.path.join(self.projectDir, "amass_.txt")
@@ -209,16 +207,17 @@ class AmassSubdProcessor:
     def GetAmassSubdomains(self, active: bool = False):
         """runs amass on the domain you provide and returns the file in which it is saved"""
         if active:
-            command = "amass enum -brute -min-for-recursive 2 -d " + self.domain
+            command = "docker run -v OUTPUT_DIR_PATH:/.config/amass/ caffix/amass enum -brute -min-for-recursive 2 -d " + self.domain
         else:
-            command = "amass enum -d " + self.domain
+            command = "docker run -v OUTPUT_DIR_PATH:/.config/amass/ caffix/amass enum -d " + self.domain
         logging.info(f"running command {command}")
 
         with open(self.results_file, "a") as file:
             for n in range(self.MAX_RETRIES):
-                subprocess.run(
-                    command, shell=True, stdin=None, stdout=file, cwd=self.cwd
-                )
+                self.process = OpenProcess(process_name="AmassRunner",
+                    shell=True, stdin=None, stdout=file, cwd=self.cwd, args=command)
+                self.process.wait()
+                
                 file.close()
                 with open(self.results_file) as file_:
                     lines = file_.readlines()
@@ -243,12 +242,15 @@ class AmassSubdProcessor:
     def compare_append_line_file(self, line: str, file: str):
         """check for the presence of a line in in a file and if it is
         not there then add or else do not"""
-        with open(file, "r") as f:
-            file_lines = f.readlines()
-            f.close()
+        if Path(file).exists():
+            with open(file, "r") as f:
+                file_lines = f.readlines()
             if self.search(line=line, file_lines=file_lines):
                 with open(file, "a") as h:
                     h.write(line + "\n")
+        else:
+            with open(file, "a") as h:
+                h.write(line+"\n")
 
     def getManagerAsnDict(self, from_file: str):
         with open(from_file, "r") as file:
@@ -261,13 +263,10 @@ class AmassSubdProcessor:
                         and not "Not routed " in line
                         and not "Unknown" in line
                 ):
-                    line = line.replace("--> managed_by -->", "")
+                    asn_manager_list = line.split("--> managed_by -->")
                     if re.match(pattern, line) is not None:
-                        # print(line)
-                        manager = re.findall(" \D+ -", line)[0]
-                        manager = manager.replace(
-                            "(ASN)", "").replace("-", "").strip()
-                        asn = re.findall("\d+\s", line)[0]
+                        manager = asn_manager_list[1].strip()
+                        asn = asn_manager_list[0].replace("(ASN)", "").strip()
                         if asn not in managerAsnDicts:
                             managerAsnDicts[manager] = []
                         managerAsnDicts[manager].append(asn.strip())
@@ -293,26 +292,26 @@ class AmassSubdProcessor:
     def getSubdomainIpDict(self, from_file: str, name_record):
         # for each subdomain get the matching ip
         try:
-            rm_same(from_file)
-            with open(from_file, "r") as file:
-                lines = file.readlines()
-                MainSubdomainIpDict = {}
-                SubdomainIpDict = {}
-                for line in lines:
-                    try:
-                        subdomain = line.split(" ")[0]
-                        ip = line.split(
-                            " ",
-                        )[-2]
-                        if subdomain not in SubdomainIpDict:
-                            SubdomainIpDict[subdomain] = []
-                        SubdomainIpDict[subdomain].append(ip.strip())
-                    except IndexError:
-                        continue
-                MainSubdomainIpDict[name_record] = SubdomainIpDict
-                self.jsondict["data"].append(MainSubdomainIpDict)
-        except FileNotFoundError:
-            print(f"file {from_file} does not exists")
+            if rm_same(from_file):
+                with open(from_file, "r") as file:
+                    lines = file.readlines()
+                    MainSubdomainIpDict = {}
+                    SubdomainIpDict = {}
+                    for line in lines:
+                        try:
+                            subdomain = line.split(" ")[0]
+                            ip = line.split(
+                                " ",
+                            )[-2]
+                            if subdomain not in SubdomainIpDict:
+                                SubdomainIpDict[subdomain] = []
+                            SubdomainIpDict[subdomain].append(ip.strip())
+                        except IndexError:
+                            continue
+                    MainSubdomainIpDict[name_record] = SubdomainIpDict
+                    self.jsondict["data"].append(MainSubdomainIpDict)
+        except Exception as e:
+            logging.error(f"encountered error {e}")
 
     def getNetblockIpDict(self, from_file: str):
         # for each  netblock get the ips in it
@@ -334,30 +333,29 @@ class AmassSubdProcessor:
     def createPerSubDomainData(self):
         with open(self.dicts_file, "r") as dicts_file:
             dictsData = dicts_file.read()
-            dicts_file.close()
-        dictsData_ = list(dict(json.loads(dictsData)).values())[
-            0]  # [data_dict]
+        dictsData_ = list(dict(json.loads(dictsData)).values())[0]  # [data_dict]
         NetblockIpDict = dictsData_[0]  # dictionary {netblock: [ips]}
         AsnNetblockDict = dictsData_[1]  # {asn: [netblocks]}
         ManagerAsnDict = dictsData_[2]  # {manager: [asns]}
 
         # iterate over the record_names and ip_lists
-        idx = 3
+        idx = 3 # this is where the name_records start from
         subdomainsCmp = []
-        for record_name, ip_list in zip(
-                list(list(dictsData_[idx].values())[0].keys()),
-                list(list(dictsData_[idx].values()[0].values())),
-        ):
-            for domain in record_name:
+        while idx < len(list(dictsData_)):
+            for domain_name, ip_list in zip(
+                    list(list(dictsData_[idx].values())[0].keys()),
+                    list(list(dictsData_[idx].values())[0].values())):
+                record_name = list(dictsData_[idx].keys())[0]
+                # domain_name is just a name eg example.com and then ip_list is a list of ips that corresnpond to the domain_name and it is of type list"
+                # for domain in domain_name:
                 domainInfo = {
-                    "subdomain": domain,
-                    "namerecord": "",
-                    "ip": "",
+                    "subdomain": domain_name,
+                    "namerecord": record_name,
+                    "ip": ip_list,
                     "netblock": "",
                     "asn": "",
                     "manager": "",
                 }
-                domain_index = record_name.index(domain)
                 for netb in NetblockIpDict:
                     for ip in ip_list:
                         if ip in NetblockIpDict[netb]:
@@ -371,7 +369,6 @@ class AmassSubdProcessor:
                     if domainInfo["asn"] in asns:
                         domainInfo["manager"] = manager.strip()
                         break
-                domainInfo["ip"] = ip_list[domain_index]
 
                 subdomainsCmp.append(domainInfo)
             idx += 1
@@ -386,31 +383,14 @@ class AmassSubdProcessor:
         """description: create new record files from the given file containing lines
         from amass"""
         a_recordsPath = os.path.join(self.projectDir, "a_records.txt")
-        checkpath = Path(a_recordsPath)
-        if checkpath.exists():
-            idx = 0
-            while idx < len(list(self.file_namerecord_dict.keys())):
-                path = Path(list(self.file_namerecord_dict.values())[idx])
-                if path.exists():
-                    with open(from_file, "r") as file:
-                        lines = file.readlines()  # retrieve all the lines
-                        file.close()  # close the file
-                        for line in lines:
-                            if list(self.file_namerecord_dict.keys())[idx] in line:
-                                self.compare_append_line_file(
-                                    line, list(self.file_namerecord_dict.values())[
-                                        idx]
-                                )
-                idx = idx + 1
-        else:
+        checkpath = Path(a_recordsPath) # check if one of the files exists
+        if not checkpath.exists():
             with open(from_file, "r") as file:
                 lines = file.readlines()  # retrieve all the lines
-                file.close()  # close the file
-                for line in lines:
-                    for name_record in self.name_records:
-                        if name_record in line:
-                            with open(name_record + "s", "a") as c:
-                                c.write(line)
+            for line in lines:
+                for path_index, path in enumerate(list(self.file_namerecord_dict.values())):
+                    if self.namerecords[path_index] in line:
+                        self.compare_append_line_file(line, path)
 
     def SaveAmassSubdomains(self):
         with open(self.emcpDataFile, "r") as file:
@@ -426,23 +406,31 @@ class AmassSubdProcessor:
                     sub_l.add(urlDomain)
                     subdomains = subdomains + urlDomain + "\n"
         filepath = os.path.join(self.projectDir, "amassSubdomains.txt")
+        if Path(filepath).exists():
+            os.remove(filepath)
+            open(filepath, "w").close()
         with open(filepath, "a") as file:
             file.write(subdomains)
 
     def parseAmassData(self):
-        self.create_name_record_files(str(self.results_file))
-        self.getNetblockIpDict(str(self.results_file))
-        self.getAsnNetblockDict(str(self.results_file))
-        self.getManagerAsnDict(str(self.results_file))
-        for filename in self.file_path_names:
-            filename_index = self.file_path_names.index(filename)
-            namerecord = self.name_records[filename_index]
-            self.getSubdomainIpDict(str(filename), name_record=namerecord)
-        stringfiedJsonDict = json.dumps(self.jsondict, indent=4)
-        with open(self.dicts_file, "a") as file_:
-            file_.write(stringfiedJsonDict)
-        self.createPerSubDomainData()
-        self.SaveAmassSubdomains()
+        amass_run_success_status = 0
+        with open(self.results_file, "r") as file:
+            results = file.read()
+            if results == "No assests were discovered":
+                amass_run_success_status = 1
+        if amass_run_success_status == 0:
+            self.create_name_record_files(str(self.results_file))
+            self.getNetblockIpDict(str(self.results_file))
+            self.getAsnNetblockDict(str(self.results_file))
+            self.getManagerAsnDict(str(self.results_file))
+            for filename_index, filename in enumerate(list(self.file_namerecord_dict.values())):
+                namerecord = self.namerecords[filename_index]
+                self.getSubdomainIpDict(filename, name_record=namerecord)
+            stringfiedJsonDict = json.dumps(self.jsondict, indent=4)
+            with open(self.dicts_file, "a") as file_:
+                file_.write(stringfiedJsonDict)
+            self.createPerSubDomainData()
+            self.SaveAmassSubdomains()
 
     def Run(self, run=False, parse=False):
         if run:
@@ -670,8 +658,8 @@ def is_gzip_compressed(data):
 
 
 class OpenProcess(subprocess.Popen):
-    def __init__(self, process_name, shell, cwd=None, args=None):
-        super().__init__(args=args, shell=shell, cwd=cwd)
+    def __init__(self, process_name, shell, cwd=None, args=None, stdout=None, stdin = None):
+        super().__init__(args=args, shell=shell, cwd=cwd, stdout=stdout, stdin = stdin)
         self.process_name = process_name
 
 

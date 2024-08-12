@@ -8,21 +8,47 @@ from urllib.parse import urlsplit
 from PySide6.QtCore import QThread, QObject
 
 from config.config import RUNDIR
-from utiliities import AmassSubdProcessor, SubDomainizerRunner, yellow, SublisterRunner, OpenProcess, red
+from utiliities import AmassSubdProcessor, SubDomainizerRunner, yellow, SublisterRunner, OpenProcess, red, runWhoisOnTarget
 
+class WhoisThreadRunner(QThread):
+    def __init__(self,top_parent= None, server_name = None, project_dir_path = None) -> None:
+        super().__init__()
+        self.project_dir_path = project_dir_path
+        self.whois_results_filename = os.path.join(self.project_dir_path, "whois_results")
+        self.server_name = server_name
+        self.topParent = top_parent
+        self.setObjectName("whois runner")
+        self.whois_results = ""
+        self.topParent.threads.append(self)
+        self.topParent.ThreadStarted.emit(self.topParent, self.objectName())
+
+    def run(self):
+        self.whois_results = runWhoisOnTarget(self.server_name, self.project_dir_path)
+        with open(self.whois_results_filename, "wb") as file:
+            file.write(self.whois_results)
+        self.topParent.socketIpc.processFinishedExecution.emit(self.topParent, self.objectName())
 
 class AmassThreadRunner(QThread):
-    def __init__(self, amassUrlTarget, projectDirPath):
+    def __init__(self, amassUrlTarget, projectDirPath, main_window, top_parent, only_parse_data = False):
         super().__init__()
+        self.only_parse_data = only_parse_data
+        self.topParent = top_parent
+        self.main_window = main_window
         self.setObjectName("AmassThreadRunner")
         self.amassUrlTarget = amassUrlTarget
         self.projectDirPath = projectDirPath
+        self.main_window.threads.append(self)
+        self.topParent.ThreadStarted.emit(self.main_window, self.objectName())
 
     def amassRun(self):
         amassProcessor = AmassSubdProcessor(
             domain=self.amassUrlTarget, workingDir=self.projectDirPath
         )
-        amassProcessor.Run()
+        if self.only_parse_data is True:
+            amassProcessor.Run(parse=True)
+        else:
+            amassProcessor.Run()
+        self.topParent.socketIpc.processFinishedExecution.emit(self.main_window, self.objectName())
 
     def run(self) -> None:
         self.amassRun()

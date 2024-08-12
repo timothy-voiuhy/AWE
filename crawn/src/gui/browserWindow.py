@@ -18,6 +18,7 @@ class BrowserWindow(QMainWindow):
         super().__init__()
         self.ca_certs_file = RUNDIR + "src/proxycert/CA/certificate.crt"
         self.downloadPath = RUNDIR + "WebEngineDownloads/"
+        self.browser_cache_path = os.path.join(RUNDIR, "web_cache")
         if not Path(self.downloadPath).exists():
             os.makedirs(self.downloadPath)
         self.init_link = link
@@ -64,10 +65,12 @@ class BrowserWindow(QMainWindow):
     def setupProfile(self):
         self.profile = QWebEngineProfile.defaultProfile()
         # self.profile.httpCacheType(QWebEngineProfile.MemoryHttpCache)
-        # self.profile.setPersistentCookiesPolicy(QWebEngineProfile.NoPersistentCookies)
+        # self.profile.setPersistentCookiesPolicy(QWebEngineProfile.ForcePersistentCookies)
         self.profile.setHttpUserAgent(
             "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36")
         self.profile.setDownloadPath(self.downloadPath)
+        # self.profile.setCachePath(self.browser_cache_path)
+        # self.profile.setPersistentStoragePath(self.downloadPath)
         return self.profile
 
     def closeProgressBarWidget(self):

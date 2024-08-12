@@ -1,0 +1,9 @@
+enabling caching in the proxy
+enabling local file retrieval in the caching mechanism.
+errors in the sitemap. (accessing an object that has already been deleted.)
+errors in the decoder encoder
+amass thread monitor
+proxy capture request mechanism and gui 
+global scope
+window showing incoming and outgoing traffic
+intergrate youtube streaming using yt_ldp
