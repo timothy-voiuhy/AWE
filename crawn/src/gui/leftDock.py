@@ -4,7 +4,7 @@ import os
 from pathlib import Path
 
 from PySide6.QtCore import QObject, Signal, Qt, QModelIndex, Slot, QThread
-from PySide6.QtGui import QStandardItem, QStandardItemModel
+from PySide6.QtGui import QStandardItem, QStandardItemModel, QFont
 from PySide6.QtWidgets import QMessageBox, QDockWidget, QWidget, QVBoxLayout, QFormLayout, QCheckBox, \
     QFrame, QLabel, QHBoxLayout, QLineEdit, QTreeView, QScrollArea, QTextBrowser, QSplitter, QTableWidget, QTableView, QTableWidgetItem
 
@@ -315,6 +315,8 @@ class LeftDock(QObject):
         # self.subdomainsModel.dataChanged.connect(self.updateSubdomainsModel)
         self.subdomainsModel.setHorizontalHeaderLabels(["Subdomain:UrlsMapping"])
         self.subdomainsTreeView = QTreeView()
+        self.subdomainsTreeView.setFont(QFont("Cascadia Code", 11))
+        self.subdomainsTreeView.header().setFont(QFont("Cascadia Code", 11))
         self.subdomainsTreeView.setModel(self.subdomainsModel)
         self.subdomainsTreeView.doubleClicked.connect(self.openLinkInBrowser)
         self.subdomainsTreeView.setAlternatingRowColors(True)
@@ -326,17 +328,19 @@ class LeftDock(QObject):
     def search_location_table(self):
         if self.location_table_drawn:
             user_search_domain = self.search_line_edit.text()
-            for index, row_dict in enumerate(self.location_table_item_dicts):
+            got_match = False
+            for row_dict in self.location_table_item_dicts:
                 subdomain = row_dict["subdomain"]
                 if subdomain == user_search_domain:
                     item = row_dict["WidgetItems"][0]
                     row_index = row_dict["index"]
-                else:
-                    if index == len(self.location_table_item_dicts) -1:
-                        search_fail_mb = MessageBox("No results found", "No subdomain found that matches the item you searched", "Information")
-                        search_fail_mb.exec()
-            self.location_table.scrollToItem(item)
-            self.location_table.selectRow(row_index)
+                    got_match = True
+                    self.location_table.scrollToItem(item)
+                    self.location_table.selectRow(row_index)
+            if got_match is False:
+                search_fail_mb = MessageBox("No results found", "No subdomain found that matches the item you searched", "Information")
+                search_fail_mb.exec()
+                
         else:
             mb=MessageBox("Information", "The location table has not been drawn. \nDo you want to generate the table ?", "Question", buttons=["Ok", "Cancel"])
             ret = mb.exec()

@@ -1,5 +1,6 @@
 import argparse
 import hashlib
+import asyncio
 import gzip
 import json
 import logging
@@ -10,14 +11,16 @@ import socket
 import sys
 import threading
 import zlib
+from asyncio import AbstractEventLoop
+
 import brotli
 from OpenSSL import SSL
 from config.config import RUNDIR
-from utiliities import DissectClientReqPkt, makelogger, writeLinkContentToFIle
+from utiliities import makelogger
+from urllib import parse as urlparser
 from concurrent.futures import ThreadPoolExecutor
-from awe_net.awe_ca import ProxyCertificateAuthority
 from session import SessionHandler, SessionHandlerResponse
-from awe_net.awe_net import ProxyServerSslSocket
+from awe_net.awe_net import ProxyCertificateAuthority, ProxyServerSslSocket
 
 
 def is_brotli_compressed(data):
@@ -70,6 +73,100 @@ def DissectClientProxyRequests(client_request: str):
         return False
 
 
+def DissectClientReqPkt(packet: str, http: bool = None):
+    "dissect the packets sent by the individual hosts/domains from the client"
+    try:
+        headersBodyDis_ = packet.split("\r\n\r\n")
+        headersDis = headersBodyDis_[0].split("\r\n")  # headers
+        try:
+            packetBody = headersBodyDis_[1]
+            len_packetBody = len(packetBody)
+        except IndexError:
+            packetBody = None
+        # print(headersDis)
+        packetHeaders = headersDis[1:]
+        packetHeadersDict = {}
+        for packetHeader in packetHeaders:
+            keyValue = packetHeader.split(":", 1)
+            key, value = keyValue[0].strip(), keyValue[1].strip()
+            packetHeadersDict[key] = value
+        if packetBody is not None:
+            packetHeadersDict["Content-Length"] = str(len_packetBody)
+        packetMethod = headersDis[0].split(" ")[0]
+        host = packetHeadersDict["Host"]
+        path = headersDis[0].split(" ")[1]
+        if http:
+            packetUrl = path.split("?")[0]
+            if "https" not in packetUrl:
+                packetUrl = host + path.split("?")[0]
+                packetUrl = "https://" + packetUrl.strip()
+        else:
+            packetUrl = host + path.split("?")[0]
+            packetUrl = "https://" + packetUrl.strip()
+        try:
+            f_packetParams = path.split("?")[1]
+            packetParams = f_packetParams.split("&")
+            packetParamsDict = {}
+            for pP in packetParams:
+                pP_ = pP.split("=")
+                packetParamsDict[pP_[0]] = pP_[1]
+        except IndexError:
+            packetParams = None
+            packetParamsDict = None
+        if packetParams is not None:
+            if http:
+                packetUrlwParams = path
+                if "https" not in path:
+                    packetUrlwParams = "https://" + host.strip() + path.strip()
+            else:
+                packetUrlwParams = "https://" + host.strip() + path.strip()
+        else:
+            packetUrlwParams = packetUrl
+        # logging.info(f"{yellow('method:')}{packetMethod}\n{yellow('url:')}{packetUrl}\n{yellow('headers:')}{packetHeadersDict}\n{yellow('params:')}{packetParamsDict}\n{yellow('body:')}{packetBody}\n{yellow('packetUrlWithParams:')}{packetUrlwParams}")
+        return packetMethod, packetUrl, packetHeadersDict, packetParamsDict, packetBody, packetUrlwParams
+    except Exception as exp:
+        logging.error(
+            f"Exception in DissectClientReqPkt function :error: {exp}")
+
+
+def writeLinkContentToFIle(main_dir, link: str, data, max_filename_len=255):
+    link_components = urlparser.urlparse(link)
+    # the netlock + path,  this already has file name if it does not end with "/"
+    relative_path = link_components.netloc + link_components.path
+
+    if link.endswith("/"):
+        # giving a file name for the index file
+        relative_path = os.path.join(relative_path, "index.html")
+
+    # the the extension to be placed on the hashed relative path
+    file_extension = os.path.splitext(relative_path)[1] or ".html"
+
+    if len(relative_path) > max_filename_len:
+        hashed_filename = hashlib.md5(relative_path.encode()).hexdigest()
+        file_name = hashed_filename + file_extension
+    else:
+        file_name = relative_path  # the relative path already has an extension
+
+    file_path = os.path.join(main_dir, file_name)
+
+    dir_path, file_name = os.path.split(file_path)
+
+    try:
+        if not os.path.exists(path=dir_path):
+            os.makedirs(dir_path)
+
+        if os.path.exists(file_path):
+            os.remove(file_path)
+
+        with open(file_path, 'wb') as g:
+            g.write(data)
+
+        return file_path
+
+    except Exception as e:
+        logging.warning(f"failed to save file with error {e}")
+
+
 def processUrl(url: str):
     https = "https://"
     whttps = "https://www."
@@ -93,6 +190,7 @@ class ProxyHandler:
         self.host = host
         self.port = port
         self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.socket.setblocking(False)
         try:
             self.socket.bind((self.host, self.port))
         except OSError as e:
@@ -313,23 +411,26 @@ class ProxyHandler:
         except Exception as exp:
             logging.error(f"fowarding failed :error: {exp}", exc_info=True)
 
-    def OpenHttpsCommTunnel(self, client_ssl_socket,
-                            host_dir,
-                            hostname,
-                            client_socket: socket.socket,
-                            request_packet: bytes = None,
-                            http: bool = False,
-                            keep_alive=False):
+    async def OpenHttpsCommTunnel(self, client_ssl_socket,
+                                  host_dir,
+                                  hostname,
+                                  client_socket: socket.socket,
+                                  request_packet: bytes = None,
+                                  http: bool = False,
+                                  keep_alive=False):
+        loop = asyncio.get_event_loop()
         try:
             if request_packet is None:
                 # this is the instance where the keep alive is valid
                 if keep_alive:
-                    request_packet = client_ssl_socket.recv(40960)
+                    request_packet = await loop.sock_recv(client_ssl_socket, 40960)
+                    # request_packet = client_ssl_socket.recv(40960)
                     # forward original request
                     self.handle_forwarding(request_packet, http, hostname, host_dir, client_ssl_socket, client_socket)
                     # now handle the keep alive connection loop
                     while keep_alive:
-                        browser_req_data = client_ssl_socket.recv(40960)
+                        browser_req_data = await loop.sock_recv(client_ssl_socket, 40960)
+                        # browser_req_data = client_ssl_socket.recv(40960)
                         host_portlist = DissectClientProxyRequests(
                             browser_req_data.decode("utf-8"))
                         if host_portlist:
@@ -346,7 +447,8 @@ class ProxyHandler:
                                               exc_info=True)
                             # self.handle_forwarding(browser_req_data,http,hostname,host_dir,client_ssl_socket,client_socket)
                 else:
-                    request_packet = client_ssl_socket.recv(40960)
+                    request_packet = await loop.sock_recv(client_ssl_socket, 40960)
+                    # request_packet = client_ssl_socket.recv(40960)
                     self.handle_forwarding(request_packet,
                                            http, hostname, host_dir, client_ssl_socket, client_socket)
 
@@ -372,7 +474,7 @@ class ProxyHandler:
             else:
                 self.logging = True
 
-    def HandleValidClientRequest(self, initial_client_request, client_socket):
+    async def HandleValidClientRequest(self, initial_client_request, client_socket):
         """this function handles a valid request forexample 
         GET /resource HTTP/2
         ....."""
@@ -388,7 +490,7 @@ class ProxyHandler:
         try:
             hostname = requestHeaders["Host"]
             hostDir = os.path.join(self.defaultWorkspaceDir, hostname + "/")
-            self.OpenHttpsCommTunnel(client_ssl_socket=None, host_dir=hostDir, hostname=hostname,
+            await self.OpenHttpsCommTunnel(client_ssl_socket=None, host_dir=hostDir, hostname=hostname,
                                            client_socket=client_socket,
                                            request_packet=initial_client_request.encode("utf-8"),
                                            http=True)
@@ -399,7 +501,7 @@ class ProxyHandler:
             # self.proxy_validation_logger.error(f"failed to return response to browser :url: {requestUrl}")
             logging.error(f"failed to return response to browser :url: {requestUrl} with error: {exp}", exc_info=True)
 
-    def HandleProxyClientRequest(self, initial_client_request, client_socket):
+    async def HandleProxyClientRequest(self, initial_client_request, client_socket):
         """handle a direct request directed to the proxy.
         This normally starts with CONNECT ..."""
         host_portlist = DissectClientProxyRequests(initial_client_request)
@@ -415,17 +517,20 @@ class ProxyHandler:
                 response = b"HTTP/1.1 200 Connection established\r\n\r\n"
                 client_socket.sendall(response)
                 # upgrade the client-proxy socket to ssl/tls
-                certificate, private_key = self.certificate_authority.generateCertificate(hostname)
+                certificate, private_key, cert_file_path, key_file_path = self.certificate_authority.generateCertificate(hostname)
                 _client_ssl_skt = ProxyServerSslSocket(n_socket=client_socket,
                                                        certificate=certificate,
-                                                       private_key=private_key)
+                                                       private_key=private_key,
+                                                       loop=asyncio.get_event_loop(),
+                                                       cert_file_path = cert_file_path,
+                                                       key_file_path = key_file_path)
 
-                ClientSslSocket = _client_ssl_skt.createConnection()
+                ClientSslSocket = await _client_ssl_skt.createConnection()
                 if ClientSslSocket:
                     logging.info("Upgraded client socket to support ssl")
 
                 # open client-proxy-destination tunnel
-                self.OpenHttpsCommTunnel(ClientSslSocket,
+                await self.OpenHttpsCommTunnel(ClientSslSocket,
                                                hostDir,
                                                hostname,
                                                client_socket=client_socket,
@@ -440,36 +545,41 @@ class ProxyHandler:
         else:
             logging.error("Initial Client Request is Invalid", exc_info=True)
 
-    def HandleConnection(self, client_socket: socket.socket):
-        initial_client_request =client_socket.recv(160000)
+    async def HandleConnection(self, client_socket: socket.socket):
+        loop = asyncio.get_event_loop()
+        initial_client_request = await loop.sock_recv(client_socket, 160000)
         initial_client_request = initial_client_request.decode()
         if is_proxyCommand(initial_client_request):
             self.HandleProxyCommands(initial_client_request)
         elif initial_client_request != "":
             if self.isRequest(initial_client_request.encode("utf-8")):
-                self.HandleValidClientRequest(initial_client_request, client_socket)
+                await self.HandleValidClientRequest(initial_client_request, client_socket)
             else:
-                self.HandleProxyClientRequest(initial_client_request, client_socket)
+                await self.HandleProxyClientRequest(initial_client_request, client_socket)
         else:
             logging.error("Initial Client Request is Invalid", exc_info=True)
 
-    def startServer(self):
+    async def startServer(self):
+        loop = asyncio.get_event_loop()
         logging.info(f"Proxy running on {self.host}, port {self.port}")
-        with ThreadPoolExecutor(max_workers=3084) as executor:
-            while True:
-                client_socket, client_address = self.socket.accept()
-                executor.submit(self.HandleConnection, client_socket)
+        # with ThreadPoolExecutor(max_workers=3084) as executor:
+        while True:
+            # logging.info("Waiting for Incoming Connections")
+            client_socket, client_address = await loop.sock_accept(self.socket)
+            # executor.submit(self.HandleConnection, client_socket)
+            asyncio.create_task(self.HandleConnection(client_socket))
 
     def notifyThreadMonitor(self):
         pass
 
-    def startServerInstance(self):
-        self.startServer()
+    async def startServerInstance(self):
+        await self.startServer()
 
 
 if __name__ == "__main__":
+
     logging.basicConfig(
-        level=logging.WARNING,
+        level=logging.INFO,
         format="%(asctime)s -%(levelname)s - %(filename)s:%(lineno)d - %(funcName)s - %(message)s")
 
     for logger_name in logging.root.manager.loggerDict:
@@ -483,7 +593,7 @@ if __name__ == "__main__":
     if args.port:
         proxy = ProxyHandler(save_traffic=True, port=int(args.port))
         try:
-            proxy.startServerInstance()
+            asyncio.run(proxy.startServerInstance())
         except KeyboardInterrupt:
             logging.info("\nCleaning Up")
             proxy.socket.close()

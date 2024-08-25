@@ -3,7 +3,7 @@ import logging
 from pathlib import Path
 import re
 from PySide6.QtCore import QFileSystemWatcher, Qt, QModelIndex
-from PySide6.QtGui import QStandardItem, QStandardItemModel, QIcon
+from PySide6.QtGui import QStandardItem, QStandardItemModel, QIcon, QFont
 
 from PySide6.QtWidgets import (QWidget, QMainWindow, QVBoxLayout, QHBoxLayout, QSplitter, QFrame,
                                QPushButton, QLineEdit, QLabel, QCheckBox, QTreeView, QTabWidget)
@@ -210,7 +210,11 @@ class SiteMapWindow(QMainWindow):
 
         self.siteMapTreeModel = QStandardItemModel()
         self.siteMapTreeView = QTreeView()
-        self.siteMapTreeView.setAlternatingRowColors(True)
+        self.siteMapTreeViewStyleSheet = """{ background-color: #2E2E2E;
+        color: #FFFFFF;}"""
+        self.siteMapTreeView.setStyleSheet(self.siteMapTreeViewStyleSheet)
+        self.siteMapTreeView.setFont(QFont("Cascadia Code", 11))
+        # self.siteMapTreeView.setAlternatingRowColors(True)
         self.siteMapTreeView.setAnimated(True)
         self.siteMapTreeView.doubleClicked.connect(self.readReqResData)
         self.siteMapTreeView.setUniformRowHeights(True)

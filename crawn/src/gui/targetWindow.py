@@ -44,6 +44,8 @@ class TargetWindow(QtWidgets.QMainWindow):
         self.centralWidgetLayout.addLayout(self.upper_central_layout)
         self.AddTopMenu()
 
+        self.proxy = QNetworkProxy()
+
         self.browserTabWidget = QtWidgets.QTabWidget()
         self.centralWidgetLayout.addWidget(self.browserTabWidget)
         self.openNewBrowserTab()
@@ -77,15 +79,21 @@ class TargetWindow(QtWidgets.QMainWindow):
 
         self.proxy_status = False
 
+        #dev tools button
+        self.devtoolsButton = HoverButton("dev", "open the developer tools in a new tab")
+        self.devtoolsButton.setFixedWidth(40)
+        self.devtoolsButton.clicked.connect(self.showdevTools)
+        self.upper_central_layout.addWidget(self.devtoolsButton)
+
         # disable proxy tab
         self.HandleProxyButton = HoverButton("enable Proxy", "enable or disable the proxy")
-        self.HandleProxyButton.setFixedWidth(140)
+        self.HandleProxyButton.setFixedWidth(130)
         self.HandleProxyButton.clicked.connect(self.HandleProxy)
         self.upper_central_layout.addWidget(self.HandleProxyButton)
 
         # test target button
         self.testTargetButton = HoverButton("Test target", "test the target on different tools")
-        self.testTargetButton.setFixedWidth(140)
+        self.testTargetButton.setFixedWidth(130)
         self.testTargetButton.clicked.connect(self.OpenTestTargetWindow)
         self.upper_central_layout.addWidget(self.testTargetButton, alignment=Qt.AlignLeft)
 
@@ -94,6 +102,9 @@ class TargetWindow(QtWidgets.QMainWindow):
         self.centralWidgetLayout.addStretch()
         self.proxy_port = proxy_port
         self.topParent.newProjectCreated.emit(self)
+
+    def showdevTools(self):
+        pass
 
     def getMainSeverName(self):
         if not self.projectDirPath.endswith("/"):
@@ -128,16 +139,6 @@ class TargetWindow(QtWidgets.QMainWindow):
         if self.current_tab_index != 0:
             self.browserTabWidget.removeTab(self.current_tab_index)
 
-    def LoadCA_Certificate(self):
-        self.rootCACertificate = QSslCertificate()
-        self.rootCACertificateFile = RUNDIR + "src/proxycert/CA/certificate.crt"
-        # self.rootCACertificate.importPkcs12(self.rootCACertificateFile) this is a wrong approach
-
-        self.sslConfig = QSslConfiguration.defaultConfiguration()
-        self.sslConfig.addCaCertificate(self.rootCACertificate)
-
-        QSslConfiguration.setDefaultConfiguration(self.sslConfig)
-
     def HandleProxy(self):
         if self.proxy_status is False:
             self.enableProxy(use_default=True)
@@ -152,12 +153,11 @@ class TargetWindow(QtWidgets.QMainWindow):
         if use_default:
             self.proxy_hostname = "127.0.0.1"
             self.proxy_port = self.proxy_port
-            proxy = QNetworkProxy()
-            proxy.setType(QNetworkProxy.HttpProxy)
-            proxy.setHostName(self.proxy_hostname)
-            proxy.setPort(self.proxy_port)
-            self.LoadCA_Certificate()
-            QNetworkProxy.setApplicationProxy(proxy)
+            
+            self.proxy.setType(QNetworkProxy.HttpProxy)
+            self.proxy.setHostName(self.proxy_hostname)
+            self.proxy.setPort(self.proxy_port)
+            QNetworkProxy.setApplicationProxy(self.proxy)
         else:
             self.enableProxyCheckBox.setChecked(True)
             self.proxy_hostname = self.proxyHostNameLineEdit.text()
@@ -167,11 +167,10 @@ class TargetWindow(QtWidgets.QMainWindow):
                 self.proxy_port = int(self.proxyPortNameLineEdit.text())
                 if self.proxy_port == " ":
                     self.proxy_port = self.proxy_port
-                proxy = QNetworkProxy()
-                proxy.setType(QNetworkProxy.HttpProxy)
-                proxy.setHostName(self.proxy_hostname)
-                proxy.setPort(self.proxy_port)
-                QNetworkProxy.setApplicationProxy(proxy)
+                self.proxy.setType(QNetworkProxy.HttpProxy)
+                self.proxy.setHostName(self.proxy_hostname)
+                self.proxy.setPort(self.proxy_port)
+                QNetworkProxy.setApplicationProxy(self.proxy)
                 self.enableProxyCheckBox.setChecked(True)
                 self.LoadCA_Certificate()
             except ValueError:

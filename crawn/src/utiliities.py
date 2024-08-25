@@ -1,11 +1,11 @@
+import hashlib
 import json
 import logging
 import os
 import re
-# from utils import is_mac, is_linux, is_windows
 import subprocess
 from pathlib import Path
-
+from urllib import parse as urlparser
 import requests
 from colorlog import ColoredFormatter
 from phply import phplex, phpast
@@ -158,6 +158,7 @@ class AmassSubdProcessor:
         self.workingDir = workingDir
         self.homeDir = os.path.expanduser("~")
         self.projectDir = os.path.join(self.homeDir, self.workingDir)
+        self.results_file = os.path.join(self.projectDir, "amass_.txt")
         self.namerecords = [
             "a_record",
             "cname_record",
@@ -175,12 +176,21 @@ class AmassSubdProcessor:
             "ptr_records.txt",
             "aaa_records.txt",
         ]
+
+        # scan the file to find out the records that do not exist and remove them from the two lists
+        with open(self.results_file, "r") as results_file:
+            amass_data = results_file.read()
+        for record_index, name_record in enumerate(self.namerecords):
+            if name_record not in amass_data:
+                self.namerecords.remove(name_record)
+                self.file_names.remove(self.file_names[record_index])
+        del amass_data
+
         self.file_namerecord_dict = {}
         for name_record, file_name in zip(self.namerecords, self.file_names):
             pathname = os.path.join(self.projectDir, file_name)
             self.file_namerecord_dict[name_record] = pathname
         self.domain = domain
-        self.results_file = os.path.join(self.projectDir, "amass_.txt")
         if not Path(self.results_file).exists():
             with open(self.results_file, "a") as file:
                 file.close()
@@ -198,6 +208,7 @@ class AmassSubdProcessor:
         self.jsondict = {}
         self.jsondict["data"] = []
         self.emcpDataFile = os.path.join(self.projectDir, "emcpData.json")
+        self.subdomain_dicts_file = os.path.join(self.projectDir, "amassSubdomains.txt")
         if Path(self.emcpDataFile).exists():
             os.remove(self.emcpDataFile)
         else:
@@ -418,6 +429,18 @@ class AmassSubdProcessor:
             results = file.read()
             if results == "No assests were discovered":
                 amass_run_success_status = 1
+
+        if Path(self.dicts_file).exists():
+            os.remove(self.dicts_file)
+        if Path(self.emcpDataFile).exists():
+            os.remove(self.emcpDataFile)
+        if Path(self.subdomain_dicts_file).exists():
+            os.remove(self.subdomain_dicts_file)
+        for file_name in self.file_names:
+            file_path = os.path.join(self.projectDir, file_name)
+            if Path(file_path).exists():
+                os.remove(file_path)
+                
         if amass_run_success_status == 0:
             self.create_name_record_files(str(self.results_file))
             self.getNetblockIpDict(str(self.results_file))
@@ -673,3 +696,97 @@ def runWhoisOnTarget(server_name, project_dir_path=None):
         return whois_output
     else:
         return whois_error
+
+
+def DissectClientReqPkt(packet: str, http: bool = None):
+    "dissect the packets sent by the individual hosts/domains from the client"
+    try:
+        headersBodyDis_ = packet.split("\r\n\r\n")
+        headersDis = headersBodyDis_[0].split("\r\n")  # headers
+        try:
+            packetBody = headersBodyDis_[1]
+            len_packetBody = len(packetBody)
+        except IndexError:
+            packetBody = None
+        # print(headersDis)
+        packetHeaders = headersDis[1:]
+        packetHeadersDict = {}
+        for packetHeader in packetHeaders:
+            keyValue = packetHeader.split(":", 1)
+            key, value = keyValue[0].strip(), keyValue[1].strip()
+            packetHeadersDict[key] = value
+        if packetBody is not None:
+            packetHeadersDict["Content-Length"] = str(len_packetBody)
+        packetMethod = headersDis[0].split(" ")[0]
+        host = packetHeadersDict["Host"]
+        path = headersDis[0].split(" ")[1]
+        if http:
+            packetUrl = path.split("?")[0]
+            if "https" not in packetUrl:
+                packetUrl = host + path.split("?")[0]
+                packetUrl = "https://" + packetUrl.strip()
+        else:
+            packetUrl = host + path.split("?")[0]
+            packetUrl = "https://" + packetUrl.strip()
+        try:
+            f_packetParams = path.split("?")[1]
+            packetParams = f_packetParams.split("&")
+            packetParamsDict = {}
+            for pP in packetParams:
+                pP_ = pP.split("=")
+                packetParamsDict[pP_[0]] = pP_[1]
+        except IndexError:
+            packetParams = None
+            packetParamsDict = None
+        if packetParams is not None:
+            if http:
+                packetUrlwParams = path
+                if "https" not in path:
+                    packetUrlwParams = "https://" + host.strip() + path.strip()
+            else:
+                packetUrlwParams = "https://" + host.strip() + path.strip()
+        else:
+            packetUrlwParams = packetUrl
+        # logging.info(f"{yellow('method:')}{packetMethod}\n{yellow('url:')}{packetUrl}\n{yellow('headers:')}{packetHeadersDict}\n{yellow('params:')}{packetParamsDict}\n{yellow('body:')}{packetBody}\n{yellow('packetUrlWithParams:')}{packetUrlwParams}")
+        return packetMethod, packetUrl, packetHeadersDict, packetParamsDict, packetBody, packetUrlwParams
+    except Exception as exp:
+        logging.error(
+            f"Exception in DissectClientReqPkt function :error: {exp}")
+
+
+def writeLinkContentToFIle(main_dir, link: str, data, max_filename_len=255):
+    link_components = urlparser.urlparse(link)
+    # the netlock + path,  this already has file name if it does not end with "/"
+    relative_path = link_components.netloc + link_components.path
+
+    if link.endswith("/"):
+        # giving a file name for the index file
+        relative_path = os.path.join(relative_path, "index.html")
+
+    # the the extension to be placed on the hashed relative path
+    file_extension = os.path.splitext(relative_path)[1] or ".html"
+
+    if len(relative_path) > max_filename_len:
+        hashed_filename = hashlib.md5(relative_path.encode()).hexdigest()
+        file_name = hashed_filename + file_extension
+    else:
+        file_name = relative_path  # the relative path already has an extension
+
+    file_path = os.path.join(main_dir, file_name)
+
+    dir_path, file_name = os.path.split(file_path)
+
+    try:
+        if not os.path.exists(path=dir_path):
+            os.makedirs(dir_path)
+
+        if os.path.exists(file_path):
+            os.remove(file_path)
+
+        with open(file_path, 'wb') as g:
+            g.write(data)
+
+        return file_path
+
+    except Exception as e:
+        logging.warning(f"failed to save file with error {e}")

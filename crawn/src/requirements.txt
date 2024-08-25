@@ -16,3 +16,4 @@ colorlog~=6.8.2
 phply~=1.2.6
 termcolor~=2.4.0
 yt_dlp
+chardet

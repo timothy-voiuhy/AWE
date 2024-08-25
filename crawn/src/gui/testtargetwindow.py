@@ -182,7 +182,7 @@ class TestTargetWindow(QMainWindow):
         self.amassRunButton = QPushButton()
         self.amassRunButton.setText("Run Amass")
         self.amassRunButton.clicked.connect(runAmass)
-        self.amassRunButton.setFixedWidth(80)
+        self.amassRunButton.setFixedWidth(100)
         self.amassRunnerLayout.addWidget(self.amassRunButton)
         self.amassRunnerLayout.setAlignment(Qt.AlignTop)
 

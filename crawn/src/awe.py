@@ -17,7 +17,7 @@ from PySide6.QtWidgets import QPushButton, QMainWindow, QWidget, QVBoxLayout, QF
     QCheckBox, QFrame, QLabel, QHBoxLayout, QToolTip, QTabWidget, \
     QLineEdit, QSplitter, QScrollArea, QListView, QApplication
 
-from config.config import RUNDIR
+from config.config import DEFAULT_WORKSPACE_DIR, HOME_DIR, RUNDIR
 from gui import targetWindow
 from gui.actionsWidget import ActionsWidget
 from gui.guiUtilities import GuiProxyClient, HoverButton, TextEditor, SyntaxHighlighter, MessageBox
@@ -249,10 +249,8 @@ class MainWin(QMainWindow, QtCore.QObject):
         self.startSessionHandler()
         time.sleep(3)
         self.startproxy()
-
         self.setWindowTitle("AWE(Atom Web Enumeration Framework)")
-        self.homeDirectory = os.path.expanduser("~")
-        self.defaultWorkspaceDir = os.path.join(self.homeDirectory, "AtomProjects/")
+        self.defaultWorkspaceDir = DEFAULT_WORKSPACE_DIR
         try:
             if not Path(self.defaultWorkspaceDir).exists():
                 os.makedirs(self.defaultWorkspaceDir)
@@ -267,6 +265,69 @@ class MainWin(QMainWindow, QtCore.QObject):
         self.MainLayout = QVBoxLayout()
         self.centralWidget.setLayout(self.MainLayout)
 
+        # self.AddTargetTab("target one")
+        self.upperTabMenuBar = self.menuBar()
+
+        # projects tab
+        self.projectsAction = QtGui.QAction("Projects")
+        self.projectsAction.triggered.connect(self.addProjectsTab)
+        self.upperTabMenuBar.addAction(self.projectsAction)
+
+        # add target
+        self.addTabAction = QtGui.QAction("AddTarget")
+        self.addTabAction.triggered.connect(self.AddTargetWindow)
+        self.upperTabMenuBar.addAction(self.addTabAction)
+        self.upperTabMenuBar.addSeparator()
+
+        # start proxy 
+        self.startProxyAction = QtGui.QAction("StartProxy")
+        self.startProxyAction.triggered.connect(self.startproxy)
+        self.upperTabMenuBar.addAction(self.startProxyAction)
+
+        # start proxy button
+        self.repeaterAction = QtGui.QAction("repeater")
+        self.repeaterAction.triggered.connect(self.openRepeater)
+        self.upperTabMenuBar.addAction(self.repeaterAction)
+
+        self.sitemapAction = QtGui.QAction("sitemap")
+        self.sitemapAction.triggered.connect(self.addSiteMapTab)
+        self.upperTabMenuBar.addAction(self.sitemapAction)
+
+        self.threadmonitorAction = QtGui.QAction("Threads")
+        self.threadmonitorAction.triggered.connect(self.addThreadMonitorTab)
+        self.upperTabMenuBar.addAction(self.threadmonitorAction)
+
+        # close tab
+        self.closeTabAction = QtGui.QAction("CloseTab")
+        self.closeTabAction.triggered.connect(self.closeTab)
+        self.upperTabMenuBar.addAction(self.closeTabAction)
+        self.upperTabMenuBar.addSeparator()
+
+        self.MainLayout.addWidget(self.tabManager)
+        self.setCentralWidget(self.centralWidget)
+        
+        # add repeater tab and sitemap tab
+        self.repeaterWindow = RepeaterWindow(parent=self)
+        self.siteMapWindow = SiteMapWindow(parent=self)
+        self.siteMapWindow.requestsEditor.sendToRepeaterSignal.connect(self.addRepeaterInstanceTab)
+        # self.siteMapWindow.responseEditor.sendToRepeaterSignal.connect(self.addRepeaterTab)
+
+        self.threadMonitor = ThreadMonitor(top_parent=self)
+
+        atexit.register(self.saveProgramState)
+        self.socketIpc.processFinishedExecution.connect(self.finishedProcess)
+        self.newProjectCreated.emit(self)
+
+    def openRepeater(self):
+        self.tabManager.addTab(self.repeaterWindow, "Repeater")
+
+    def finishedProcess(self, windowInstance, tool: str):
+        logging.info(f"{tool} finished execution")
+
+    def addThreadMonitorTab(self):
+        self.tabManager.addTab(self.threadMonitor, "Thread Monitor")
+
+    def addProjectsTab(self):
         # maintab  widget
         self.mainTabWidget = QWidget()
         self.mainTabLayout = QVBoxLayout()
@@ -297,53 +358,7 @@ class MainWin(QMainWindow, QtCore.QObject):
         self.mainTabLayout.setAlignment(self.buttonAddTab, Qt.AlignCenter)
         self.mainTabWidget.setLayout(self.mainTabLayout)
         self.tabManager.addTab(self.mainTabWidget, "Projects")
-
-        # self.AddTargetTab("target one")
-        self.upperTabMenuLayout = QHBoxLayout()
-        # close tab button
-        self.closeTabButton = QPushButton()
-        self.closeTabButton.setText("Close Tab")
-        self.closeTabButton.setFixedWidth(120)
-        self.closeTabButton.clicked.connect(self.closeTab)
-        self.upperTabMenuLayout.addWidget(self.closeTabButton)
-
-        # add target button
-        self.addTabButton = QPushButton()
-        self.addTabButton.setText("Add Target")
-        self.addTabButton.setFixedWidth(120)
-        self.addTabButton.clicked.connect(self.AddTargetWindow)
-        self.upperTabMenuLayout.addWidget(self.addTabButton)
-
-        # start proxy button
-        self.startProxyButton = QPushButton()
-        self.startProxyButton.setText("Start Proxy")
-        self.startProxyButton.setFixedWidth(130)
-        self.startProxyButton.clicked.connect(self.startproxy)
-        self.upperTabMenuLayout.addWidget(self.startProxyButton)
-
-        self.upperTabMenuLayout.setAlignment(self.addTabButton, Qt.AlignLeft)
-
-        self.MainLayout.addLayout(self.upperTabMenuLayout)
-
-        self.MainLayout.addWidget(self.tabManager)
-        self.setCentralWidget(self.centralWidget)
         self.mainTabLayout.addStretch()
-        # add repeater tab
-        self.repeaterWindow = RepeaterWindow(parent=self)
-        self.tabManager.addTab(self.repeaterWindow, "Repeater")
-        # add site map Target
-        self.addSiteMapTab()
-        self.addThreadMonitorTab()
-        atexit.register(self.saveProgramState)
-        self.socketIpc.processFinishedExecution.connect(self.finishedProcess)
-        self.newProjectCreated.emit(self)
-
-    def finishedProcess(self, windowInstance, tool: str):
-        logging.info(f"{tool} finished execution")
-
-    def addThreadMonitorTab(self):
-        self.threadMonitor = ThreadMonitor(top_parent=self)
-        self.tabManager.addTab(self.threadMonitor, "Thread Monitor")
 
     def saveProgramState(self):
         byte_array = self.saveState()
@@ -376,9 +391,6 @@ class MainWin(QMainWindow, QtCore.QObject):
         self.repeaterWindow.addReqResInstanceTabManager(request)
 
     def addSiteMapTab(self):
-        self.siteMapWindow = SiteMapWindow(parent=self)
-        self.siteMapWindow.requestsEditor.sendToRepeaterSignal.connect(self.addRepeaterInstanceTab)
-        # self.siteMapWindow.responseEditor.sendToRepeaterSignal.connect(self.addRepeaterTab)
         self.tabManager.addTab(self.siteMapWindow, "SitesMap")
 
     def openChoosenProject(self):
@@ -397,6 +409,7 @@ class MainWin(QMainWindow, QtCore.QObject):
                         available_dirs.append(entry.name)
         self.dirsModel = QtCore.QStringListModel(available_dirs)
         self.dirListView = QListView()
+        self.dirListView.setFont((QtGui.QFont("Cascadia Code", 11)))
         self.dirListView.setEditTriggers(QListView.NoEditTriggers)
         self.dirListView.setModel(self.dirsModel)
         self.dirListView.clicked.connect(self.projectDirClicked)
@@ -478,9 +491,8 @@ class MainWin(QMainWindow, QtCore.QObject):
 
     def closeTab(self):
         self.current_tab_index = self.tabManager.currentIndex()
-        if self.current_tab_index > 3:
-            self.tabManager.currentWidget().close()
-            self.tabManager.removeTab(self.current_tab_index)
+        self.tabManager.currentWidget().close()
+        self.tabManager.removeTab(self.current_tab_index)
 
     def closeEvent(self, event: QtGui.QCloseEvent) -> None:
         # note that the thread monitor is responsible for closing all opened threads and processes
@@ -514,7 +526,52 @@ if __name__ == "__main__":
     logging.basicConfig(level=logging.DEBUG,
                         format='%(asctime)s - %(levelname)s - %(filename)s:%(lineno)d - %(message)s')
     # QLoggingCategory.setFilterRules("qt.webengine.*=false")
+    os.environ["QTWEBENGINE_REMOTE_DEBUGGING"] ='9090'
     App = QApplication()
+    dark_stylesheet = """
+    QWidget {
+        background-color: #2E2E2E;
+        color: #FFFFFF;
+    }
+
+    QPushButton {
+        background-color: #4A4A4A;
+        color: #FFFFFF;
+    }
+
+    QMainWindow {
+        border: 2px solid #1E1E1E;
+    }
+
+    QTabWidget::pane { 
+    background-color: #4A4A4A;
+    }
+
+    QTabBar::tab {
+        background: #4A4A4A;
+        color: white;
+        border-radius: 20px
+        padding: 5px;
+    }
+
+    QHeaderView::section {
+        background-color: #4A4A4A;
+        color: white;
+        padding: 5px;
+        border: 1px solid gray;
+    }
+
+    QTabBar::tab:selected {
+        background: darkgray;
+    }
+
+    """
+    # fonts Cascadia Code, Courier New
+
+    # font  = QtGui.QFont("Cascadia Code", 11)
+    # App.setFont(font)
+    # App.setStyleSheet(dark_stylesheet)
+
     main_window = MainWin()
     main_window.showMaximized()
     sys.exit(App.exec())

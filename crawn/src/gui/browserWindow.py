@@ -2,13 +2,14 @@ import logging
 import os
 from pathlib import Path
 
-from PySide6 import QtWebEngineWidgets
+from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtCore import QUrl
+from PySide6.QtNetwork import QSslCertificate, QSslConfiguration
 from PySide6.QtWebEngineCore import QWebEnginePage, QWebEngineSettings, QWebEngineCertificateError, QWebEngineProfile
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QMainWindow, QHBoxLayout, QLabel, QLineEdit, QPushButton, \
     QProgressBar
-
-from config.config import RUNDIR
+from PySide6.QtGui import QAction
+from config.config import RUNDIR, CERTIFICATE_FILE
 from gui.guiUtilities import HoverButton
 from utiliities import addHttpsScheme
 
@@ -16,7 +17,7 @@ from utiliities import addHttpsScheme
 class BrowserWindow(QMainWindow):
     def __init__(self, link=None) -> None:
         super().__init__()
-        self.ca_certs_file = RUNDIR + "src/proxycert/CA/certificate.crt"
+        self.certificate_file = CERTIFICATE_FILE
         self.downloadPath = RUNDIR + "WebEngineDownloads/"
         self.browser_cache_path = os.path.join(RUNDIR, "web_cache")
         if not Path(self.downloadPath).exists():
@@ -27,20 +28,21 @@ class BrowserWindow(QMainWindow):
 
         self.centralWidgetLayout = QVBoxLayout()
         centralWidget.setLayout(self.centralWidgetLayout)
+
         self.engine_profile = self.setupProfile()
-        self.browser = QtWebEngineWidgets.QWebEngineView(self.engine_profile)
+        self.browser = QWebEngineView(self.engine_profile)
         self.Page = QWebEnginePage()
         self.Page.certificateError.connect(self.browserCertificateError)
-        # self.Page.setProperty()
         self.browser.setPage(self.Page)
-
         self.browserSettings = self.browser.settings()
         try:
-            # self.browserSettings.setAttribute(QWebEngineSettings.WebAttribute.ErrorPageEnabled, False)
             self.browserSettings.setAttribute(QWebEngineSettings.WebAttribute.ForceDarkMode, True)
             # self.browserSettings.setAttribute(QWebEngineSettings.WebAttribute.SslErrorOverrideEnabled, True)
         except AttributeError as e:
             logging.error(f"Some of the attributes were not set. Encoutered error when setting attribute: {e}")
+
+        self.trust_certificate()
+
         self.browser.urlChanged.connect(self.handleUrlChange)
         self.browser.loadProgress.connect(self.handleLoadProgress)
         self.browser.loadFinished.connect(self.closeProgressBarWidget)
@@ -58,6 +60,20 @@ class BrowserWindow(QMainWindow):
             self.browser.setUrl(QUrl("http://google.com/"))
         else:
             self.searchUrlOnBrowser(self.init_link)
+        
+        self.dev_tools_action = QAction("Show Developer Tools")
+        self.dev_tools_action.triggered.connect(self.showDevTools)
+
+    def showDevTools(self):
+        pass
+
+    def trust_certificate(self):
+        with open(self.certificate_file, "rb") as cert_file:
+            cert_data = cert_file.read()
+        self.certificate = QSslCertificate(cert_data)
+        self.ssl_config = QSslConfiguration.defaultConfiguration()
+        self.ssl_config.addCaCertificate(self.certificate)
+        QSslConfiguration.setDefaultConfiguration(self.ssl_config)
 
     def browserCertificateError(self, error: QWebEngineCertificateError):
         error.acceptCertificate()

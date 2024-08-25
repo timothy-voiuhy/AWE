@@ -1,5 +1,3 @@
-import base64
-import codecs
 from copy import deepcopy
 from datetime import timedelta
 import json
@@ -9,19 +7,10 @@ import random
 import socket
 import string
 import sys
-import threading
 from concurrent.futures import ThreadPoolExecutor
 from urllib import parse as url_parser
-
-import certifi
-import chardet
 import httpx
 import httpx._client as http_client
-import requests
-from OpenSSL import SSL
-from certauth.certauth import CertificateAuthority
-from charset_normalizer import from_bytes
-from httpx import Response
 
 from config.config import RUNDIR
 from utiliities import (yellow, cyan, red)
@@ -88,21 +77,15 @@ class SessionHandlerResponse(httpx.Response):
 
 
 class SessionHandler:
-    def __init__(self, host_address: str = None,
-                 listening_port: int = None,
-                 use_tor=False,
-                 use_file_based_certs=False,
-                 download_mozilla_CAs=False) -> None:
+    def __init__(self, host_address: str = "127.0.0.1",
+                 listening_port: int = 8181,
+                 use_tor=False) -> None:
         self.done_bit = 0
         self.error_bit = 1
         self.host = host_address
-        if self.host is None:
-            self.host = "127.0.0.1"
         self.server_port = listening_port
-        if self.server_port is None:
-            self.server_port = 8181
         if sys.platform == "WIN32":
-            self.runDir = rundir = RUNDIR
+            self.runDir = RUNDIR
             self.exchange_file = self.runDir + "\\tmp\\_tmp"
         else:
             self.runDir = RUNDIR
@@ -119,107 +102,33 @@ class SessionHandler:
         else:
             self.PoolManager = http_client.Client(
                 follow_redirects=True, timeout=15)
-        self.downloadMozillaCAs = download_mozilla_CAs
-        if self.downloadMozillaCAs:
-            self.MozillarootCAsUrl = "https://github.com/gisle/mozilla-ca/blob/master/lib/Mozilla/CA/cacert.pem"
-            self.MozillaCACertsVerifyFile = self.runDir + "/proxycert/Mozilla/cacert.pem"
-            if not os.path.isfile(self.MozillaCACertsVerifyFile):
-                res = requests.get(self.MozillarootCAsUrl)
-                with open(self.MozillaCACertsVerifyFile, "a") as file:
-                    file.write(res.content.decode("utf-8"))
-        else:
-            self.MozillaCACertsVerifyFile = certifi.where()
-        self.useFileBasedCerts = use_file_based_certs
-        self.pyCApath = self.runDir + "/proxycert/CA"
-        self.certsDir = self.runDir + "/proxycert/Certs"
-        self.rootCAcf = os.path.join(self.pyCApath, "rootCAcert.pem")
-        if self.useFileBasedCerts is False:
-            if not os.path.isfile(self.rootCAcf):
-                self.rootCA = CertificateAuthority(
-                    "LOCALHOST CA", self.rootCAcf, cert_cache=100)
-            else:
-                self.rootCA = CertificateAuthority(
-                    "LOCALHOST CA", self.rootCAcf, cert_cache=100)
-        else:
-            if not os.path.isdir(self.certsDir):
-                os.makedirs(self.certsDir)
-            self.rootCA = CertificateAuthority(
-                "LOCALHOST CA", self.rootCAcf, cert_cache=self.certsDir)
-            self.rootCAprivatekeyfile = self.runDir + "/proxycert/CA/privatekey.pem"
 
-    def generateDomainCerts(self, hostname: str):
-        """generate a certificate for a specific host and sign it with the root certificate. Return the path to the
-        certificate (.crt) file"""
-        hostname = hostname.strip()
-        if self.useFileBasedCerts is False:
-            return self.rootCA.load_cert(hostname, wildcard=True)
-        else:
-            # filename
-            return self.rootCA.cert_for_host(hostname, wildcard=True)
-
-    def createDestConnection(self, host_portlist):
-        """create the destination connection with the proxy, upgrade it to ssl and verify certificates"""
-        dest_server_skt = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        try:
-            dest_server_skt.connect((host_portlist[0], int(host_portlist[1])))
-            logging.info("TCP connection to destination server successfull")
-            destServerSslContext = SSL.Context(SSL.SSLv23_METHOD)
-            destServerSslServerSkt = SSL.Connection(
-                destServerSslContext, dest_server_skt)
-            destServerSslServerSkt.set_connect_state()
-            if self.verifyDstServerCerts:
-                destServerSslContext.set_verify(
-                    SSL.VERIFY_PEER | SSL.VERIFY_FAIL_IF_NO_PEER_CERT, self.verify_callback)
-            else:
-                destServerSslContext.set_verify(
-                    SSL.VERIFY_NONE, self.verify_callback)
-            destServerSslContext.load_verify_locations(
-                self.MozillaCACertsVerifyFile)
+    def makeRequest(self, request_method, request_url, request_headers, request_data=None, raw_pkt_bytes = None):
+        if raw_pkt_bytes is None:
             try:
-                destServerSslServerSkt.do_handshake()
-                logging.info(
-                    "Destination server connection setup successfully with ssl support")
-            except Exception as e:
-                logging.error(red(f"SSL HandShake failure with error :{e}"))
-            return destServerSslServerSkt, 0
-        except Exception:
-            return None, 1
-
-    def verify_callback(self, connection, x509, errno, depth, preverify_ok):
-        # Implement your verification logic here
-        if self.verifyDstServerCerts:
-            if preverify_ok:
-                logging.info("Certificate verification passed")
-                return True
-            else:
-                logging.error(red("Certificate verification failed"))
-                return False
-        else:
-            return True
-
-    def makeRequest(self, request_method, request_url, request_headers, request_data=None):
-        try:
-            self.createClientConnection()
-            proxy_ses_req_dict = {}
-            proxy_ses_req_dict["method"] = request_method
-            proxy_ses_req_dict["url"] = request_url
-            proxy_ses_req_dict["headers"] = request_headers
-            proxy_ses_req_dict["data"] = request_data
-            proxy_ses_request_str = json.dumps(proxy_ses_req_dict)
-            self.clientSendAll(proxy_ses_request_str)
-            response = self.clientRecv()
-            if type(response) is SessionHandlerResponse:
-                if response.status_code is None:
-                    logging.error(f"failed to retrieve response :url: {request_url} :status_code: {response.status_code}", exc_info=True)
-                else:
-                    logging.debug(f"response retrieved by clientRecv :status_code: {response.status_code}")
+                self.createClientConnection()
+                proxy_ses_req_dict = {}
+                proxy_ses_req_dict["method"] = request_method
+                proxy_ses_req_dict["url"] = request_url
+                proxy_ses_req_dict["headers"] = request_headers
+                proxy_ses_req_dict["data"] = request_data
+                proxy_ses_request_str = json.dumps(proxy_ses_req_dict)
+                self.clientSendAll(proxy_ses_request_str)
+                response = self.clientRecv()
+                if type(response) is SessionHandlerResponse:
+                    if response.status_code is None:
+                        logging.error(f"failed to retrieve response :url: {request_url} :status_code: {response.status_code}", exc_info=True)
+                    else:
+                        logging.debug(f"response retrieved by clientRecv :status_code: {response.status_code}")
+                        return response
+                elif response == "close":
                     return response
-            elif response == "close":
-                return response
-            elif type(response) is bytes:
-                return response
-        except Exception as e:
-            logging.error(f"makeRequest failed :error: {e}", exc_info=True)
+                elif type(response) is bytes:
+                    return response
+            except Exception as e:
+                logging.error(f"makeRequest failed :error: {e}", exc_info=True)
+        else:
+            pass
 
     def get_response_headers_dict(self, headers: httpx.Headers):
         header_keys = headers.keys()
@@ -231,12 +140,6 @@ class SessionHandler:
 
     def get_request(self, request: httpx.Request):
         return request.method, str(request.url)
-
-    # def get_content(self, response:httpx.Response):
-    #     try:
-    #         return response.text
-    #     except Exception as exp:
-    #         logging.error(f"failed to get response content with error: {exp}", exc_info=True)
 
     def get_extensions(self, extensions: dict):
         ext_dict = {}
@@ -257,7 +160,7 @@ class SessionHandler:
         response_dict["_request"] = self.get_request(response.request)
         response_dict["_content"] = None
         response_dict["stream"] = None  # parse if needed and those below
-        response_dict["encoding"] = response.encoding
+        response_dict["_encoding"] = response.encoding
         response_dict["_decoder"] = None
         response_dict["_elapsed"] = self.get_elapsed(response.elapsed)
         response_dict["extensions"] = self.get_extensions(response_dict["extensions"])
@@ -399,7 +302,7 @@ class SessionHandler:
                 return response
 
             elif data_dict["bit"] == 1:
-                response =  ("HTTP/1.1 502 Bad Gateway\r\n"
+                response = ("HTTP/1.1 502 Bad Gateway\r\n"
                              "Content-Type: text/html; charset=UTF-8\r\n"
                              "Content-Length: 89\r\n"
                              "X-Proxy-Server: aweProxy\r\n"
