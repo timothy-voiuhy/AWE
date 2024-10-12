@@ -22,6 +22,7 @@ sites/
 gpt/
 logs/
 other/
+src/.venv/
 test.py 
 programState/
 src/program_structure.md
