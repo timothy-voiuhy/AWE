@@ -1,0 +1,10 @@
+{
+    "files.associations": {
+        "qobject": "cpp",
+        "qmessagebox": "cpp",
+        "qmainwindow": "cpp",
+        "qwidget": "cpp",
+        "qlineedit": "cpp",
+        "qt": "cpp"
+    }
+}

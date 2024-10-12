@@ -1,5 +1,4 @@
 #! /usr/bin/python
-
 import atexit
 import logging
 import os
@@ -243,6 +242,7 @@ class MainWin(QMainWindow, QtCore.QObject):
                 program_state_bytes = file.read()
             # self.restoreState(program_state_bytes)
         self.isProxyRunning = False
+        self.isProjectsTabOpen = False
         self.proxy_port = 0
         self.proxy_hostname = 0
         self.isSessionHandlerRunning = False
@@ -329,36 +329,39 @@ class MainWin(QMainWindow, QtCore.QObject):
 
     def addProjectsTab(self):
         # maintab  widget
-        self.mainTabWidget = QWidget()
-        self.mainTabLayout = QVBoxLayout()
-        self.buttonAddTab = QPushButton()
-        self.recentProjectsLabel = QLabel()
-        self.recentProjectsLabel.setText("<b>Recent Projects</b>")
-        self.mainTabLayout.addWidget(self.recentProjectsLabel, alignment=Qt.AlignCenter)
+        if not self.isProjectsTabOpen:
+            self.mainTabWidget = QWidget()
+            self.mainTabWidget.setObjectName("projectsTab")
+            self.mainTabLayout = QVBoxLayout()
+            self.buttonAddTab = QPushButton()
+            self.recentProjectsLabel = QLabel()
+            self.recentProjectsLabel.setText("<b>Recent Projects</b>")
+            self.mainTabLayout.addWidget(self.recentProjectsLabel, alignment=Qt.AlignCenter)
 
-        self.addProjects()
+            self.addProjects()
 
-        self.openBarFrame = QFrame()
-        self.openBarLayout = QHBoxLayout()
-        self.choosenProjectDir = QLineEdit()
-        self.choosenProjectDir.setFixedWidth(400)
-        self.openBarLayout.addWidget(self.choosenProjectDir)
-        self.openProjectButton = QPushButton()
-        self.openProjectButton.setText("Open")
-        self.openProjectButton.setFixedWidth(50)
-        self.openProjectButton.clicked.connect(self.openChoosenProject)
-        self.openBarLayout.addWidget(self.openProjectButton)
-        self.openBarFrame.setLayout(self.openBarLayout)
-        self.mainTabLayout.addWidget(self.openBarFrame, alignment=Qt.AlignCenter)
+            self.openBarFrame = QFrame()
+            self.openBarLayout = QHBoxLayout()
+            self.choosenProjectDir = QLineEdit()
+            self.choosenProjectDir.setFixedWidth(400)
+            self.openBarLayout.addWidget(self.choosenProjectDir)
+            self.openProjectButton = QPushButton()
+            self.openProjectButton.setText("Open")
+            self.openProjectButton.setFixedWidth(50)
+            self.openProjectButton.clicked.connect(self.openChoosenProject)
+            self.openBarLayout.addWidget(self.openProjectButton)
+            self.openBarFrame.setLayout(self.openBarLayout)
+            self.mainTabLayout.addWidget(self.openBarFrame, alignment=Qt.AlignCenter)
 
-        self.buttonAddTab.setText("Add Target")
-        self.buttonAddTab.setFixedWidth(120)
-        self.buttonAddTab.clicked.connect(self.AddTargetWindow)
-        self.mainTabLayout.addWidget(self.buttonAddTab)
-        self.mainTabLayout.setAlignment(self.buttonAddTab, Qt.AlignCenter)
-        self.mainTabWidget.setLayout(self.mainTabLayout)
-        self.tabManager.addTab(self.mainTabWidget, "Projects")
-        self.mainTabLayout.addStretch()
+            self.buttonAddTab.setText("Add Target")
+            self.buttonAddTab.setFixedWidth(120)
+            self.buttonAddTab.clicked.connect(self.AddTargetWindow)
+            self.mainTabLayout.addWidget(self.buttonAddTab)
+            self.mainTabLayout.setAlignment(self.buttonAddTab, Qt.AlignCenter)
+            self.mainTabWidget.setLayout(self.mainTabLayout)
+            self.tabManager.addTab(self.mainTabWidget, "Projects")
+            self.isProjectsTabOpen = True
+            self.mainTabLayout.addStretch()
 
     def saveProgramState(self):
         byte_array = self.saveState()
@@ -491,7 +494,10 @@ class MainWin(QMainWindow, QtCore.QObject):
 
     def closeTab(self):
         self.current_tab_index = self.tabManager.currentIndex()
-        self.tabManager.currentWidget().close()
+        currentWidget = self.tabManager.currentWidget()
+        if currentWidget.objectName() == "projectsTab":
+            self.isProjectsTabOpen = False
+        currentWidget.close()
         self.tabManager.removeTab(self.current_tab_index)
 
     def closeEvent(self, event: QtGui.QCloseEvent) -> None:

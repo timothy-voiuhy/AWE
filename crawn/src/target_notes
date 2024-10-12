@@ -1,0 +1,19 @@
+reached during the search functionality on / 
+  api: /data/graphql/ids
+  functionality: reached alot of times since functionality as auto search
+
+reached during normal functioning
+  api: /wm/records
+
+while using google docks site:tripadvisor.com inurlapi
+before that : trying to go to developer-tripadvisor.com would ask ask to to tripadvisor.com/developers.
+
+google had indexed developer-tripadvisor.com == api docs found.
+
+communicating to the api: 
+
+$ curl
+--compressed
+--header 'Content-Type: application/json'
+--header 'X-TripAdvisor-API-Key: yourkeyhere'
+'https://api.tripadvisor.com/api/partner/1.0/email_requests?location_id=@@SCHRUTE_FARMS@@'

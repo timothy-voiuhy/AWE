@@ -3,6 +3,10 @@ import os
 
 HOME_DIR  = os.path.expanduser("~")
 
+TELEGRAM_API_ID = ""
+TELEGRAM_HASH = ""
+TELEGRAM_PHONE_NUMBER = ""
+
 if sys.platform == "linux":
     ROOT_CERT_FILE = HOME_DIR + "/AWE/proxycert/CA/rootCACert.pem"
     CERT_CACHE_DIR = HOME_DIR + "/AWE/proxycert/Certs/"
@@ -11,7 +15,8 @@ if sys.platform == "linux":
     PRIVATE_KEY_FILE = HOME_DIR + "/AWE/proxycert/CA/privatekey.pem"
     CERTIFICATE_FILE = HOME_DIR + "/AWE/proxycert/CA/awe_cert.crt"
     DEFAULT_WORKSPACE_DIR = HOME_DIR + "/AWE/AtomProjects/"
-    RUNDIR = "/media/program/data_drive/MYAPPLICATIONS/AWE/AWE/crawn/"
+    WAPPALZER_RUN_DIR = HOME_DIR + "/AWE/Wappalzer/"
+    RUNDIR = "/media/kali/data_drive/MYAPPLICATIONS/AWE/AWE/crawn/"
 if sys.platform == "win32":
     CERT_CACHE_DIR = HOME_DIR + "\\AWE\\proxycert\\Certs\\"
     ROOT_CERT_FILE = HOME_DIR + "\\AWE\\proxycert\\CA\\rootCACert.pem"

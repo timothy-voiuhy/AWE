@@ -1,11 +1,9 @@
 import os
 from pathlib import Path
-
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QMainWindow, QDockWidget, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QTabWidget, \
     QLineEdit, QPushButton, QMenu, QFileDialog, QMessageBox
-
 from gui.guiUtilities import TextEditor, SyntaxHighlighter
 
 
@@ -129,9 +127,9 @@ class RightDock:
                 saveMessageBox.setStandardButtons(QMessageBox.Ok)
                 edited_text = self.tabManager.currentWidget().toPlainText()
                 ret = saveMessageBox.exec()
-                if ret == QMessageBox.Ok:
-                    with open(self.tabManager.currentWidget().objectName(), "w") as file:
-                        file.write(edited_text)
+                # if ret == QMessageBox.Ok:
+                with open(self.tabManager.currentWidget().objectName(), "w") as file:
+                    file.write(edited_text)
                 return ret
 
         def rightDockTextBroserCloseFile():

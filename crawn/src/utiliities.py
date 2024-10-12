@@ -12,6 +12,8 @@ from phply import phplex, phpast
 from scapy.interfaces import get_working_ifaces
 from termcolor import colored
 
+from config.config import RUNDIR
+
 def log_exceptions(func):
     def wrapper(*args, **kwargs):
         try:
@@ -178,13 +180,14 @@ class AmassSubdProcessor:
         ]
 
         # scan the file to find out the records that do not exist and remove them from the two lists
-        with open(self.results_file, "r") as results_file:
-            amass_data = results_file.read()
-        for record_index, name_record in enumerate(self.namerecords):
-            if name_record not in amass_data:
-                self.namerecords.remove(name_record)
-                self.file_names.remove(self.file_names[record_index])
-        del amass_data
+        if Path(self.results_file).exists():
+            with open(self.results_file, "r") as results_file:
+                amass_data = results_file.read()
+            for record_index, name_record in enumerate(self.namerecords):
+                if name_record not in amass_data:
+                    self.namerecords.remove(name_record)
+                    self.file_names.remove(self.file_names[record_index])
+            del amass_data
 
         self.file_namerecord_dict = {}
         for name_record, file_name in zip(self.namerecords, self.file_names):
@@ -635,10 +638,11 @@ class SubDomainizerRunner:
                 file.close()
         self.url = url
         self.cookies = cookies
+        self.subdomainizer_py_file = RUNDIR+"Tools/SubDomainizer/SubDomainizer.py"
 
     def Run(self):
         command = (
-                "python /media/program/01DA55CA5F28E000/MYAPPLICATIONS/AWE/AWE/crawn/Tools/SubDomainizer/SubDomainizer.py "
+                f"{self.subdomainizer_py_file} "
                 + " -u "
                 + self.url
                 + " -o "

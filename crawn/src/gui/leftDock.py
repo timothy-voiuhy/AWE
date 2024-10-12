@@ -177,7 +177,7 @@ class LeftDock(QObject):
                 if ret == QMessageBox.Ok:
                     pass
 
-        # lower dock
+        #left dock
         self.leftDock = QDockWidget("Target Information")
         self.leftDockWidget = QWidget()
         self.leftDock.setWidget(self.leftDockWidget)

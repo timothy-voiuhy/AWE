@@ -3,6 +3,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtNetwork import QSslCertificate, QSslConfiguration, QNetworkProxyFactory, QNetworkProxy
 from PySide6.QtWidgets import QMenuBar
 
+from awe_net.wappy import find_techs
 from config.config import RUNDIR
 from gui.browserWindow import BrowserWindow
 from gui.guiUtilities import HoverButton
@@ -40,68 +41,99 @@ class TargetWindow(QtWidgets.QMainWindow):
         centralWidget = QtWidgets.QWidget()
         self.centralWidgetLayout = QtWidgets.QVBoxLayout()
 
-        self.upper_central_layout = QtWidgets.QHBoxLayout()
-        self.centralWidgetLayout.addLayout(self.upper_central_layout)
-        self.AddTopMenu()
+        self.centralWidgetSplitter = QtWidgets.QSplitter(Qt.Vertical)
+        self.centralWidgetLayout.addWidget(self.centralWidgetSplitter)
+        # self.AddTopMenu()
 
         self.proxy = QNetworkProxy()
 
+        self.browserMainWindow = QtWidgets.QMainWindow()
+        self.centralWidgetSplitter.addWidget(self.browserMainWindow)
+        # self.centralWidgetLayout.addWidget(self.browserMainWindow)
+
+        self.browserMainWindowCentralWidget = QtWidgets.QWidget()
+        self.browserMainWindow.setCentralWidget(self.browserMainWindowCentralWidget)
+
+        self.browserMainWindowLayout = QtWidgets.QVBoxLayout()
+        self.browserMainWindowCentralWidget.setLayout(self.browserMainWindowLayout)
+
         self.browserTabWidget = QtWidgets.QTabWidget()
-        self.centralWidgetLayout.addWidget(self.browserTabWidget)
+        self.browserMainWindowLayout.addWidget(self.browserTabWidget)
         self.openNewBrowserTab()
 
         centralWidget.setLayout(self.centralWidgetLayout)
         self.setCentralWidget(centralWidget)
 
-        # self.browser_menu_bar = QMenuBar()
-        # self.browser_menu_bar.add
+        self.targetwindowMenu = self.browserMainWindow.menuBar()
+
+        self.AddTopMenu()
 
         # network button
         self.NetworkButtonIcon = QtGui.QIcon.fromTheme("network-wired")
-        self.NetworkButton = QtWidgets.QPushButton()
-        self.NetworkButton.setFlat(True)
-        self.NetworkButton.setIcon(self.NetworkButtonIcon)
-        self.NetworkButton.setFixedWidth(28)
-        self.NetworkButton.clicked.connect(self.OpenNetworkWindow)
-        self.upper_central_layout.addWidget(self.NetworkButton)
+        self.NetworkAction = QtGui.QAction()
+        self.NetworkAction.setIcon(self.NetworkButtonIcon)
+        self.NetworkAction.setIconText("network")
+        self.NetworkAction.triggered.connect(self.OpenNetworkWindow)
+        self.targetwindowMenu.addAction(self.NetworkAction)
 
         # add new browser tab
-        self.newBrowserTabButton = HoverButton("+", "add a new browser tab")
-        self.newBrowserTabButton.clicked.connect(self.openNewBrowserTab)
-        self.newBrowserTabButton.setFixedWidth(20)
-        self.upper_central_layout.addWidget(self.newBrowserTabButton)
+        self.newBrowserTabAction = QtGui.QAction("new")
+        self.newBrowserTabAction.triggered.connect(self.openNewBrowserTab)
+        self.targetwindowMenu.addAction(self.newBrowserTabAction)
 
         # close Browser Tab
-        self.closeTabButton = HoverButton("x", "close the current tab")
-        self.closeTabButton.setFixedWidth(20)
-        self.closeTabButton.clicked.connect(self.closeBrowserTab)
-        self.upper_central_layout.addWidget(self.closeTabButton)
+        self.closeTabAction = QtGui.QAction("close")
+        self.closeTabAction.triggered.connect(self.closeBrowserTab)
+        self.targetwindowMenu.addAction(self.closeTabAction)
 
         self.proxy_status = False
 
         #dev tools button
-        self.devtoolsButton = HoverButton("dev", "open the developer tools in a new tab")
-        self.devtoolsButton.setFixedWidth(40)
-        self.devtoolsButton.clicked.connect(self.showdevTools)
-        self.upper_central_layout.addWidget(self.devtoolsButton)
+        self.devToolsAction = QtGui.QAction("dev")
+        self.devToolsAction.triggered.connect(self.showdevTools)
+        self.targetwindowMenu.addAction(self.devToolsAction)
 
         # disable proxy tab
-        self.HandleProxyButton = HoverButton("enable Proxy", "enable or disable the proxy")
-        self.HandleProxyButton.setFixedWidth(130)
-        self.HandleProxyButton.clicked.connect(self.HandleProxy)
-        self.upper_central_layout.addWidget(self.HandleProxyButton)
+        self.handleProxyAction = QtGui.QAction("enableProxy")
+        self.handleProxyAction.triggered.connect(self.HandleProxy)
+        self.targetwindowMenu.addAction(self.handleProxyAction)
 
         # test target button
-        self.testTargetButton = HoverButton("Test target", "test the target on different tools")
-        self.testTargetButton.setFixedWidth(130)
-        self.testTargetButton.clicked.connect(self.OpenTestTargetWindow)
-        self.upper_central_layout.addWidget(self.testTargetButton, alignment=Qt.AlignLeft)
+        self.testTargetAction = QtGui.QAction("testTarget")
+        self.testTargetAction.triggered.connect(self.OpenTestTargetWindow)
+        self.targetwindowMenu.addAction(self.testTargetAction)
+
+        # wappylzer button
+        self.wapplyzerAction = QtGui.QAction("wappy")
+        self.wapplyzerAction.triggered.connect(self.runWappalzer)
+        self.targetwindowMenu.addAction(self.wapplyzerAction)
 
         self.setWindowTitle("atom")
 
         self.centralWidgetLayout.addStretch()
         self.proxy_port = proxy_port
         self.topParent.newProjectCreated.emit(self)
+
+    def runWappalzer(self):
+        
+        # get the url
+        url = self.browserTabWidget.currentWidget().browser.url().url()
+
+        self.wappylzerDisplayWidget = QtWidgets.QWidget();
+        self.wappylzerDisplayWidget.setMaximumHeight(300)
+        self.wappylzerDisplayWidget.setObjectName("wappalzer")
+        self.wappylzerDisplayWidgetLayout = QtWidgets.QVBoxLayout()
+        self.wappylzerDisplayWidget.setLayout(self.wappylzerDisplayWidgetLayout)
+
+        self.wappylzerTextBrowser = QtWidgets.QTextBrowser()
+        self.wappylzerDisplayWidgetLayout.addWidget(self.wappylzerTextBrowser)
+        self.wappylzerTextBrowser.clear()
+        # run wappylzer
+        __return_data = find_techs(url)
+        self.wappylzerTextBrowser.setText(__return_data)
+        if self.centralWidgetSplitter.widget(1) is not None:
+            self.centralWidgetSplitter.widget(1).deleteLater()
+        self.centralWidgetSplitter.addWidget(self.wappylzerDisplayWidget)
 
     def showdevTools(self):
         pass
@@ -142,10 +174,10 @@ class TargetWindow(QtWidgets.QMainWindow):
     def HandleProxy(self):
         if self.proxy_status is False:
             self.enableProxy(use_default=True)
-            self.HandleProxyButton.setText("DisableProxy")
+            self.handleProxyAction.setText("DisableProxy")
             self.proxy_status = True
         else:
-            self.HandleProxyButton.setText("EnableProxy")
+            self.handleProxyAction.setText("EnableProxy")
             self.proxy_status = False
             QNetworkProxyFactory.setUseSystemConfiguration(True)
 
@@ -192,7 +224,9 @@ class TargetWindow(QtWidgets.QMainWindow):
 
     def AddTopMenu(self):
         # top menu
+        self.MenuIcon = QtGui.QIcon(RUNDIR + "resources/icons/settings-icon-gear-3d-render-png.png")
         self.centralWidgetMenu = QtWidgets.QMenu()
+        self.centralWidgetMenu.setIcon(self.MenuIcon)
         a_Open = self.centralWidgetMenu.addMenu("open")
         a_openProjects = a_Open.addAction("projects")
         a_openProjects.triggered.connect(self.OpenProject)
@@ -207,14 +241,7 @@ class TargetWindow(QtWidgets.QMainWindow):
         self.centralWidgetMenu.addSeparator()
         BrowserSettings_action = self.centralWidgetMenu.addAction("Browser settings")
         BrowserSettings_action.triggered.connect(self.openBrowserSettingsWindow)
-        # top menu Button
-        self.MenuIcon = QtGui.QIcon(RUNDIR + "resources/icons/settings-icon-gear-3d-render-png.png")
-        self.menuButton = QtWidgets.QPushButton()
-        self.menuButton.setFlat(True)
-        self.menuButton.setIcon(self.MenuIcon)
-        self.menuButton.setFixedWidth(28)
-        self.menuButton.clicked.connect(self.ShowMenu)
-        self.upper_central_layout.addWidget(self.menuButton)
+        self.targetwindowMenu.addMenu(self.centralWidgetMenu)
 
     def openBrowserSettingsWindow(self):
         self.BrowserSettingsWindow = QtWidgets.QMainWindow()
@@ -258,9 +285,6 @@ class TargetWindow(QtWidgets.QMainWindow):
         self.BrowserSettingsWindow.setFixedHeight(600)
         self.BrowserSettingsWindow.setFixedWidth(600)
         self.BrowserSettingsWindow.show()
-
-    def ShowMenu(self):
-        self.menuButton.setMenu(self.centralWidgetMenu)
 
     def LowerDockClick(self):
         self.LowerDock.activateWindow()
