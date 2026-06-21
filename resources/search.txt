@@ -1,0 +1,9 @@
+reverse dns
+reverse proxy in webapplications.
+
+misroutig requests
+Host:internal-ip:80
+
+dns poisoning.
+wild card dns
+collaborator everywhere in burp.

@@ -1,0 +1,8 @@
+FROM golang:1.21-alpine AS builder
+RUN go install github.com/lc/gau/v2/cmd/gau@latest
+
+FROM alpine:3.19
+RUN apk add --no-cache ca-certificates
+COPY --from=builder /go/bin/gau /usr/local/bin/gau
+RUN mkdir /output
+ENTRYPOINT ["gau"]

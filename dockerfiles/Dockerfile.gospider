@@ -1,0 +1,9 @@
+FROM golang:1.24-alpine AS builder
+RUN apk add --no-cache git
+RUN go install github.com/jaeles-project/gospider@latest
+
+FROM alpine:3.19
+RUN apk add --no-cache ca-certificates
+COPY --from=builder /go/bin/gospider /usr/local/bin/gospider
+RUN mkdir /output
+ENTRYPOINT ["gospider"]

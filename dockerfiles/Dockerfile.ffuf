@@ -1,0 +1,8 @@
+FROM golang:1.24-alpine AS builder
+RUN go install github.com/ffuf/ffuf/v2@latest
+
+FROM alpine:3.19
+RUN apk add --no-cache ca-certificates
+COPY --from=builder /go/bin/ffuf /usr/local/bin/ffuf
+RUN mkdir -p /wordlists /output
+ENTRYPOINT ["ffuf"]
