@@ -1,517 +1,587 @@
-import json
+"""
+SiteMapPage — Burp-style hierarchical URL tree per target.
+
+Tree structure:
+    example.com
+    └── api
+        ├── v1
+        │   ├── users      GET 200
+        │   └── auth       POST 401
+        └── health         GET 200
+
+One entry per unique (method, path) per host.  The latest status_code for
+each pair is shown.  Data comes from MongoDB (awe_proxy_traffic.traffic).
+"""
+from __future__ import annotations
+
 import logging
 from pathlib import Path
-import re
-from PySide6.QtCore import QFileSystemWatcher, Qt, QModelIndex
-from PySide6.QtGui import QStandardItem, QStandardItemModel, QIcon, QFont
 
-from PySide6.QtWidgets import (QWidget, QMainWindow, QVBoxLayout, QHBoxLayout, QSplitter, QFrame,
-                               QPushButton, QLineEdit, QLabel, QCheckBox, QTreeView, QTabWidget)
+from bson import ObjectId
+from PySide6.QtCore import Qt, QModelIndex, QTimer, QPoint, Signal
+from PySide6.QtGui import QStandardItem, QStandardItemModel, QColor, QFont, QPainter, QPolygon
+from PySide6.QtWidgets import (
+    QWidget, QVBoxLayout, QHBoxLayout, QSplitter, QFrame,
+    QPushButton, QLabel, QTreeView, QTabWidget, QTextEdit,
+    QProxyStyle, QStyle, QMenu,
+)
 
-import os
-from jsbeautifier import beautify
-from config.config import PROXY_DUMP_DIR, RUNDIR
-from gui.actionsWidget import ActionsWidget
-from gui.guiUtilities import GuiProxyClient, ReqResTextEditor, SyntaxHighlighter
+from database.scope import ScopeConfig
+from gui.guiUtilities import SyntaxHighlighter
 
-def cleanNode(parentPath, pr):
-    """ remove the node_container and the node_containers of the subnodes from the dirNodeContainers"""
-    subnode_dirnames = []
-    for dir_ in os.scandir(parentPath):
-        dirPath = os.path.join(parentPath, dir_.name)
-        subnode_dirnames.append(dirPath)
-    for subnode_dirname in subnode_dirnames:
-        for node_container in pr.dirNodeContainers:
-            if node_container.name == subnode_dirname:
-                pr.dirNodeContainers.remove(node_container)
+log = logging.getLogger(__name__)
 
-class parentItemContainer():
-    def __init__(self, name: str = None, object_=None, obj_dicts: list = None, children: list = None):
-        self.name = name
-        self.object_ = object_
-        self.obj_dicts = obj_dicts
-        if self.obj_dicts is None:
-            self.obj_dicts = []
-        self.children = children
-        if self.children is None:
-            self.children = []
-        self.containerDict = {}
+_DOC_ID_ROLE = Qt.UserRole + 1   # MongoDB _id string on leaf items
+_KEY_ROLE    = Qt.UserRole + 2   # stable path key for expansion tracking
 
-    def addChild(self, child: dict):
-        self.children.append(child)
+# ── File-type filter groups ───────────────────────────────────────────────────
 
-    def addContent(self, content: dict):
-        self.obj_dicts.append(content)
+_EXT_GROUPS: dict[str, frozenset[str]] = {
+    "Images":  frozenset({".jpg", ".jpeg", ".png", ".gif", ".svg", ".ico",
+                           ".webp", ".bmp", ".avif", ".tiff"}),
+    "CSS":     frozenset({".css", ".scss", ".less", ".sass"}),
+    "Scripts": frozenset({".js", ".ts", ".jsx", ".tsx", ".mjs", ".cjs"}),
+    "Fonts":   frozenset({".woff", ".woff2", ".ttf", ".eot", ".otf"}),
+    "Media":   frozenset({".mp4", ".mp3", ".avi", ".wav", ".ogg", ".flac",
+                           ".mkv", ".webm", ".mov"}),
+}
 
-    def __dict__(self):
-        self.containerDict["name"] = self.name
-        self.containerDict["object"] = self.object_
-        self.containerDict["contents"] = self.contents
-        self.containerDict["children"] = self.children
+_DEFAULT_HIDDEN: frozenset[str] = frozenset({"Images", "CSS", "Fonts", "Media"})
 
 
-def populateNode(parentPath,
-                 Item: QStandardItem,
-                 nodeContainer: parentItemContainer = None,
-                 update=False,
-                 pr=None,
-                 contents=None):
-    if update:
-        try:
-            # remove all the subnodes from the node and also from the pr.dirNodeContainers
-            cleanNode(parentPath, pr)
-            Item.removeRows(0, Item.rowCount())
-        except RuntimeError:
-            pass
-    for index, element in enumerate(os.scandir(parentPath)):
-        if element.is_file():  # if it is a file , append it to the parent item
-            filenode = FileNode(pr, element.name, Item, parentPath, nodeContainer, index)
-            filenode.makeNode()
-        elif element.is_dir():
-            node = DirNode(pr, element, parentPath, Item, nodeContainer, index)
-            node.makeNode()
+# ── helpers ───────────────────────────────────────────────────────────────────
+
+def _status_color(code) -> str:
+    try:
+        c = int(code)
+    except (TypeError, ValueError):
+        return "#6C7086"
+    if 200 <= c < 300: return "#A6E3A1"
+    if 300 <= c < 400: return "#89B4FA"
+    if 400 <= c < 500: return "#F9E2AF"
+    if 500 <= c < 600: return "#F38BA8"
+    return "#6C7086"
 
 
-class FileNode():
-    def __init__(self,pr,text,parentItem,parent_path,parent_node_container,index_in_node):
-        self.pr = pr
-        self.parent_node_container = parent_node_container
-        self.parent_path = parent_path
-        self.parentItem = parentItem
-        self.text = text
-        self.item = QStandardItem()
-        self.item.setText(self.text)
-        self.name = os.path.join(self.parent_path, text)
-        self.obj_idx_dict = {}
-        self.index_in_node = index_in_node
+class _PathNode:
+    """One segment in the URL path tree."""
+    __slots__ = ("children", "entries")
 
-    def makeNode(self):
-        try:
-            self.parentItem.appendRow(self.item)
-            self.obj_idx_dict[self.name] = self.index_in_node
-            self.parent_node_container.addContent(self.obj_idx_dict)
-            self.pr.fileNodes.append(self)
-        except RuntimeError:
-            pass
+    def __init__(self):
+        self.children: dict[str, _PathNode] = {}
+        # Each entry: (doc_id_str, method, status_code)
+        self.entries: list[tuple[str, str, int]] = []
 
 
-class DirNode():
-    def __init__(self, parent, dir_: os.DirEntry,
-                 parentPath=None,
-                 parentNodeItem: QStandardItem = None,
-                 parent_node_container: parentItemContainer = None,
-                 index_in_node=None):
-        super().__init__()
-        self.parent_node_container = parent_node_container
-        self.parent = parent
-        self.dir_ = dir_
-        self.parentNodeItem = parentNodeItem
-        self.parentpath = parentPath
-        self.node_container = parentItemContainer()
-        self.Item = QStandardItem(self.dir_.name)
-        if self.parentpath is None:
-            self.defaultParentPath = os.path.join(self.parent.proxyDumpDir, self.dir_)
-        else:
-            self.defaultParentPath = os.path.join(self.parentpath, self.dir_)
-        self.node_container.name = self.defaultParentPath
-        self.node_container.object_ = self.Item
-        self.obj_idx_dict = {}
-        self.index_in_node = index_in_node
+class _TreeStyle(QProxyStyle):
+    """Draws theme-appropriate expand/collapse triangles for the dark tree view."""
 
-    def addNode(self):
-        try:
-            if self.parentNodeItem is None:
-                self.parent.siteMapTreeModel.appendRow(self.Item)
-            else:
-                self.parentNodeItem.appendRow(self.Item)
-            self.parent.dirNodeContainers.append(self.node_container)
-            self.obj_idx_dict[self.node_container.name] = self.index_in_node
-            self.parent_node_container.addContent(self.obj_idx_dict)
-            # self.parent.dirNodes.append(self) #README if you allow this you must make sure a node is deleted if a dir is deleted
-        except RuntimeError:
-            pass
-
-    def expandNode(self):
-        populateNode(self.defaultParentPath, self.Item, self.node_container, pr=self.parent)
-
-    def makeNode(self):
-        self.addNode()
-        self.expandNode()
-
-def get_live_path(path:str):
-    if path.endswith("/"):
-        path = path.strip("/")
-    path_obj = Path(path)
-    if not path_obj.exists():
-        while True:
-            dirs_list = path.split("/")
-            if len(dirs_list) == 0:
-                break
-            last_dir = dirs_list[-1]
-            # remove directory by directory until find a present directory
-            path = path.removesuffix(last_dir)
-            if Path(path).exists():
-                break
-    return path
-
-class SiteMapWindow(QMainWindow):
-    def __init__(self, parent):
-        super().__init__()
-        self.parent = parent
-        self.siteMapMainWidget = QWidget()
-        self.setCentralWidget(self.siteMapMainWidget)
-        self.siteMapMainWidgetLayout = QVBoxLayout()
-        self.siteMapMainWidget.setLayout(self.siteMapMainWidgetLayout)
-        self.proxyDumpDir = PROXY_DUMP_DIR
-        if not os.path.isdir(self.proxyDumpDir):
-            os.makedirs(self.proxyDumpDir)
-        self.siteDirs = []
-        self.watchPaths = []
-        self.siteMapScope = ["."]
-        self.dirNodeContainers = []
-        self.dirNodes = []
-        self.fileNodes = []
-
-        self.requestsEditor = ReqResTextEditor()
-        self.responseEditor = ReqResTextEditor()
-
-        # splitter
-        self.siteMapSplitter = QSplitter()
-        self.siteMapMainWidgetLayout.addWidget(self.siteMapSplitter)
-
-        # siteMap
-        self.siteMapListViewFrame = QFrame()
-        self.siteMapListViewFrame.setMaximumWidth(350)
-        self.siteMapSplitter.addWidget(self.siteMapListViewFrame)
-        self.siteMapTreeViewLayout = QVBoxLayout()
-        self.siteMapListViewFrame.setLayout(self.siteMapTreeViewLayout)
-
-        self.siteMapUpperLayout = QHBoxLayout()
-        self.siteMapTreeViewLayout.addLayout(self.siteMapUpperLayout)
-
-        self.siteMapListViewLabel = QLabel()
-        self.siteMapListViewLabel.setText("<b>Site Map</b>")
-        self.siteMapUpperLayout.addWidget(self.siteMapListViewLabel, alignment=Qt.AlignLeft)
-
-        self.siteMapListViewSettingsButton = QPushButton()
-        self.siteMapListViewSettingsButtonIcon = QIcon(
-            RUNDIR + "resources/icons/settings-icon-gear-3d-render-png.png")
-        self.siteMapListViewSettingsButton.setIcon(self.siteMapListViewSettingsButtonIcon)
-        self.siteMapListViewSettingsButton.clicked.connect(self.openSiteMapSettings)
-        self.siteMapUpperLayout.addWidget(self.siteMapListViewSettingsButton, alignment=Qt.AlignRight)
-
-        self.siteMapLoggingLabel = QLabel()
-        self.siteMapLoggingLabel.setText("Logging:")
-        self.siteMapUpperLayout.addWidget(self.siteMapLoggingLabel)
-
-        self.siteMapLoggingCheckBox = QCheckBox()
-        self.siteMapLoggingCheckBox.stateChanged.connect(self.HandleLoggingChange)
-        self.siteMapUpperLayout.addWidget(self.siteMapLoggingCheckBox)
-
-        self.siteMapTreeModel = QStandardItemModel()
-        self.siteMapTreeView = QTreeView()
-        self.siteMapTreeView.setObjectName("siteMapTreeView")
-        self.siteMapTreeView.setFont(QFont("Cascadia Code", 10))
-        # self.siteMapTreeView.setAlternatingRowColors(True)
-        self.siteMapTreeView.setAnimated(True)
-        self.siteMapTreeView.doubleClicked.connect(self.readReqResData)
-        self.siteMapTreeView.setUniformRowHeights(True)
-        self.siteMapTreeView.setEditTriggers(QTreeView.NoEditTriggers)
-        self.siteMapTreeViewLayout.addWidget(self.siteMapTreeView)
-        # self.siteMapTreeModel.dataChanged.connect(self.createNodeTree())
-        self.proxyFileSystemWatcher = QFileSystemWatcher()
-        self.proxyFileSystemWatcher.directoryChanged.connect(self.updateNode)
-        self.createNodeTree()
-        self.watchPaths = self.getWatchPaths()
-        self.proxyFileSystemWatcher.addPaths(self.watchPaths)
-
-        # the request and response area tabs
-        self.siteMapReqResTabManager = QTabWidget()
-        self.siteMapSplitter.addWidget(self.siteMapReqResTabManager)
-
-        # self.requestsEditor.setFixedWidth(650)
-        self.highlighter = SyntaxHighlighter(self.requestsEditor.document())
-        self.siteMapReqResTabManager.addTab(self.requestsEditor, "request")
-        # self.responseEditor.setFixedWidth(650)
-        self.siteMapReqResTabManager.addTab(self.responseEditor, "response")
-        self.highlighter = SyntaxHighlighter(self.responseEditor.document())
-
-        self.siteMapScopeCommand = False
-        self.logggingOnCommand = False
-        self.loggingOffCommand = False
-
-        self.actionsWidget = ActionsWidget(self.parent, self.responseEditor)
-        self.actionsWidget.setMaximumWidth(400)
-        self.siteMapSplitter.addWidget(self.actionsWidget)
-
-    def getWatchPaths(self):
-        siteMapDirs = []
-        for root, dirs, files in os.walk(self.proxyDumpDir):
-            for direntry in dirs:
-                path = os.path.join(root, direntry)
-                siteMapDirs.append(path)
-        siteMapDirs.append(self.proxyDumpDir)
-        return siteMapDirs
-
-    def HandleLoggingChange(self):
-        if self.siteMapLoggingCheckBox.isChecked():
-            self.loggingOffCommand = False
-            self.logggingOnCommand = True
-            logging.info("Proxy logging has been enabled")
-            self.sendCommandToProxy()
-        else:
-            self.logggingOnCommand = False
-            self.loggingOffCommand = True
-            logging.info("Proxy logging has been disabled")
-            self.sendCommandToProxy()
-
-    def openSiteMapSettings(self):
-        self.siteMapSettingsWidget = QWidget()
-        self.siteMapSettingsWidgetLayout = QVBoxLayout()
-        self.siteMapSettingsWidget.setLayout(self.siteMapSettingsWidgetLayout)
-
-        self.siteMapSettingsScopeLabel = QLabel()
-        self.siteMapSettingsScopeLabel.setText("<b><u>Scope</u></b>")
-        self.siteMapSettingsWidgetLayout.addWidget(self.siteMapSettingsScopeLabel)
-
-        self.siteMapSettingsScopeNoteLabel = QLabel()
-        self.siteMapSettingsScopeNoteLabel.setText(
-            "Add comma separated  values of the domains\n\te.g youtube, google\nThe comma separated values can also be regex patterns")
-        self.siteMapSettingsWidgetLayout.addWidget(self.siteMapSettingsScopeNoteLabel)
-
-        self.siteMapSettingsScopeLineEdit = QLineEdit()
-        self.siteMapSettingsScopeLineEdit.setPlaceholderText("url, domain, regex")
-        self.siteMapSettingsWidgetLayout.addWidget(self.siteMapSettingsScopeLineEdit)
-
-        self.siteMapSettingsScopeDoneButton = QPushButton()
-        self.siteMapSettingsScopeDoneButton.setText("Done")
-        self.siteMapSettingsScopeDoneButton.clicked.connect(self.setSiteMapScope)
-        self.siteMapSettingsScopeDoneButton.setFixedWidth(48)
-        self.siteMapSettingsWidgetLayout.addWidget(self.siteMapSettingsScopeDoneButton)
-
-        self.siteMapSettingsWidgetLayout.addStretch()
-
-        self.siteMapSettingsWidget.setFixedWidth(550)
-        self.siteMapSettingsWidget.setFixedHeight(600)
-        self.siteMapSettingsWidget.setWindowTitle("siteMap scope settings")
-        self.siteMapSettingsWidget.show()
-
-    def sendCommandToProxy(self):
-        try:
-            if self.siteMapScopeCommand:
-                command = {"scope": self.siteMapScope}
-                request = json.dumps(command)
-            elif self.logggingOnCommand:
-                command = {"log": 0}
-                request = json.dumps(command)
-            elif self.loggingOffCommand:
-                command = {"log": 1}
-                request = json.dumps(command)
-            self.guiProxyClient = GuiProxyClient(request, is_command=True, proxy_port=self.parent.proxy_port)
-            self.guiProxyClient.start()
-        except ConnectionAbortedError or ConnectionResetError:
-            logging.warning("Connection error in socket")
-            pass
-
-    def readReqResData(self, index: QModelIndex):
-        parent_idx = index.parent()
-        clicked_file_dir = self.siteMapTreeModel.itemFromIndex(parent_idx).text()
-        clicked_file = self.siteMapTreeModel.itemFromIndex(index).text()
-
-        file_obtained = False
-
-        for root, dirs, files in os.walk(self.proxyDumpDir):
-            for dirr in dirs:
-                if dirr == clicked_file_dir:
-                    if root != self.proxyDumpDir:
-                        # print(red(f"clicked {root}"))
-                        for entry in os.scandir(root):
-                            if entry.name == clicked_file:
-                                clicked_file_path = os.path.join(root, entry.name)
-                                file_obtained = True
-                                break
-                        if not file_obtained:
-                            # print(red(f"walking through dir {root}"))
-                            for root_, dirs_, files_ in os.walk(root):
-                                for dir__ in dirs_:
-                                    dir_path = os.path.join(root_, dir__)  # note here for far and short searches
-                                    for entry in os.scandir(dir_path):
-                                        # print(red(f"scanning dir: {root_}"))
-                                        if entry.name == clicked_file:
-                                            clicked_file_path = os.path.join(dir_path, entry.name)
-                                            # print(red(f"clicked file path: {clicked_file_path}"))
-                                            file_obtained = True
-                                            break
-                                    if file_obtained:
-                                        break
-
-                if file_obtained:
-                    break
-            if file_obtained:
-                break
-        if file_obtained and os.path.isfile(clicked_file_path):
-            with open(clicked_file_path, "r") as f:
-                file_data = f.read().split("\nRESPONSE\n")
-                request_packet = file_data[0]
-                response_packet = file_data[1]
-            self.requestsEditor.clear()
-            self.responseEditor.clear()
-            self.requestsEditor.setText(request_packet)
-            if clicked_file_path.endswith(".js"):
-                resp_pkt_cmp = response_packet.split("\n\n")
-                headers = resp_pkt_cmp[0]
-                js_portion = ""
-                for comp in resp_pkt_cmp[1:]:
-                    js_portion += "\n\n"
-                    js_portion += comp
-                js_portion = beautify(js_portion)
-                beautified_response = headers + "\n\n" + js_portion
-                self.responseEditor.setText(beautified_response)
-            elif clicked_file_path.endswith(".json"):
-                resp_pkt_cmp = response_packet.split("\n\n")
-                headers = resp_pkt_cmp[0]
-                json_portion = ""
-                for comp in resp_pkt_cmp[1:]:
-                    json_portion += "\n\n"
-                    json_portion += comp
-                json_portion_ = json.dumps(json_portion, indent=4)
-                json_portion = json.loads(json_portion_).__str__()
-                beautified_response = headers + "\n\n" + json_portion
-                self.responseEditor.setText(beautified_response)
-            else:
-                self.responseEditor.setText(response_packet)
-
-    def setSiteMapScope(self):
-        scope = []
-        scope_ = self.siteMapSettingsScopeLineEdit.text()
-        if "," in scope_:
-            scps = scope_.split(",")
-            [scope.append(scope__.strip()) for scope__ in scps]
-        else:
-            scope.append(scope_)
-        self.siteMapScope.clear()
-        self.siteMapScope.extend(scope)
-        self.createNodeTree(scope=self.siteMapScope, new_tree=True)
-        self.siteMapSettingsWidget.close()
-
-    @staticmethod
-    def getAllEntries(dir_):
-        paths = []
-        for entry in os.listdir(dir_):
-            paths.append(os.path.join(dir_, entry))
-        return paths
-
-    @staticmethod
-    def getTreeEntries(node_container):
-        paths = []
-        for obj_dict in node_container.obj_dicts:
-            paths.extend(list(obj_dict.keys()))
-        return paths
-
-    # @staticmethod
-    # def getDeletedEntry(self, all_entries:list, tree_entries:list):
-    #     for entry in all_entries:
-
-    def removeAbsentNodes(self):
-        """removes absent file nodes and dir nodes that may be due to  deletion or recursive deletion"""
-        # file nodes 
-        new_fileNodes = []
-        for fnode in self.fileNodes:
-            node_filename = fnode.name
-            if Path(node_filename).exists():
-                new_fileNodes.append(fnode)
-        self.fileNodes = new_fileNodes
-        new_dirNodes = []
-        for dirNode in self.dirNodes:
-            node_container = dirNode.node_container
-            self.dirNodeContainers.remove(node_container)
-            if Path(node_filename).exists():
-                new_dirNodes.append(dirNode)
-        self.dirNodes = new_dirNodes
-
-    def updateNode(self, filename):
-        # self.proxyFileSystemWatcher.blockSignals()
-        signaled_filename = filename
-        if not Path(filename).exists():
-            base_dir = ""
-            base_dir_cmps = filename.split("/")[1:-1]
-            for cmp in base_dir_cmps:
-                base_dir += "/" + cmp
-            filename = base_dir
-        # print(red(f"updateNode called on {filename}"))
-        for node_container in self.dirNodeContainers:
-            if node_container.name == filename:
-                # print("parent name found")
-                if not Path(signaled_filename).exists():
-                    # todo: delete also the filenodes
-                    # removing the dirNode
-                    live_parent_path = get_live_path(filename).rstrip("/")
-                    live_pr_container = ""
-                    for nc in self.dirNodeContainers:
-                        if nc.name == live_parent_path:
-                            live_pr_container = nc
-                            break
-                    live_pr_item = live_pr_container.object_
-                    populateNode(live_parent_path,
-                                 live_pr_item,
-                                 update=True,
-                                 nodeContainer=live_pr_container,
-                                 pr=self,
-                                 contents=live_pr_container.obj_dicts)
-                    self.dirNodeContainers.remove(node_container)
-                    self.removeAbsentNodes()
-                    
+    def drawPrimitive(self, element, option, painter, widget=None):
+        if element == QStyle.PE_IndicatorBranch:
+            has_children = bool(int(option.state) & int(QStyle.State_Children))
+            is_open      = bool(int(option.state) & int(QStyle.State_Open))
+            if has_children:
+                painter.save()
+                painter.setRenderHint(QPainter.Antialiasing)
+                painter.setPen(Qt.NoPen)
+                painter.setBrush(QColor("#6C7086"))
+                r  = option.rect
+                cx = r.center().x()
+                cy = r.center().y()
+                if is_open:
+                    pts = QPolygon([
+                        QPoint(cx - 4, cy - 2),
+                        QPoint(cx + 4, cy - 2),
+                        QPoint(cx,     cy + 3),
+                    ])
                 else:
-                    all_entries = self.getAllEntries(dir_=filename)
-                    tree_entries = self.getTreeEntries(node_container)
-                    # if len(all_entries)-len(tree_entries) < 0:
-                    #     print(red("entry has been deleted"))
-                    #     # deleted_entry = self.getDeletedEntry(all_entries, tree_entries)
-                    # else:
-                    #     print(red("entry has been added"))
-                    Item = node_container.object_
-                    populateNode(filename,
-                                 Item,
-                                 update=True,
-                                 nodeContainer=node_container,
-                                 pr=self,
-                                 contents=node_container.obj_dicts)
-
-        self.proxyFileSystemWatcher.removePaths(self.watchPaths)
-        self.watchPaths = self.getWatchPaths()
-        self.proxyFileSystemWatcher.addPaths(self.watchPaths)
-
-    def getSiteDirs(self, scope):
-        for site_dir in os.scandir(self.proxyDumpDir):
-            if site_dir.is_dir():
-                if scope is None:
-                    self.siteDirs.append(site_dir)
-                else:
-                    for sc in scope:
-                        pattern = re.compile(sc)
-                        if len(pattern.findall(site_dir.name)) != 0:
-                            self.siteDirs.append(site_dir)
-
-    def createNodeTree(self, scope: list = None, regex=None, new_tree=False):
-        if scope is None:
-            scope = self.siteMapScope
-        if new_tree is True:
-            self.proxyFileSystemWatcher.removePaths(self.watchPaths)
-            self.siteMapTreeModel.clear()
-            self.siteDirs.clear()
-        self.getSiteDirs(scope=scope)
-        self.top_model_container = parentItemContainer(name=self.proxyDumpDir)
-        self.top_model_container.object_ = self.siteMapTreeModel
-        for index, site_dir in enumerate(self.siteDirs):
-            node = DirNode(self, site_dir,
-                           parentPath=self.proxyDumpDir,
-                           parent_node_container=self.top_model_container,
-                           index_in_node=index)
-            node.makeNode()
-        self.dirNodeContainers.append(self.top_model_container)
-        self.siteMapTreeView.setModel(self.siteMapTreeModel)
-        self.watchPaths = self.getWatchPaths()
-        self.proxyFileSystemWatcher.addPaths(self.watchPaths)
+                    pts = QPolygon([
+                        QPoint(cx - 2, cy - 4),
+                        QPoint(cx - 2, cy + 4),
+                        QPoint(cx + 3, cy),
+                    ])
+                painter.drawPolygon(pts)
+                painter.restore()
+        else:
+            super().drawPrimitive(element, option, painter, widget)
 
 
+# ── main widget ───────────────────────────────────────────────────────────────
 
+class SiteMapPage(QWidget):
+    send_to_repeater = Signal(str)
+    sync_requested   = Signal()
+    traffic_changed  = Signal()
+
+    def __init__(self, project_dir, target_host, proxy_col,
+                 repository=None, parent=None):
+        super().__init__(parent)
+        self._project_dir  = project_dir
+        self._target_host  = target_host
+        self._col          = proxy_col   # pymongo Collection or None
+        self._repo         = repository
+        self._scope        = ScopeConfig()
+        self._filter_scope = True
+        self._last_count   = -1          # for change detection
+
+        self._show_types: dict[str, bool] = {
+            g: (g not in _DEFAULT_HIDDEN) for g in _EXT_GROUPS
+        }
+        self._type_btns: dict[str, QPushButton] = {}
+        self._tree_initialized = False   # True after first successful load
+
+        self._build_ui()
+        self._scope_btn.setChecked(True)
+        self._load_scope()
+        self._refresh_tree()
+        self._start_poll_timer()
+
+    # ── public ────────────────────────────────────────────────────────────────
+
+    def on_scope_changed(self, config: ScopeConfig) -> None:
+        self._scope = config
+        if self._filter_scope:
+            self._refresh_tree()
+
+    def refresh(self) -> None:
+        self._load_scope()
+        self._refresh_tree()
+
+    # ── UI ────────────────────────────────────────────────────────────────────
+
+    def _build_ui(self) -> None:
+        root = QVBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
+
+        # ── row 1: main toolbar ───────────────────────────────────────────────
+        tb = QHBoxLayout()
+        tb.setContentsMargins(8, 6, 8, 4)
+        tb.setSpacing(10)
+        title = QLabel("Site Map")
+        title.setStyleSheet("color:#CDD6F4; font-weight:bold; font-size:11px;")
+        tb.addWidget(title)
+        tb.addStretch()
+
+        self._count_lbl = QLabel("0 endpoints")
+        self._count_lbl.setStyleSheet("color:#6C7086; font-size:9px;")
+        tb.addWidget(self._count_lbl)
+
+        self._scope_btn = QPushButton("Filter by Scope: ON")
+        self._scope_btn.setCheckable(True)
+        self._scope_btn.setFixedHeight(24)
+        self._scope_btn.setStyleSheet(_TOGGLE_SS_ON)
+        self._scope_btn.toggled.connect(self._on_scope_toggle)
+        tb.addWidget(self._scope_btn)
+
+        ref_btn = QPushButton("Refresh")
+        ref_btn.setFixedHeight(24)
+        ref_btn.setStyleSheet(_BTN_SS)
+        ref_btn.clicked.connect(self.refresh)
+        tb.addWidget(ref_btn)
+
+        sync_btn = QPushButton("⇅  Sync to Results")
+        sync_btn.setFixedHeight(24)
+        sync_btn.setToolTip("Extract subdomains, endpoints and parameters into the results database")
+        sync_btn.setStyleSheet(_BTN_SS)
+        sync_btn.clicked.connect(self.sync_requested.emit)
+        tb.addWidget(sync_btn)
+        root.addLayout(tb)
+
+        # ── row 2: file-type filter bar ───────────────────────────────────────
+        fb = QHBoxLayout()
+        fb.setContentsMargins(8, 0, 8, 5)
+        fb.setSpacing(5)
+
+        show_lbl = QLabel("Show:")
+        show_lbl.setStyleSheet("color:#6C7086; font-size:9px; margin-right:2px;")
+        fb.addWidget(show_lbl)
+
+        for group in _EXT_GROUPS:
+            shown = self._show_types[group]
+            btn   = QPushButton(group)
+            btn.setCheckable(True)
+            btn.setChecked(shown)
+            btn.setFixedHeight(20)
+            btn.setStyleSheet(_TOGGLE_SS_ON if shown else _TOGGLE_SS_OFF)
+            btn.toggled.connect(lambda checked, g=group: self._on_type_toggle(g, checked))
+            self._type_btns[group] = btn
+            fb.addWidget(btn)
+
+        fb.addStretch()
+        root.addLayout(fb)
+
+        sep = QFrame()
+        sep.setFrameShape(QFrame.HLine)
+        sep.setFixedHeight(1)
+        sep.setStyleSheet("background:#313244; border:none;")
+        root.addWidget(sep)
+
+        # ── splitter — tree left, req/resp right ──────────────────────────────
+        splitter = QSplitter(Qt.Horizontal)
+        splitter.setChildrenCollapsible(False)
+        splitter.setStyleSheet("QSplitter::handle{background:#313244;width:3px;}")
+
+        self._model = QStandardItemModel()
+        self._tree  = QTreeView()
+        self._tree.setModel(self._model)
+        self._tree_style = _TreeStyle(self._tree.style())
+        self._tree.setStyle(self._tree_style)
+        self._tree.setAnimated(True)
+        self._tree.setUniformRowHeights(True)
+        self._tree.setEditTriggers(QTreeView.NoEditTriggers)
+        self._tree.setHeaderHidden(True)
+        self._tree.clicked.connect(self._on_item_clicked)
+        self._tree.setContextMenuPolicy(Qt.CustomContextMenu)
+        self._tree.customContextMenuRequested.connect(self._on_tree_context_menu)
+        self._tree.setIndentation(20)
+        self._tree.setStyleSheet(
+            "QTreeView{background:#1E1E2E; border:none;}"
+            "QTreeView::item{padding:2px 0;}"
+            "QTreeView::item:selected{background:#313244; color:#CDD6F4;}"
+            "QTreeView::item:hover{background:#181825;}"
+            "QTreeView::branch{background:#1E1E2E;}"
+        )
+        splitter.addWidget(self._tree)
+
+        rr = QWidget()
+        rr_vb = QVBoxLayout(rr)
+        rr_vb.setContentsMargins(0, 0, 0, 0)
+        self._tabs = QTabWidget()
+        self._tabs.setStyleSheet(
+            "QTabBar::tab{background:#181825;color:#6C7086;padding:4px 12px;border:none;}"
+            "QTabBar::tab:selected{background:#313244;color:#CDD6F4;}"
+        )
+        self._req_view  = _CodeView()
+        self._resp_view = _CodeView()
+        self._tabs.addTab(self._req_view,  "Request")
+        self._tabs.addTab(self._resp_view, "Response")
+        rr_vb.addWidget(self._tabs)
+        splitter.addWidget(rr)
+        splitter.setSizes([300, 680])
+        root.addWidget(splitter, stretch=1)
+
+    # ── tree ──────────────────────────────────────────────────────────────────
+
+    def _should_show_path(self, path: str) -> bool:
+        ext = Path(path).suffix.lower()
+        if not ext:
+            return True
+        for group, exts in _EXT_GROUPS.items():
+            if ext in exts and not self._show_types[group]:
+                return False
+        return True
+
+    def _refresh_tree(self) -> None:
+        # Preserve the user's current tree state before clearing
+        expanded_keys = self._save_expansion()
+        scroll_pos    = self._tree.verticalScrollBar().value()
+        is_first_load = not self._tree_initialized
+
+        self._model.clear()
+
+        if self._col is None:
+            self._count_lbl.setText("database unavailable")
+            return
+
+        try:
+            all_hosts = self._col.distinct("host")
+        except Exception as exc:
+            log.warning("SiteMap DB query failed: %s", exc)
+            self._count_lbl.setText("DB error")
+            return
+
+        in_scope = [
+            h for h in all_hosts
+            if not self._filter_scope or self._scope.matches(h)
+        ]
+        if not in_scope:
+            self._count_lbl.setText("0 endpoints")
+            return
+
+        pipeline = [
+            {"$match": {"host": {"$in": in_scope}}},
+            {"$sort": {"timestamp": -1}},
+            {"$group": {
+                "_id":         {"host": "$host", "method": "$method", "path": "$path"},
+                "status_code": {"$first": "$status_code"},
+                "doc_id":      {"$first": "$_id"},
+            }},
+        ]
+
+        by_host: dict[str, list[tuple]] = {}
+        try:
+            for doc in self._col.aggregate(pipeline):
+                host   = doc["_id"]["host"]
+                method = doc["_id"]["method"]
+                path   = doc["_id"]["path"] or "/"
+                if not self._should_show_path(path):
+                    continue
+                by_host.setdefault(host, []).append(
+                    (method, path, doc["status_code"], str(doc["doc_id"]))
+                )
+        except Exception as exc:
+            log.warning("SiteMap aggregation failed: %s", exc)
+            return
+
+        total = 0
+        for host in sorted(by_host.keys()):
+            entries = by_host[host]
+
+            tree_root = _PathNode()
+            for method, path, status, doc_id in entries:
+                segments = [s for s in path.split("/") if s] or [""]
+                node = tree_root
+                for seg in segments:
+                    node.children.setdefault(seg, _PathNode())
+                    node = node.children[seg]
+                node.entries.append((doc_id, method, int(status or 0)))
+
+            host_item = QStandardItem(f"  {host}  ({len(entries)})")
+            host_item.setForeground(QColor("#CDD6F4"))
+            f = QFont(); f.setBold(True)
+            host_item.setFont(f)
+            host_item.setData("", _DOC_ID_ROLE)
+            host_item.setData(host, _KEY_ROLE)
+            host_item.setEditable(False)
+            self._model.appendRow(host_item)
+            _fill_node(host_item, tree_root)
+            total += len(entries)
+
+        self._count_lbl.setText(f"{total} endpoint{'s' if total != 1 else ''}")
+
+        # On first load expand all host nodes; afterwards restore what the user had open
+        if is_first_load:
+            root = self._model.invisibleRootItem()
+            for i in range(root.rowCount()):
+                self._tree.expand(self._model.indexFromItem(root.child(i)))
+            self._tree_initialized = True
+        else:
+            self._restore_expansion(expanded_keys)
+            self._tree.verticalScrollBar().setValue(scroll_pos)
+
+    # ── expansion save / restore ──────────────────────────────────────────────
+
+    def _save_expansion(self) -> set[tuple[str, ...]]:
+        """Return path tuples for every currently expanded item."""
+        result: set[tuple[str, ...]] = set()
+        root = self._model.invisibleRootItem()
+        for i in range(root.rowCount()):
+            host_item = root.child(i)
+            key = host_item.data(_KEY_ROLE) or ""
+            if key and self._tree.isExpanded(self._model.indexFromItem(host_item)):
+                result.add((key,))
+                self._collect_expanded(host_item, (key,), result)
+        return result
+
+    def _collect_expanded(
+        self,
+        parent: QStandardItem,
+        path: tuple[str, ...],
+        result: set,
+    ) -> None:
+        for i in range(parent.rowCount()):
+            child     = parent.child(i)
+            key       = child.data(_KEY_ROLE) or ""
+            child_path = path + (key,)
+            if key and self._tree.isExpanded(self._model.indexFromItem(child)):
+                result.add(child_path)
+                self._collect_expanded(child, child_path, result)
+
+    def _restore_expansion(self, expanded_keys: set[tuple[str, ...]]) -> None:
+        root = self._model.invisibleRootItem()
+        for i in range(root.rowCount()):
+            host_item = root.child(i)
+            key = host_item.data(_KEY_ROLE) or ""
+            if (key,) in expanded_keys:
+                self._tree.expand(self._model.indexFromItem(host_item))
+                self._restore_children(host_item, (key,), expanded_keys)
+
+    def _restore_children(
+        self,
+        parent: QStandardItem,
+        path: tuple[str, ...],
+        expanded_keys: set,
+    ) -> None:
+        for i in range(parent.rowCount()):
+            child      = parent.child(i)
+            key        = child.data(_KEY_ROLE) or ""
+            child_path = path + (key,)
+            if child_path in expanded_keys:
+                self._tree.expand(self._model.indexFromItem(child))
+                self._restore_children(child, child_path, expanded_keys)
+
+    # ── interactions ──────────────────────────────────────────────────────────
+
+    def _load_doc(self, doc_id: str) -> dict | None:
+        if not doc_id or self._col is None:
+            return None
+        try:
+            return self._col.find_one({"_id": ObjectId(doc_id)})
+        except Exception as exc:
+            log.warning("Failed to load doc %s: %s", doc_id, exc)
+            return None
+
+    def _on_item_clicked(self, index: QModelIndex) -> None:
+        item   = self._model.itemFromIndex(index)
+        doc_id = item.data(_DOC_ID_ROLE) if item else ""
+        if not doc_id:
+            return
+        doc = self._load_doc(doc_id)
+        if doc:
+            self._req_view.setText(_fmt_request(doc.get("request", {})))
+            self._resp_view.setText(_fmt_response(doc.get("response", {})))
+            self._tabs.setCurrentIndex(0)
+
+    def _on_tree_context_menu(self, pos: QPoint) -> None:
+        index  = self._tree.indexAt(pos)
+        if not index.isValid():
+            return
+        item   = self._model.itemFromIndex(index)
+        doc_id = item.data(_DOC_ID_ROLE) if item else ""
+        if not doc_id:
+            return
+        menu   = QMenu(self)
+        action = menu.addAction("Send to Repeater")
+        chosen = menu.exec(self._tree.mapToGlobal(pos))
+        if chosen is action:
+            doc = self._load_doc(doc_id)
+            if doc:
+                self.send_to_repeater.emit(_fmt_request(doc.get("request", {})))
+
+    def _on_scope_toggle(self, checked: bool) -> None:
+        self._filter_scope = checked
+        self._scope_btn.setText(f"Filter by Scope: {'ON' if checked else 'OFF'}")
+        self._scope_btn.setStyleSheet(_TOGGLE_SS_ON if checked else _TOGGLE_SS_OFF)
+        self._refresh_tree()
+
+    def _on_type_toggle(self, group: str, checked: bool) -> None:
+        self._show_types[group] = checked
+        self._type_btns[group].setStyleSheet(_TOGGLE_SS_ON if checked else _TOGGLE_SS_OFF)
+        self._refresh_tree()
+
+    def _load_scope(self) -> None:
+        if self._repo:
+            try:
+                self._scope = self._repo.get_scope()
+            except Exception:
+                pass
+
+    # ── poll timer ────────────────────────────────────────────────────────────
+
+    def _start_poll_timer(self) -> None:
+        self._poll_timer = QTimer(self)
+        self._poll_timer.setInterval(2000)
+        self._poll_timer.timeout.connect(self._check_new_traffic)
+        self._poll_timer.start()
+
+    def _check_new_traffic(self) -> None:
+        if self._col is None:
+            return
+        try:
+            count = self._col.estimated_document_count()
+        except Exception:
+            return
+        if count != self._last_count:
+            self._last_count = count
+            self._refresh_tree()
+            self.traffic_changed.emit()
+
+
+# ── tree helpers ──────────────────────────────────────────────────────────────
+
+def _fill_node(parent: QStandardItem, node: _PathNode) -> None:
+    for seg in sorted(node.children.keys()):
+        child   = node.children[seg]
+        display = seg if seg else "/"
+
+        if not child.entries:
+            item = QStandardItem(f"  {display}")
+            item.setForeground(QColor("#6C7086"))
+            item.setData("", _DOC_ID_ROLE)
+        elif len(child.entries) == 1:
+            doc_id, method, status = child.entries[0]
+            item = QStandardItem(f"  {display}   {method}  {status}")
+            item.setForeground(QColor(_status_color(status)))
+            item.setData(doc_id, _DOC_ID_ROLE)
+        else:
+            item = QStandardItem(f"  {display}")
+            item.setForeground(QColor("#CDD6F4"))
+            item.setData("", _DOC_ID_ROLE)
+            for doc_id, method, status in sorted(child.entries, key=lambda e: e[1]):
+                mi = QStandardItem(f"    {method}  {status}")
+                mi.setForeground(QColor(_status_color(status)))
+                mi.setData(doc_id, _DOC_ID_ROLE)
+                mi.setData(method, _KEY_ROLE)   # method as leaf key
+                mi.setEditable(False)
+                item.appendRow(mi)
+
+        item.setData(display, _KEY_ROLE)   # path segment as node key
+        item.setEditable(False)
+        parent.appendRow(item)
+
+        if child.children:
+            _fill_node(item, child)
+
+
+# ── formatting helpers ────────────────────────────────────────────────────────
+
+def _fmt_request(req: dict) -> str:
+    method  = req.get("method", "")
+    url     = req.get("url", "")
+    headers = req.get("headers", {})
+    body    = req.get("body", "")
+    lines   = [f"{method} {url}"]
+    for k, v in (headers.items() if isinstance(headers, dict) else []):
+        for val in ([v] if isinstance(v, str) else v):
+            lines.append(f"{k}: {val}")
+    if body:
+        lines += ["", body]
+    return "\n".join(lines)
+
+
+def _fmt_response(resp: dict) -> str:
+    status  = resp.get("status_code", "")
+    reason  = resp.get("reason", "")
+    version = resp.get("http_version", "HTTP/1.1")
+    headers = resp.get("headers", {})
+    body    = resp.get("body", "")
+    lines   = [f"{version} {status} {reason}"]
+    for k, v in (headers.items() if isinstance(headers, dict) else []):
+        for val in ([v] if isinstance(v, str) else v):
+            lines.append(f"{k}: {val}")
+    if body:
+        lines += ["", body]
+    return "\n".join(lines)
+
+
+# ── shared style constants ────────────────────────────────────────────────────
+
+_TOGGLE_SS_ON = (
+    "QPushButton{background:#1E3A2F;color:#A6E3A1;border:1px solid #A6E3A1;"
+    "border-radius:4px;padding:0 10px;font-size:9px;}"
+    "QPushButton:hover{background:#2A4A3F;}"
+)
+_TOGGLE_SS_OFF = (
+    "QPushButton{background:#313244;color:#6C7086;border:1px solid #45475A;"
+    "border-radius:4px;padding:0 10px;font-size:9px;}"
+    "QPushButton:hover{background:#45475A;color:#CDD6F4;}"
+)
+_BTN_SS = (
+    "QPushButton{background:#313244;color:#6C7086;border:1px solid #45475A;"
+    "border-radius:4px;padding:0 10px;font-size:9px;}"
+    "QPushButton:hover{background:#45475A;color:#CDD6F4;}"
+)
+
+
+# ── code viewer ───────────────────────────────────────────────────────────────
+
+class _CodeView(QTextEdit):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setReadOnly(True)
+        self.setFont(QFont("Cascadia Code", 9))
+        self.setStyleSheet(
+            "QTextEdit{background:#11111B; color:#CDD6F4; border:none; padding:8px;}"
+        )
+        self._hl = SyntaxHighlighter(self.document())

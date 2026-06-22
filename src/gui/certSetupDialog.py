@@ -8,7 +8,7 @@ from PySide6.QtCore import QThread, Signal, Qt
 from PySide6.QtGui import QFont, QColor
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
-    QTextEdit, QFrame, QApplication, QSizePolicy, QWidget,
+    QTextEdit, QFrame, QApplication, QSizePolicy, QWidget, QScrollArea,
 )
 
 from config.config import CERT_CACHE_DIR, CERT_KEYS_DIR, CERTIFICATE_FILE, HOST_CERTS_DIR, ROOT_CERT_FILE
@@ -22,7 +22,7 @@ class _CertWorker(QThread):
 
     def __init__(self, action):
         super().__init__()
-        self.action = action  # "generate" | "system_trust"
+        self.action = action  # "generate" | "system_trust" | "chrome_trust" | "firefox_trust"
 
     def run(self):
         try:
@@ -30,33 +30,39 @@ class _CertWorker(QThread):
                 self._generate()
             elif self.action == "system_trust":
                 self._system_trust()
+            elif self.action == "chrome_trust":
+                self._nss_trust("Chrome/Chromium", self._chrome_nss_dbs())
+            elif self.action == "firefox_trust":
+                self._nss_trust("Firefox", self._firefox_nss_dbs())
         except Exception as exc:
             self.done.emit(False, str(exc))
 
     def _generate(self):
-        from certauth.certauth import CertificateAuthority
+        from proxy._ca import CertificateAuthority
         self.log.emit("Creating cert directories…")
         for d in (CERT_CACHE_DIR, CERT_KEYS_DIR, HOST_CERTS_DIR,
                   str(Path(ROOT_CERT_FILE).parent)):
             os.makedirs(d, exist_ok=True)
 
-        self.log.emit("Initialising certificate authority…")
-        ca = CertificateAuthority(ca_name="AWE Proxy CA",
-                                  cert_cache=CERT_CACHE_DIR,
-                                  ca_file_cache=ROOT_CERT_FILE)
+        # Remove stale per-hostname certs so they're re-signed by the new root
+        cache_dir = Path(CERT_CACHE_DIR)
+        stale = list(cache_dir.glob("*.pem")) if cache_dir.exists() else []
+        for f in stale:
+            try:
+                f.unlink()
+            except OSError:
+                pass
+        if stale:
+            self.log.emit(f"Cleared {len(stale)} cached host certificate(s).")
+
+        self.log.emit("Generating root CA certificate…")
+        try:
+            ca = CertificateAuthority(ca_name="AWE Proxy CA")
+        except Exception as exc:
+            self.done.emit(False, f"CA generation failed:\n{exc}")
+            return
 
         self.log.emit(f"Root CA PEM written to:\n  {ROOT_CERT_FILE}")
-
-        if not Path(CERTIFICATE_FILE).exists():
-            self.log.emit("Converting PEM → CRT…")
-            r = subprocess.run(
-                ["openssl", "x509", "-in", ROOT_CERT_FILE, "-out", CERTIFICATE_FILE],
-                capture_output=True, text=True,
-            )
-            if r.returncode != 0:
-                self.done.emit(False, f"openssl failed:\n{r.stderr.strip()}")
-                return
-
         self.log.emit(f"Certificate file:\n  {CERTIFICATE_FILE}")
         self.done.emit(True, "Certificate generated successfully.")
 
@@ -99,6 +105,95 @@ class _CertWorker(QThread):
         else:
             self.done.emit(False, f"Unsupported platform: {sys.platform}")
 
+    # ── NSS browser trust (Chrome + Firefox on Linux) ─────────────────────────
+
+    def _nss_trust(self, browser_name: str, db_dirs: list[str]) -> None:
+        """Install the AWE CA into each NSS database directory found."""
+        certutil = shutil.which("certutil")
+        if not certutil:
+            self.done.emit(
+                False,
+                f"'certutil' not found.\n"
+                f"Install it with:  sudo apt install libnss3-tools"
+            )
+            return
+
+        if not db_dirs:
+            self.done.emit(False, f"No {browser_name} NSS database found.\n"
+                                  f"Launch {browser_name} at least once first.")
+            return
+
+        ok_count = 0
+        for db in db_dirs:
+            self.log.emit(f"Installing into {db} …")
+            # Remove old entry first (ignore errors — may not exist yet)
+            subprocess.run(
+                [certutil, "-d", f"sql:{db}", "-D", "-n", "AWE Proxy CA"],
+                capture_output=True,
+            )
+            r = subprocess.run(
+                [certutil, "-d", f"sql:{db}", "-A",
+                 "-t", "CT,,", "-n", "AWE Proxy CA", "-i", CERTIFICATE_FILE],
+                capture_output=True, text=True,
+            )
+            if r.returncode == 0:
+                self.log.emit(f"  ✓ {db}")
+                ok_count += 1
+            else:
+                self.log.emit(f"  ✗ {db}: {r.stderr.strip() or r.stdout.strip()}")
+
+        if ok_count:
+            self.done.emit(True,
+                f"Trusted in {ok_count} {browser_name} profile(s).\n"
+                f"Restart {browser_name} for the change to take effect.")
+        else:
+            self.done.emit(False,
+                f"Failed to trust certificate in any {browser_name} profile.")
+
+    @staticmethod
+    def _chrome_nss_dbs() -> list[str]:
+        """Return existing Chrome/Chromium NSS database directories."""
+        candidates = [
+            Path.home() / ".pki" / "nssdb",
+            Path.home() / ".local" / "share" / "pki" / "nssdb",
+            # Snap-packaged Chrome
+            Path.home() / "snap" / "chromium" / "current" / ".pki" / "nssdb",
+        ]
+        found = [str(p) for p in candidates if p.is_dir()]
+        # Auto-create the default NSS db if Chrome has never been opened yet
+        if not found:
+            default = Path.home() / ".pki" / "nssdb"
+            try:
+                default.mkdir(parents=True, exist_ok=True)
+                subprocess.run(
+                    ["certutil", "-d", f"sql:{default}", "-N", "--empty-password"],
+                    capture_output=True,
+                )
+                if default.is_dir():
+                    found = [str(default)]
+            except Exception:
+                pass
+        return found
+
+    @staticmethod
+    def _firefox_nss_dbs() -> list[str]:
+        """Return existing Firefox profile NSS database directories."""
+        import glob
+        patterns = [
+            str(Path.home() / ".mozilla" / "firefox" / "*.default*"),
+            str(Path.home() / ".mozilla" / "firefox" / "*.esr"),
+            # Flatpak Firefox
+            str(Path.home() / ".var" / "app" / "org.mozilla.firefox"
+                / ".mozilla" / "firefox" / "*.default*"),
+            # Snap Firefox
+            str(Path.home() / "snap" / "firefox" / "current"
+                / ".mozilla" / "firefox" / "*.default*"),
+        ]
+        dirs = []
+        for pat in patterns:
+            dirs.extend(p for p in glob.glob(pat) if Path(p).is_dir())
+        return dirs
+
 
 # ── dialog ───────────────────────────────────────────────────────────────────
 
@@ -106,7 +201,8 @@ class CertSetupDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Proxy Certificate Setup")
-        self.setMinimumSize(620, 560)
+        self.setMinimumSize(560, 420)
+        self.resize(640, 640)
         self.setWindowFlags(Qt.Dialog | Qt.WindowCloseButtonHint)
         self._worker = None
         self._build_ui()
@@ -115,9 +211,26 @@ class CertSetupDialog(QDialog):
     # ── UI ────────────────────────────────────────────────────────────────────
 
     def _build_ui(self):
+        # Outer layout: scroll area (grows) + log + close (pinned at bottom)
         root = QVBoxLayout(self)
-        root.setSpacing(12)
-        root.setContentsMargins(20, 20, 20, 20)
+        root.setSpacing(0)
+        root.setContentsMargins(0, 0, 0, 0)
+
+        # ── Scrollable content ────────────────────────────────────────────────
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        scroll.setStyleSheet(
+            "QScrollArea{background:#1E1E2E; border:none;}"
+            "QScrollBar:vertical{background:#181825; width:8px; border:none;}"
+            "QScrollBar::handle:vertical{background:#313244; border-radius:4px; min-height:20px;}"
+        )
+
+        body = QWidget()
+        body.setStyleSheet("background:#1E1E2E;")
+        vb = QVBoxLayout(body)
+        vb.setSpacing(12)
+        vb.setContentsMargins(20, 20, 20, 16)
 
         # Header
         title = QLabel("Proxy Certificate Setup")
@@ -126,7 +239,7 @@ class CertSetupDialog(QDialog):
         title_font.setPointSize(14)
         title_font.setBold(True)
         title.setFont(title_font)
-        root.addWidget(title)
+        vb.addWidget(title)
 
         subtitle = QLabel(
             "The proxy intercepts HTTPS traffic using a local CA certificate.\n"
@@ -134,19 +247,19 @@ class CertSetupDialog(QDialog):
         )
         subtitle.setWordWrap(True)
         subtitle.setObjectName("certDialogSubtitle")
-        root.addWidget(subtitle)
+        vb.addWidget(subtitle)
 
-        root.addWidget(self._divider())
+        vb.addWidget(self._divider())
 
         # Status row
         self.statusLabel = QLabel()
         self.statusLabel.setObjectName("certStatusLabel")
-        root.addWidget(self.statusLabel)
+        vb.addWidget(self.statusLabel)
 
-        root.addWidget(self._divider())
+        vb.addWidget(self._divider())
 
         # Step 1 – Generate
-        root.addWidget(self._step_header("Step 1", "Generate the CA Certificate"))
+        vb.addWidget(self._step_header("Step 1", "Generate the CA Certificate"))
         step1_body = QHBoxLayout()
         self.generateBtn = QPushButton("Generate Certificate")
         self.generateBtn.setObjectName("primaryButton")
@@ -154,12 +267,12 @@ class CertSetupDialog(QDialog):
         self.generateBtn.clicked.connect(self._on_generate)
         step1_body.addWidget(self.generateBtn)
         step1_body.addStretch()
-        root.addLayout(step1_body)
+        vb.addLayout(step1_body)
 
-        root.addWidget(self._divider())
+        vb.addWidget(self._divider())
 
         # Step 2 – System trust
-        root.addWidget(self._step_header("Step 2", "Trust in System"))
+        vb.addWidget(self._step_header("Step 2", "Trust in System"))
         step2_body = QVBoxLayout()
         step2_body.setSpacing(6)
 
@@ -167,6 +280,7 @@ class CertSetupDialog(QDialog):
         self.certPathLabel = QLabel()
         self.certPathLabel.setObjectName("certPathLabel")
         self.certPathLabel.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        self.certPathLabel.setWordWrap(True)
         cert_row.addWidget(self.certPathLabel, 1)
         copyBtn = QPushButton("Copy Path")
         copyBtn.setFixedHeight(28)
@@ -182,60 +296,89 @@ class CertSetupDialog(QDialog):
         trust_row.addWidget(self.trustBtn)
         trust_row.addStretch()
         step2_body.addLayout(trust_row)
-        root.addLayout(step2_body)
+        vb.addLayout(step2_body)
 
-        root.addWidget(self._divider())
+        vb.addWidget(self._divider())
 
         # Step 3 – Browser trust
-        root.addWidget(self._step_header("Step 3", "Trust in Browser  (HTTPS interception)"))
-        browser_info = QLabel(
-            "<b>Chrome / Chromium:</b>  Settings → Privacy &amp; Security → "
-            "Manage Certificates → Authorities → Import<br>"
-            "<b>Firefox:</b>  Settings → Privacy &amp; Security → "
-            "View Certificates → Authorities → Import<br><br>"
-            "Import the <b>.crt</b> file shown above and check "
-            "<i>Trust this CA to identify websites</i>."
+        vb.addWidget(self._step_header("Step 3", "Trust in Browser  (HTTPS interception)"))
+
+        browser_note = QLabel(
+            "Installs the CA into the browser's NSS certificate database automatically.\n"
+            "Requires <b>libnss3-tools</b>  (<code>sudo apt install libnss3-tools</code>).\n"
+            "Restart the browser after installing."
         )
-        browser_info.setWordWrap(True)
-        browser_info.setTextFormat(Qt.RichText)
-        browser_info.setObjectName("certBrowserInfo")
-        root.addWidget(browser_info)
+        browser_note.setWordWrap(True)
+        browser_note.setTextFormat(Qt.RichText)
+        browser_note.setStyleSheet("color:#BAC2DE; font-size:10px; background:transparent;")
+        vb.addWidget(browser_note)
 
         browser_btns = QHBoxLayout()
-        openChromeBtn = QPushButton("Open Chrome Settings")
-        openChromeBtn.setFixedHeight(28)
-        openChromeBtn.clicked.connect(lambda: self._open_url(
-            "chrome://settings/certificates" if sys.platform == "win32"
-            else "chrome://settings/certificates"))
-        openFirefoxBtn = QPushButton("Open Firefox Settings")
-        openFirefoxBtn.setFixedHeight(28)
-        openFirefoxBtn.clicked.connect(lambda: self._open_url(
-            "about:preferences#privacy"))
-        browser_btns.addWidget(openChromeBtn)
-        browser_btns.addWidget(openFirefoxBtn)
+        browser_btns.setSpacing(8)
+
+        self.chromeTrustBtn = QPushButton("Trust in Chrome / Chromium")
+        self.chromeTrustBtn.setObjectName("primaryButton")
+        self.chromeTrustBtn.setFixedHeight(32)
+        self.chromeTrustBtn.clicked.connect(self._on_chrome_trust)
+        browser_btns.addWidget(self.chromeTrustBtn)
+
+        self.firefoxTrustBtn = QPushButton("Trust in Firefox")
+        self.firefoxTrustBtn.setObjectName("primaryButton")
+        self.firefoxTrustBtn.setFixedHeight(32)
+        self.firefoxTrustBtn.clicked.connect(self._on_firefox_trust)
+        browser_btns.addWidget(self.firefoxTrustBtn)
+
         browser_btns.addStretch()
-        root.addLayout(browser_btns)
+        vb.addLayout(browser_btns)
 
-        root.addWidget(self._divider())
+        # Manual fallback note for Windows / macOS
+        manual_note = QLabel(
+            "On Windows / macOS or if the above buttons fail: open the browser's certificate manager "
+            "and import the <b>.crt</b> file as a trusted CA."
+        )
+        manual_note.setWordWrap(True)
+        manual_note.setTextFormat(Qt.RichText)
+        manual_note.setStyleSheet("color:#6C7086; font-size:9px; background:transparent;")
+        vb.addWidget(manual_note)
 
-        # Log output
+        vb.addStretch()
+        scroll.setWidget(body)
+        root.addWidget(scroll, stretch=1)
+
+        # ── Pinned bottom: log + close ────────────────────────────────────────
+        bottom = QWidget()
+        bottom.setStyleSheet("background:#181825;")
+        bottom_vb = QVBoxLayout(bottom)
+        bottom_vb.setContentsMargins(20, 8, 20, 16)
+        bottom_vb.setSpacing(8)
+
+        sep = QFrame()
+        sep.setFrameShape(QFrame.HLine)
+        sep.setStyleSheet("background:#313244; border:none;")
+        sep.setFixedHeight(1)
+        bottom_vb.addWidget(sep)
+
         self.logView = QTextEdit()
         self.logView.setObjectName("certLogView")
         self.logView.setReadOnly(True)
-        self.logView.setMaximumHeight(120)
+        self.logView.setFixedHeight(110)
         mono = QFont("Cascadia Code", 9)
         self.logView.setFont(mono)
         self.logView.setPlaceholderText("Activity log…")
-        root.addWidget(self.logView)
+        self.logView.setStyleSheet(
+            "QTextEdit{background:#11111B; color:#CDD6F4; border:none; padding:6px;}"
+        )
+        bottom_vb.addWidget(self.logView)
 
-        # Close button
         close_row = QHBoxLayout()
         close_row.addStretch()
         closeBtn = QPushButton("Close")
         closeBtn.setFixedHeight(32)
         closeBtn.clicked.connect(self.accept)
         close_row.addWidget(closeBtn)
-        root.addLayout(close_row)
+        bottom_vb.addLayout(close_row)
+
+        root.addWidget(bottom)
 
     @staticmethod
     def _divider():
@@ -281,14 +424,23 @@ class CertSetupDialog(QDialog):
         self.statusLabel.setText(f"Status:  <span style='color:{color}'><b>{status}</b></span>")
         self.statusLabel.setTextFormat(Qt.RichText)
         self.certPathLabel.setText(CERTIFICATE_FILE if crt_ok else "(not generated yet)")
-        self.generateBtn.setEnabled(not pem_ok)
+        self.generateBtn.setText("Regenerate Certificate" if pem_ok else "Generate Certificate")
+        self.generateBtn.setEnabled(True)
         self.trustBtn.setEnabled(crt_ok and not trusted)
+        self.chromeTrustBtn.setEnabled(crt_ok)
+        self.firefoxTrustBtn.setEnabled(crt_ok)
 
     @staticmethod
     def _is_system_trusted() -> bool:
         if sys.platform == "linux":
             dest = Path("/usr/local/share/ca-certificates/awe_proxy_ca.crt")
-            return dest.exists()
+            if not dest.exists():
+                return False
+            # File exists but may be from a previous (now replaced) CA — compare content
+            try:
+                return dest.read_bytes() == Path(CERTIFICATE_FILE).read_bytes()
+            except OSError:
+                return False
         elif sys.platform == "win32":
             r = subprocess.run(
                 ["certutil", "-verifystore", "Root", CERTIFICATE_FILE],
@@ -305,11 +457,18 @@ class CertSetupDialog(QDialog):
     def _on_system_trust(self):
         self._run_worker("system_trust")
 
+    def _on_chrome_trust(self):
+        self._run_worker("chrome_trust")
+
+    def _on_firefox_trust(self):
+        self._run_worker("firefox_trust")
+
     def _run_worker(self, action):
         if self._worker and self._worker.isRunning():
             return
-        self.generateBtn.setEnabled(False)
-        self.trustBtn.setEnabled(False)
+        # Disable all action buttons while work is in progress
+        for btn in (self.generateBtn, self.trustBtn, self.chromeTrustBtn, self.firefoxTrustBtn):
+            btn.setEnabled(False)
         self.logView.clear()
         self._worker = _CertWorker(action)
         self._worker.log.connect(self._append_log)
@@ -327,8 +486,3 @@ class CertSetupDialog(QDialog):
     def _copy_cert_path(self):
         QApplication.clipboard().setText(CERTIFICATE_FILE)
         self._append_log(f"Copied: {CERTIFICATE_FILE}")
-
-    @staticmethod
-    def _open_url(url: str):
-        import webbrowser
-        webbrowser.open(url)

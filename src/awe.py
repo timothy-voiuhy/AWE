@@ -1,9 +1,9 @@
 #! /usr/bin/python
 import atexit
+import json
 import logging
 import os
 import queue
-import random
 import socket
 import sys
 import time
@@ -22,10 +22,47 @@ from config.config import DEFAULT_WORKSPACE_DIR, HOME_DIR, RUNDIR
 from gui import targetWindow
 from gui.actionsWidget import ActionsWidget
 from gui.guiUtilities import GuiProxyClient, HoverButton, TextEditor, SyntaxHighlighter, MessageBox
-from gui.repeater import RepeaterWindow
-from gui.siteMapWindow import SiteMapWindow
-from gui.threadrunners import AtomProxy, SessionHandlerRunner
+from gui.threadrunners import AtomProxy
 from utiliities import red, cyan
+
+# Written by proxy.server on startup, deleted on shutdown
+_PROXY_CONTROL_FILE = Path(RUNDIR) / "tmp" / "proxy_control.txt"
+
+_PROXY_DEFAULT_PORT  = 8001
+_UI_SETTINGS_FILE    = Path(os.path.expanduser("~")) / ".config" / "awe" / "ui_settings.json"
+
+
+def _read_proxy_port() -> int:
+    try:
+        return int(json.loads(_UI_SETTINGS_FILE.read_text()).get("proxy_port", _PROXY_DEFAULT_PORT))
+    except Exception:
+        return _PROXY_DEFAULT_PORT
+
+
+def _stop_proxy_graceful() -> None:
+    """Send a graceful stop to any running proxy via the control socket.
+
+    Reads the port from proxy_control.txt, sends {"action": "stop"}, then
+    removes the file.  Silently ignores all errors (proxy may already be dead).
+    """
+    port = None
+    try:
+        port = int(_PROXY_CONTROL_FILE.read_text().strip())
+    except Exception:
+        pass
+
+    if port is not None:
+        try:
+            from proxy._control import ControlClient
+            ControlClient(port).stop()
+        except Exception:
+            pass
+
+    try:
+        _PROXY_CONTROL_FILE.unlink(missing_ok=True)
+    except Exception:
+        pass
+
 
 class AmassFailure(Exception):
     pass
@@ -60,11 +97,21 @@ class SocketIPC(QThread, QtCore.QObject):
     def sendFinishedMessage(self, process_object_name: str):
         self.client.send(process_object_name.encode())
 
+    def stop(self) -> None:
+        """Close the server socket so accept() unblocks and the thread exits."""
+        try:
+            self.server.close()
+        except Exception:
+            pass
+
     def runServer(self):
         logging.info(f"IPCServer listening for connections on  {self.server_port}")
         self.server.listen(100000000)
         while True:
-            skt, addr = self.server.accept()
+            try:
+                skt, addr = self.server.accept()
+            except OSError:
+                break  # socket was closed via stop()
             processObjectName = skt.recv(1000).decode(errors="replace")
             self.processFinishedExecution.emit(processObjectName)
 
@@ -138,16 +185,15 @@ class ThreadMon(QWidget):
     def exitThread(self):
         try:
             # handle process closure
-            self.pid = self.thread.process.pid
-            if sys.platform == "win32":
-                os.system(f"taskkill /F /PID {int(self.pid)}")
-            elif sys.platform == "linux":
-                os.system(f"kill {int(self.pid + 1)}")
-            if self.thread.process.process_name == "atomProxy":
+            proc = self.thread.process
+            self.pid = proc.pid
+            try:
+                proc.terminate()
+            except Exception:
+                pass
+            if proc.process_name == "atomProxy":
                 self.topParent.isProxyRunning = False
-            elif self.thread.process.process_name == "sessionHandler":
-                self.topParent.isSessionHandlerRunning = False
-            logging.info(f"Terminating subprocess with pid f{self.pid}")
+            logging.info(f"Terminating subprocess with pid {self.pid}")
         except AttributeError:
             # handle thread closure
             logging.info(f"Terminating thread {self.thread}")
@@ -241,8 +287,6 @@ class MainWin(QMainWindow, QtCore.QObject):
         self.proxy_port = 0
         self.proxy_hostname = 0
         self.isSessionHandlerRunning = False
-        self.startSessionHandler()
-        time.sleep(3)
         self.startproxy()
         self.setWindowTitle("AWE(Atom Web Enumeration Framework)")
         self.defaultWorkspaceDir = DEFAULT_WORKSPACE_DIR
@@ -278,16 +322,6 @@ class MainWin(QMainWindow, QtCore.QObject):
         # ── Views ─────────────────────────────────────────────────────────────
         viewsMenu = self.upperTabMenuBar.addMenu("Views")
 
-        self.sitemapAction = QtGui.QAction("Site Map", self)
-        self.sitemapAction.setShortcut("Ctrl+M")
-        self.sitemapAction.triggered.connect(self.addSiteMapTab)
-        viewsMenu.addAction(self.sitemapAction)
-
-        self.repeaterAction = QtGui.QAction("Repeater", self)
-        self.repeaterAction.setShortcut("Ctrl+R")
-        self.repeaterAction.triggered.connect(self.openRepeater)
-        viewsMenu.addAction(self.repeaterAction)
-
         self.threadmonitorAction = QtGui.QAction("Thread Monitor", self)
         self.threadmonitorAction.setShortcut("Ctrl+T")
         self.threadmonitorAction.triggered.connect(self.addThreadMonitorTab)
@@ -306,23 +340,12 @@ class MainWin(QMainWindow, QtCore.QObject):
         self.MainLayout.addWidget(self.tabManager)
         self.setCentralWidget(self.centralWidget)
         
-        # add repeater tab and sitemap tab
-        self.repeaterWindow = RepeaterWindow(parent=self)
-        self.siteMapWindow = SiteMapWindow(parent=self)
-        self.siteMapWindow.requestsEditor.sendToRepeaterSignal.connect(self.addRepeaterInstanceTab)
-        # self.siteMapWindow.responseEditor.sendToRepeaterSignal.connect(self.addRepeaterTab)
-
         self.threadMonitor = ThreadMonitor(top_parent=self)
 
         atexit.register(self.saveProgramState)
         self.socketIpc.processFinishedExecution.connect(self.finishedProcess)
         self.newProjectCreated.emit(self)
         self.addProjectsTab()
-
-    def openRepeater(self):
-        if self.tabManager.indexOf(self.repeaterWindow) == -1:
-            self.tabManager.addTab(self.repeaterWindow, "Repeater")
-        self.tabManager.setCurrentWidget(self.repeaterWindow)
 
     def finishedProcess(self, windowInstance, tool: str):
         logging.info(f"{tool} finished execution")
@@ -557,7 +580,17 @@ class MainWin(QMainWindow, QtCore.QObject):
             try:
                 # Recursive delete
                 shutil.rmtree(dir_name)
-                
+
+                # Drop the project's MongoDB database
+                try:
+                    from database.mongo import _safe_db_name, _client
+                    _client().drop_database(_safe_db_name(dir_name))
+                except Exception as db_err:
+                    import logging
+                    logging.getLogger(__name__).warning(
+                        "Could not drop MongoDB database for %s: %s", dir_name, db_err
+                    )
+
                 # Refresh the projects list
                 if self.isProjectsTabOpen:
                     current_index = self.tabManager.currentIndex()
@@ -689,14 +722,43 @@ class MainWin(QMainWindow, QtCore.QObject):
             widget.close()
 
     def closeEvent(self, event: QtGui.QCloseEvent) -> None:
-        # note that the thread monitor is responsible for closing all opened threads and processes
-        # this can be done by closing all present threadMon objects
-        if sys.platform == "win32":
-            os.system(f"taskkill /F /PID {self.proxy_.process.pid}")
-            os.system(f"taskkill /F /PID {self.sessionHandler.process.pid}")
-        elif sys.platform == "linux":
-            os.system(f"kill {self.proxy_.process.pid + 1}")
-            os.system(f"kill {self.sessionHandler.process.pid + 1}")
+        # ── 1. Stop the SocketIPC server thread ───────────────────────────────
+        try:
+            self.socketIpc.stop()
+            self.socketIpc.quit()
+            self.socketIpc.wait(2000)
+        except Exception:
+            pass
+
+        # ── 2. Gracefully stop the proxy via control socket ───────────────────
+        # Do this before the thread drain so the proxy process exits on its own,
+        # making the subsequent proc.terminate() a no-op in the happy path.
+        _stop_proxy_graceful()
+
+        # ── 3. Terminate every tracked subprocess, then wait for its QThread ──
+        # Build a deduplicated list; proxy_ is already in self.threads but we
+        # guard with a set to be safe.
+        seen: set[int] = set()
+        threads_to_drain: list[QThread] = []
+        for t in list(self.threads) + ([self.proxy_] if hasattr(self, "proxy_") else []):
+            if id(t) not in seen:
+                seen.add(id(t))
+                threads_to_drain.append(t)
+
+        for thread in threads_to_drain:
+            if not thread.isRunning():
+                continue
+            proc = getattr(thread, "process", None)
+            if proc is not None:
+                try:
+                    proc.terminate()
+                except Exception:
+                    pass
+            thread.quit()
+            if not thread.wait(3000):
+                thread.terminate()
+                thread.wait(1000)
+
         return super().closeEvent(event)
 
     def saveProgramState(self):
@@ -704,35 +766,31 @@ class MainWin(QMainWindow, QtCore.QObject):
         with open(self.program_state_file, "wb") as file:
             file.write(bytes(byte_array))
 
-    def startSessionHandler(self):
-        if self.isSessionHandlerRunning is False:
-            logging.info("Starting Session Handler")
-            self.sessionHandler = SessionHandlerRunner(self)
-            self.sessionHandler.start()
-            self.isSessionHandlerRunning = True
-        else:
-            SessionMessageBox = MessageBox("information", "The session handler is Running", "Information", "Ok")
-            ret = SessionMessageBox.exec()
 
     def startproxy(self):
-        if self.isProxyRunning is False:
-            self.proxy_port = random.randint(8000, 10000)
-            self.proxy_hostname = "127.0.0.1"
-            logging.info("Starting proxy")
-            self.proxy_ = AtomProxy(self.proxy_port, top_parent=self)
-            self.proxy_.start()
-            self.isProxyRunning = True
-        else:
-            proxyMessageBox = MessageBox("information", "The proxy is Running", "Information", "Ok")
-            ret = proxyMessageBox.exec()
+        # Kill any stale proxy from a previous crash (reads proxy_control.txt)
+        _stop_proxy_graceful()
 
-    def addRepeaterInstanceTab(self, request: str = None):
-        self.repeaterWindow.addReqResInstanceTabManager(request)
+        # If a proxy QThread is still alive from this session, drain it first
+        if hasattr(self, "proxy_") and self.proxy_.isRunning():
+            proc = getattr(self.proxy_, "process", None)
+            if proc is not None:
+                try:
+                    proc.terminate()
+                except Exception:
+                    pass
+            self.proxy_.quit()
+            self.proxy_.wait(2000)
+            # Remove from threads list so it doesn't get double-drained on exit
+            if self.proxy_ in self.threads:
+                self.threads.remove(self.proxy_)
 
-    def addSiteMapTab(self):
-        if self.tabManager.indexOf(self.siteMapWindow) == -1:
-            self.tabManager.addTab(self.siteMapWindow, "SitesMap")
-        self.tabManager.setCurrentWidget(self.siteMapWindow)
+        self.proxy_port = _read_proxy_port()
+        self.proxy_hostname = "127.0.0.1"
+        logging.info("Starting proxy on port %d", self.proxy_port)
+        self.proxy_ = AtomProxy(self.proxy_port, top_parent=self)
+        self.proxy_.start()
+        self.isProxyRunning = True
 
     def openProject(self, index):
         self.projectSelected(index)

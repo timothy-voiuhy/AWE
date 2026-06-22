@@ -30,6 +30,12 @@ _NS: dict[str, dict] = {
     "tech":      {"fill": "#F9E2AF", "border": "#FAF0D0", "r": 11, "shape": "hexagon"},
     "vuln":      {"fill": "#F38BA8", "border": "#F8B4C8", "r": 13, "shape": "circle"},
     "osint":     {"fill": "#94E2D5", "border": "#B6EEE7", "r": 11, "shape": "triangle"},
+    "cdn":           {"fill": "#89DCEB", "border": "#B4BEFE", "r": 16, "shape": "shield"},
+    "reverse_proxy": {"fill": "#F5A97F", "border": "#FE640B", "r": 16, "shape": "shield"},
+    "endpoint":      {"fill": "#313244", "border": "#6C7086", "r": 10, "shape": "hexagon"},
+    "param":         {"fill": "#1E1E2E", "border": "#45475A", "r":  8, "shape": "square"},
+    "custom":        {"fill": "#A6E3A1", "border": "#40A02B", "r": 14, "shape": "circle"},
+    "info":          {"fill": "#F9E2AF", "border": "#DF8E1D", "r": 10, "shape": "note"},
 }
 
 _EC: dict[str, str] = {
@@ -39,14 +45,61 @@ _EC: dict[str, str] = {
     "uses_tech":     "#F9E2AF",
     "has_vuln":      "#F38BA8",
     "is_osint":      "#94E2D5",
+    "proxied_by":    "#89DCEB",
+    "routes_through":"#F5A97F",
+    "origin_of":     "#FAB387",
+    "has_endpoint":  "#45475A",
+    "has_param":     "#313244",
+    "annotates":     "#F9E2AF",
+    "linked_to":     "#A6E3A1",
 }
 
 _KIND_ICON = {
     "target": "◎", "subdomain": "◉", "ip": "◆",
     "port": "▣",   "tech": "⬡",      "vuln": "⚠", "osint": "△",
+    "cdn":           "⊕",
+    "reverse_proxy": "⇄",
+    "endpoint":      "↗",
+    "param":         "?",
+    "custom":        "＋",
+    "info":          "✎",
 }
 
 _DASHED = {"uses_tech", "has_vuln", "is_osint"}
+
+# Node kinds that are hidden by default (only shown on explicit user request)
+_HIDDEN_BY_DEFAULT: frozenset[str] = frozenset({"endpoint", "param"})
+
+# Edge kinds that connect visible nodes to hidden-by-default children
+_CHILD_EDGE_KINDS: frozenset[str] = frozenset({"has_endpoint", "has_param"})
+
+# Technology name substrings that indicate a CDN/proxy layer (checked case-insensitively)
+_CDN_TECH_MAP: dict[str, tuple[str, str]] = {
+    "cloudflare":  ("Cloudflare",  "CDN/WAF"),
+    "akamai":      ("Akamai",      "CDN"),
+    "fastly":      ("Fastly",      "CDN"),
+    "cloudfront":  ("CloudFront",  "CDN"),
+    "incapsula":   ("Imperva",     "WAF/CDN"),
+    "imperva":     ("Imperva",     "WAF/CDN"),
+    "sucuri":      ("Sucuri",      "WAF/CDN"),
+    "ddos-guard":  ("DDoS-Guard",  "DDoS Protection"),
+    "varnish":     ("Varnish",     "Reverse Proxy"),
+    "cdn77":       ("CDN77",       "CDN"),
+    "bunnycdn":    ("BunnyCDN",    "CDN"),
+    "keycdn":      ("KeyCDN",      "CDN"),
+    "stackpath":   ("StackPath",   "CDN/WAF"),
+}
+
+
+def _cdn_node_kind(proxy_type: str) -> str:
+    """Map a CdnResult.proxy_type string to a graph node kind.
+
+    "Reverse Proxy" and any combined type that includes reverse-proxy
+    behaviour ("CDN/Reverse Proxy") become `reverse_proxy` nodes.
+    Everything else (pure CDN, WAF, DDoS protection) stays `cdn`.
+    """
+    return "reverse_proxy" if "reverse proxy" in proxy_type.lower() else "cdn"
+
 
 # ── Shared UI constants ───────────────────────────────────────────────────────
 
@@ -183,6 +236,107 @@ class ManualDataRepository:
                         extra=extra, provider=provider)
         r.add_source("manual")
         self._repo().upsert_results(self._session_id, self._run_id, "osint", [r])
+        return True
+
+    def add_cdn(self, subdomain: str, provider: str,
+                proxy_type: str = "CDN",
+                origin_ips: list[str] = None,
+                bypass_hints: list[str] = None) -> bool:
+        from containers.results.models import CdnResult
+        self._ensure_session()
+        r = CdnResult(
+            subdomain=subdomain,
+            provider=provider,
+            proxy_type=proxy_type,
+            origin_masked=True,
+            origin_ips=[ip for ip in (origin_ips or []) if ip],
+            bypass_hints=[h for h in (bypass_hints or []) if h],
+        )
+        r.add_source("manual")
+        self._repo().upsert_results(self._session_id, self._run_id, "cdn", [r])
+        return True
+
+    def save_info_note(self, parent_node_id: str, content: str) -> None:
+        """Insert or replace the note attached to a graph node."""
+        from datetime import datetime, timezone
+        self._ensure_session()
+        result_key = f"info:{parent_node_id}"
+        self._repo()._db.results.update_one(
+            {
+                "session_id": self._session_id,
+                "category":   "info",
+                "result_key": result_key,
+            },
+            {
+                "$set": {
+                    "data":    {"parent_node_id": parent_node_id, "content": content},
+                    "sources": ["manual"],
+                },
+                "$setOnInsert": {
+                    "session_id":  self._session_id,
+                    "tool_run_id": self._run_id,
+                    "category":    "info",
+                    "result_key":  result_key,
+                    "created_at":  datetime.now(timezone.utc).isoformat(),
+                },
+            },
+            upsert=True,
+        )
+
+    def get_info_note(self, parent_node_id: str) -> str:
+        """Return existing note content for a node, or ''."""
+        result_key = f"info:{parent_node_id}"
+        try:
+            doc = self._repo()._db.results.find_one(
+                {"session_id": self._session_id,
+                 "category": "info", "result_key": result_key},
+                {"data.content": 1},
+            )
+            return (doc or {}).get("data", {}).get("content", "") if doc else ""
+        except Exception:
+            return ""
+
+    def add_custom_node(
+        self, parent_node_id: str, label: str, description: str = ""
+    ) -> None:
+        from containers.results.models import CustomNode
+        self._ensure_session()
+        r = CustomNode(
+            parent_node_id=parent_node_id,
+            label=label,
+            description=description,
+        )
+        r.add_source("manual")
+        self._repo().upsert_results(self._session_id, self._run_id, "custom", [r])
+
+    def add_origin_to_cdn(
+        self, subdomain: str, provider: str, origin_ip: str
+    ) -> bool:
+        """Append an origin IP to an existing CDN/RP result, or create one.
+
+        `upsert_results` uses $setOnInsert so it won't touch existing data.
+        We need a targeted $addToSet on data.origin_ips for the existing doc.
+        """
+        if not origin_ip:
+            return False
+        from containers.results.models import CdnResult
+        self._ensure_session()
+        repo = self._repo()
+        result_key = CdnResult(subdomain=subdomain, provider=provider).key
+
+        # Try to update any existing document across all sessions
+        res = repo._db.results.update_one(
+            {"category": "cdn", "result_key": result_key},
+            {"$addToSet": {"data.origin_ips": origin_ip}},
+        )
+        if res.matched_count == 0:
+            # No existing record anywhere — create one in the manual session
+            r = CdnResult(
+                subdomain=subdomain, provider=provider,
+                origin_masked=True, origin_ips=[origin_ip],
+            )
+            r.add_source("manual")
+            repo.upsert_results(self._session_id, self._run_id, "cdn", [r])
         return True
 
 
@@ -475,6 +629,215 @@ class _AddOSINTDlg(QDialog):
                 self._provider.currentText())
 
 
+class _AddCdnDlg(QDialog):
+    _PROVIDERS = [
+        "Cloudflare", "Akamai", "Fastly", "CloudFront", "Imperva",
+        "Sucuri", "DDoS-Guard", "Varnish", "BunnyCDN", "KeyCDN",
+        "StackPath", "CDN77", "Other",
+    ]
+    _TYPES = ["CDN", "Reverse Proxy", "CDN/Reverse Proxy", "WAF", "CDN/WAF", "DDoS Protection"]
+
+    def __init__(self, parent=None, prefill_subdomain: str = ""):
+        super().__init__(parent)
+        self.setWindowTitle("Add CDN / Cloud Proxy")
+        self.setMinimumWidth(430)
+        self.setModal(True)
+        self.setStyleSheet(_DLG_SS)
+        vb = QVBoxLayout(self)
+        vb.setSpacing(10)
+        vb.setContentsMargins(16, 14, 16, 14)
+        _dlg_header(vb, "⊕", "Add CDN / Cloud Proxy", "#89DCEB")
+        form = QFormLayout(); form.setSpacing(8)
+        self._subdomain = _form_row(form, "Subdomain *", QLineEdit(prefill_subdomain))
+        self._subdomain.setPlaceholderText("api.example.com")
+        self._provider  = _form_row(form, "Provider *", QComboBox())
+        self._provider.addItems(self._PROVIDERS)
+        self._ptype     = _form_row(form, "Type", QComboBox())
+        self._ptype.addItems(self._TYPES)
+        self._origins   = _form_row(form, "Origin IPs", QLineEdit())
+        self._origins.setPlaceholderText("1.2.3.4, 5.6.7.8 (if known)")
+        self._hints     = _form_row(form, "Bypass Hints", QTextEdit())
+        self._hints.setPlaceholderText(
+            "DNS history lookup\nCertificate transparency logs\nShodan/Censys direct IP scan …"
+        )
+        self._hints.setFixedHeight(72)
+        vb.addLayout(form)
+        vb.addStretch()
+        ok = _dlg_buttons(vb, "Add CDN Node", self)
+        ok.clicked.disconnect()
+        ok.clicked.connect(self._on_ok)
+
+    def _on_ok(self):
+        if not self._subdomain.text().strip():
+            self._subdomain.setProperty("error", "true")
+            self._subdomain.setStyleSheet("border-color:#F38BA8;")
+            return
+        self.accept()
+
+    def values(self) -> tuple[str, str, str, list[str], list[str]]:
+        origins = [ip.strip() for ip in self._origins.text().split(",") if ip.strip()]
+        hints   = [h.strip() for h in self._hints.toPlainText().splitlines() if h.strip()]
+        return (
+            self._subdomain.text().strip(),
+            self._provider.currentText(),
+            self._ptype.currentText(),
+            origins,
+            hints,
+        )
+
+
+class _InfoNoteDlg(QDialog):
+    """Multi-line note editor attached to a graph node."""
+
+    def __init__(self, parent=None, node_label: str = "", prefill: str = ""):
+        super().__init__(parent)
+        editing = bool(prefill)
+        self.setWindowTitle("Edit Note" if editing else "Add Note")
+        self.setMinimumSize(440, 280)
+        self.setModal(True)
+        self.setStyleSheet(_DLG_SS)
+
+        vb = QVBoxLayout(self)
+        vb.setSpacing(10)
+        vb.setContentsMargins(16, 14, 16, 14)
+        _dlg_header(vb, "✎", ("Edit" if editing else "Add") + f" Note — {node_label}", "#F9E2AF")
+
+        self._edit = QTextEdit()
+        self._edit.setPlaceholderText("Write anything — findings, ideas, reminders …")
+        self._edit.setMinimumHeight(160)
+        self._edit.setStyleSheet(
+            "QTextEdit{background:#1E1E2E;color:#CDD6F4;"
+            "border:1px solid #45475A;border-radius:4px;"
+            "padding:6px;font-size:10px;}"
+            "QTextEdit:focus{border-color:#F9E2AF;}"
+        )
+        if prefill:
+            self._edit.setPlainText(prefill)
+        vb.addWidget(self._edit, stretch=1)
+
+        ok = _dlg_buttons(vb, "Save Note", self)
+        ok.clicked.disconnect()
+        ok.clicked.connect(self._on_ok)
+
+    def _on_ok(self):
+        if self._edit.toPlainText().strip():
+            self.accept()
+
+    def content(self) -> str:
+        return self._edit.toPlainText().strip()
+
+
+class _AddCustomNodeDlg(QDialog):
+    """Dialog to create a free-form custom node."""
+
+    def __init__(self, parent=None, parent_node_label: str = ""):
+        super().__init__(parent)
+        self.setWindowTitle("Add Custom Node")
+        self.setMinimumWidth(400)
+        self.setModal(True)
+        self.setStyleSheet(_DLG_SS)
+
+        vb = QVBoxLayout(self)
+        vb.setSpacing(10)
+        vb.setContentsMargins(16, 14, 16, 14)
+        _dlg_header(vb, "＋", "Add Custom Node", "#A6E3A1")
+
+        if parent_node_label:
+            ctx = QLabel(f"Connects to: {parent_node_label}")
+            ctx.setStyleSheet("color:#6C7086; font-size:9px;")
+            vb.addWidget(ctx)
+
+        form = QFormLayout()
+        form.setSpacing(8)
+        self._label = _form_row(form, "Label *", QLineEdit())
+        self._label.setPlaceholderText("e.g.  Internal tool  /  VPN gateway  /  AWS account")
+        self._desc  = _form_row(form, "Notes", QTextEdit())
+        self._desc.setPlaceholderText("Optional — any details you want to record")
+        self._desc.setFixedHeight(80)
+        vb.addLayout(form)
+        vb.addStretch()
+
+        ok = _dlg_buttons(vb, "Add Node", self)
+        ok.clicked.disconnect()
+        ok.clicked.connect(self._on_ok)
+
+    def _on_ok(self):
+        if not self._label.text().strip():
+            self._label.setStyleSheet("border-color:#F38BA8;")
+            return
+        self.accept()
+
+    def values(self) -> tuple[str, str]:
+        return self._label.text().strip(), self._desc.toPlainText().strip()
+
+
+class _AddOriginServerDlg(QDialog):
+    """Minimal dialog to record an origin server behind a CDN / reverse proxy node."""
+
+    _PROVIDERS = [
+        "Cloudflare", "Akamai", "Fastly", "CloudFront", "Imperva",
+        "Sucuri", "DDoS-Guard", "Varnish", "BunnyCDN", "KeyCDN",
+        "StackPath", "CDN77", "Other",
+    ]
+
+    def __init__(
+        self,
+        parent=None,
+        provider: str = "",
+        subdomain: str = "",
+    ):
+        super().__init__(parent)
+        self.setWindowTitle("Add Origin Server")
+        self.setMinimumWidth(380)
+        self.setModal(True)
+        self.setStyleSheet(_DLG_SS)
+
+        vb = QVBoxLayout(self)
+        vb.setSpacing(10)
+        vb.setContentsMargins(16, 14, 16, 14)
+        _dlg_header(vb, "↪", "Add Origin Server", "#FAB387")
+
+        form = QFormLayout()
+        form.setSpacing(8)
+
+        self._origin = _form_row(form, "Origin IP / Host *", QLineEdit())
+        self._origin.setPlaceholderText("203.0.113.42  or  origin.example.com")
+
+        self._subdomain = _form_row(form, "Proxied subdomain *", QLineEdit(subdomain))
+        self._subdomain.setPlaceholderText("api.example.com")
+
+        self._provider = _form_row(form, "Provider", QComboBox())
+        self._provider.addItems(self._PROVIDERS)
+        if provider in self._PROVIDERS:
+            self._provider.setCurrentText(provider)
+
+        vb.addLayout(form)
+        vb.addStretch()
+
+        ok = _dlg_buttons(vb, "Save Origin", self)
+        ok.clicked.disconnect()
+        ok.clicked.connect(self._on_ok)
+
+    def _on_ok(self):
+        ok = True
+        if not self._origin.text().strip():
+            self._origin.setStyleSheet("border-color:#F38BA8;")
+            ok = False
+        if not self._subdomain.text().strip():
+            self._subdomain.setStyleSheet("border-color:#F38BA8;")
+            ok = False
+        if ok:
+            self.accept()
+
+    def values(self) -> tuple[str, str, str]:
+        """Return (origin_ip, subdomain, provider)."""
+        return (
+            self._origin.text().strip(),
+            self._subdomain.text().strip(),
+            self._provider.currentText(),
+        )
+
+
 # ── Data model ────────────────────────────────────────────────────────────────
 
 @dataclass
@@ -527,6 +890,7 @@ class NodeItem(QGraphicsItem):
         self.setAcceptHoverEvents(True)
         self.setPos(node.x, node.y)
         self.setZValue(1)
+        self._search_match: bool | None = None   # None=no search, True=match, False=dim
 
     # expose for EdgeItem
     def kind(self) -> str: return self._node.kind
@@ -534,8 +898,10 @@ class NodeItem(QGraphicsItem):
     def add_edge(self, e: "EdgeItem"): self._edges.append(e)
 
     def boundingRect(self) -> QRectF:
+        # +12 covers the halo (r+9); +26 extra on the bottom covers the label
+        # which is drawn at y = r+14 with ~10px text height
         r = self._r + 12
-        return QRectF(-r, -r, r * 2, r * 2)
+        return QRectF(-r, -r, r * 2, r * 2 + 26)
 
     def paint(self, painter: QPainter, option, widget=None):
         painter.setRenderHint(QPainter.Antialiasing)
@@ -588,6 +954,13 @@ class NodeItem(QGraphicsItem):
             label,
         )
 
+        # search highlight ring (drawn last so it is on top)
+        if self._search_match is True:
+            painter.setPen(QPen(QColor("#FAD866"), 2.5))
+            painter.setBrush(Qt.NoBrush)
+            rh = r + 7
+            painter.drawEllipse(QRectF(-rh, -rh, rh * 2, rh * 2))
+
     def _draw_shape(self, p: QPainter, r: float):
         s = self._shape
         if s == "circle":
@@ -604,6 +977,31 @@ class NodeItem(QGraphicsItem):
         elif s == "triangle":
             pts = [QPointF(0,-r), QPointF(r*0.866, r*0.5), QPointF(-r*0.866, r*0.5)]
             p.drawPolygon(QPolygonF(pts))
+        elif s == "shield":
+            pts = [
+                QPointF(-r,  -r * 0.65),
+                QPointF( r,  -r * 0.65),
+                QPointF( r,   r * 0.15),
+                QPointF( 0,   r),
+                QPointF(-r,   r * 0.15),
+            ]
+            p.drawPolygon(QPolygonF(pts))
+        elif s == "note":
+            # Rectangle with folded top-right corner (sticky-note silhouette)
+            fold = r * 0.55
+            body = QPolygonF([
+                QPointF(-r, -r), QPointF(fold, -r),
+                QPointF(r, -fold), QPointF(r, r),
+                QPointF(-r, r),
+            ])
+            p.drawPolygon(body)
+            # Folded corner triangle (slightly darker shade via border pen, no fill)
+            old_brush = p.brush()
+            p.setBrush(p.pen().color())
+            p.drawPolygon(QPolygonF([
+                QPointF(fold, -r), QPointF(r, -fold), QPointF(fold, -fold),
+            ]))
+            p.setBrush(old_brush)
         else:
             p.drawEllipse(QRectF(-r, -r, r * 2, r * 2))
 
@@ -611,8 +1009,12 @@ class NodeItem(QGraphicsItem):
         if change == QGraphicsItem.ItemPositionHasChanged:
             for e in self._edges:
                 e.adjust()
-            self._node.x = self.x()
-            self._node.y = self.y()
+            x, y = self.x(), self.y()
+            self._node.x, self._node.y = x, y
+            sc = self.scene()
+            if sc is not None:
+                sc._pos_cache[self._node.id] = (x, y)
+                sc._save_timer.start()   # debounced: fires 1.5 s after last move
         return super().itemChange(change, value)
 
     def hoverEnterEvent(self, ev):
@@ -633,9 +1035,6 @@ class NodeItem(QGraphicsItem):
         super().mousePressEvent(ev)
 
     def mouseReleaseEvent(self, ev):
-        sc = self.scene()
-        if sc and hasattr(sc, "_locked"):
-            sc._locked.add(self._node.id)
         super().mouseReleaseEvent(ev)
 
     def contextMenuEvent(self, ev):
@@ -643,75 +1042,136 @@ class NodeItem(QGraphicsItem):
         menu = QMenu()
         menu.setStyleSheet(_MENU_SS)
 
-        _add_hdr = lambda text: (
-            a := menu.addAction(text),
-            a.setEnabled(False),
-            a.setIcon(QApplication.style().standardIcon(
-                QApplication.style().StandardPixmap.SP_DialogApplyButton)),
-        )
+        sc = self.scene()
+        nid = self._node.id
+
+        # ── Kind-specific section ─────────────────────────────────────────────
+        kind_actions: dict = {}   # QAction → callable
+        copy_val: str | None = None
 
         if kind == "target":
             menu.addSection("Add to graph")
-            a_sub  = menu.addAction("◉  Add Subdomain")
-            a_osint = menu.addAction("△  Add OSINT Finding")
-            chosen = menu.exec(ev.screenPos().toPoint())
-            if chosen == a_sub:
-                self.scene().addDataRequested.emit("add_subdomain", self._node)
-            elif chosen == a_osint:
-                self.scene().addDataRequested.emit("add_osint", self._node)
+            kind_actions[menu.addAction("◉  Add Subdomain")] = \
+                lambda: sc.addDataRequested.emit("add_subdomain", self._node)
+            kind_actions[menu.addAction("△  Add OSINT Finding")] = \
+                lambda: sc.addDataRequested.emit("add_osint", self._node)
 
         elif kind == "subdomain":
             menu.addSection(f"◉ {self._node.label}")
-            a_ip       = menu.addAction("◆  Add IP Address")
-            a_port     = menu.addAction("▣  Add Port / Service")
-            a_tech     = menu.addAction("⬡  Add Technology")
-            a_vuln     = menu.addAction("⚠  Add Vulnerability")
-            a_endpoint = menu.addAction("↗  Add Endpoint")
+            kind_actions[menu.addAction("◆  Add IP Address")] = \
+                lambda: sc.addDataRequested.emit("add_ip", self._node)
+            kind_actions[menu.addAction("▣  Add Port / Service")] = \
+                lambda: sc.addDataRequested.emit("add_port", self._node)
+            kind_actions[menu.addAction("⬡  Add Technology")] = \
+                lambda: sc.addDataRequested.emit("add_tech", self._node)
+            kind_actions[menu.addAction("⚠  Add Vulnerability")] = \
+                lambda: sc.addDataRequested.emit("add_vuln", self._node)
+            kind_actions[menu.addAction("↗  Add Endpoint")] = \
+                lambda: sc.addDataRequested.emit("add_endpoint", self._node)
+            kind_actions[menu.addAction("⊕  Add CDN / Proxy")] = \
+                lambda: sc.addDataRequested.emit("add_cdn", self._node)
             menu.addSeparator()
-            a_osint    = menu.addAction("△  Add OSINT Finding")
-            chosen = menu.exec(ev.screenPos().toPoint())
-            if chosen == a_ip:
-                self.scene().addDataRequested.emit("add_ip", self._node)
-            elif chosen == a_port:
-                self.scene().addDataRequested.emit("add_port", self._node)
-            elif chosen == a_tech:
-                self.scene().addDataRequested.emit("add_tech", self._node)
-            elif chosen == a_vuln:
-                self.scene().addDataRequested.emit("add_vuln", self._node)
-            elif chosen == a_endpoint:
-                self.scene().addDataRequested.emit("add_endpoint", self._node)
-            elif chosen == a_osint:
-                self.scene().addDataRequested.emit("add_osint", self._node)
+            kind_actions[menu.addAction("△  Add OSINT Finding")] = \
+                lambda: sc.addDataRequested.emit("add_osint", self._node)
 
         elif kind == "ip":
             menu.addSection(f"◆ {self._node.label}")
-            a_port = menu.addAction("▣  Add Port / Service")
-            chosen = menu.exec(ev.screenPos().toPoint())
-            if chosen == a_port:
-                self.scene().addDataRequested.emit("add_port", self._node)
+            kind_actions[menu.addAction("▣  Add Port / Service")] = \
+                lambda: sc.addDataRequested.emit("add_port", self._node)
 
         elif kind == "port":
             menu.addSection(f"▣ {self._node.label}")
-            a_tech = menu.addAction("⬡  Add Technology")
-            a_vuln = menu.addAction("⚠  Add Vulnerability")
-            a_ep   = menu.addAction("↗  Add Endpoint")
-            chosen = menu.exec(ev.screenPos().toPoint())
-            if chosen == a_tech:
-                self.scene().addDataRequested.emit("add_tech", self._node)
-            elif chosen == a_vuln:
-                self.scene().addDataRequested.emit("add_vuln", self._node)
-            elif chosen == a_ep:
-                self.scene().addDataRequested.emit("add_endpoint", self._node)
+            kind_actions[menu.addAction("⬡  Add Technology")] = \
+                lambda: sc.addDataRequested.emit("add_tech", self._node)
+            kind_actions[menu.addAction("⚠  Add Vulnerability")] = \
+                lambda: sc.addDataRequested.emit("add_vuln", self._node)
+            kind_actions[menu.addAction("↗  Add Endpoint")] = \
+                lambda: sc.addDataRequested.emit("add_endpoint", self._node)
+
+        elif kind in ("cdn", "reverse_proxy"):
+            pt = self._node.data.get("proxy_type", "CDN")
+            ico = "⇄" if kind == "reverse_proxy" else "⊕"
+            menu.addSection(f"{ico}  {self._node.label}  [{pt}]")
+            kind_actions[menu.addAction("↪  Add Origin Server")] = \
+                lambda: sc.addDataRequested.emit("add_origin_server", self._node)
+            copy_val = self._node.label
+
+        elif kind == "endpoint":
+            d = self._node.data
+            menu.addSection(f"↗ {self._node.label}")
+            is_exp = nid in getattr(sc, "_expanded_nodes", set())
+            ep_lbl = "?  Hide Parameters" if is_exp else "?  Show Parameters"
+            kind_actions[menu.addAction(ep_lbl)] = \
+                lambda: sc.toggle_children(nid)
+            copy_val = d.get("url", self._node.label)
+
+        elif kind == "param":
+            d = self._node.data
+            menu.addSection(f"? {self._node.label}")
+            copy_val = d.get("example", d.get("name", self._node.label))
+
+        elif kind == "info":
+            menu.addSection(f"✎  Note")
+            kind_actions[menu.addAction("✎  Edit Note")] = \
+                lambda: sc.addDataRequested.emit("edit_info", self._node)
+            copy_val = self._node.data.get("content", "")
+
+        elif kind == "custom":
+            menu.addSection(f"＋  {self._node.label}")
+            copy_val = self._node.data.get("description", self._node.label)
 
         else:
-            # vuln / tech / osint — just show copy
-            a_copy = menu.addAction("⎘  Copy value")
-            chosen = menu.exec(ev.screenPos().toPoint())
-            if chosen == a_copy:
-                val = (self._node.data.get("value") or
-                       self._node.data.get("tech") or
-                       self._node.label)
-                QApplication.clipboard().setText(val)
+            # vuln / tech / osint
+            copy_val = (self._node.data.get("value") or
+                        self._node.data.get("tech") or
+                        self._node.label)
+
+        # ── Universal "Endpoints" toggle for subdomain ────────────────────────
+        if kind == "subdomain" and sc is not None:
+            is_exp = nid in getattr(sc, "_expanded_nodes", set())
+            ep_lbl = "↗  Hide Endpoints" if is_exp else "↗  Show Endpoints"
+            menu.addSeparator()
+            kind_actions[menu.addAction(ep_lbl)] = \
+                lambda: sc.toggle_children(nid)
+
+        # ── Universal actions on every node ───────────────────────────────────
+        menu.addSeparator()
+
+        # Note: check if a note already exists for this node in the scene
+        info_id = f"info:{nid}"
+        has_note = info_id in getattr(sc, "_node_items", {})
+        note_lbl = "✎  Edit Note" if has_note else "✎  Add Note"
+        a_note = menu.addAction(note_lbl)
+
+        # Don't offer "add custom node" on info/custom nodes themselves
+        a_custom = None
+        if kind not in ("info",):
+            a_custom = menu.addAction("＋  Add Custom Node here")
+
+        if copy_val is not None:
+            a_copy = menu.addAction("⎘  Copy")
+            kind_actions[a_copy] = lambda: QApplication.clipboard().setText(copy_val)
+
+        menu.addSeparator()
+        is_focused = getattr(sc, "_focused_id", None) == nid
+        a_focus = menu.addAction(
+            "⊗  Unfocus (show all)" if is_focused else "◎  Focus: show only this + neighbors"
+        )
+
+        chosen = menu.exec(ev.screenPos())
+        if chosen == a_focus:
+            if is_focused:
+                sc.unfocus()
+            else:
+                sc.focus_node(nid)
+        elif chosen == a_note:
+            sc.addDataRequested.emit(
+                "edit_info" if has_note else "add_info", self._node
+            )
+        elif a_custom and chosen == a_custom:
+            sc.addDataRequested.emit("add_custom", self._node)
+        elif chosen in kind_actions:
+            kind_actions[chosen]()
 
         ev.accept()
 
@@ -786,127 +1246,355 @@ class EdgeItem(QGraphicsItem):
 class NetworkGraphScene(QGraphicsScene):
     nodeClicked      = Signal(object)          # GraphNode
     addDataRequested = Signal(str, object)     # action_key, GraphNode | None
+    focusChanged     = Signal(bool)            # True = focused, False = normal
 
-    def __init__(self, parent=None):
+    def __init__(self, project_dir: str = "", target: str = "", parent=None):
         super().__init__(parent)
-        self._node_items: dict[str, NodeItem] = {}
-        self._edge_items: list[EdgeItem]      = []
-        self._locked:     set[str]            = set()
-        self._vx:         dict[str, float]    = {}
-        self._vy:         dict[str, float]    = {}
-        self._alpha       = 1.0
-        self._timer       = QTimer(self)
-        self._timer.timeout.connect(self._force_step)
+        self._node_items:    dict[str, NodeItem]            = {}
+        self._edge_items:    list[EdgeItem]                 = []
+        self._pos_cache:     dict[str, tuple[float, float]] = {}
+        self._project_dir:   str = project_dir
+        self._target:        str = target
+        self._expanded_nodes: set[str] = set()   # nodes whose hidden children are shown
+        self._focused_id:    str | None = None    # node being focused (None = show all)
+        self._search_query:  str = ""             # active search (empty = inactive)
+
+        # Debounce timer: write positions to DB 1.5 s after the last drag ends
+        self._save_timer = QTimer(self)
+        self._save_timer.setSingleShot(True)
+        self._save_timer.setInterval(1500)
+        self._save_timer.timeout.connect(self._flush_positions)
+
+        # Pre-populate cache from DB so build() can apply saved positions immediately
+        if project_dir and target:
+            self._load_positions()
 
     # ── Public ────────────────────────────────────────────────────────────────
 
-    def build(self, data: GraphData, layout: str = "radial"):
-        self._timer.stop()
+    def build(self, data: GraphData) -> None:
+        """Full rebuild. Hierarchy layout for visible nodes; child layout for
+        hidden-by-default nodes; cached positions override both."""
         self.clear()
         self._node_items.clear()
         self._edge_items.clear()
-        self._locked.clear()
-        self._vx.clear()
-        self._vy.clear()
+        self._expanded_nodes.clear()
+        self._focused_id = None
 
         if not data.nodes:
             return
 
-        if layout == "radial":
-            self._radial_layout(data)
-        elif layout == "hierarchy":
-            self._hierarchy_layout(data)
+        self._hierarchy_layout(data)   # positions visible-kind nodes
+        self._child_layout(data)       # positions endpoint/param relative to parents
+        for node in data.nodes:        # cached positions win
+            if node.id in self._pos_cache:
+                node.x, node.y = self._pos_cache[node.id]
+
+        self._bulk_add(data)
+        self._refresh_visibility()
+
+    def merge(self, data: GraphData) -> None:
+        """Incremental refresh: add new nodes/edges, remove stale ones.
+        All existing node positions are left exactly where they are."""
+        new_ids  = {n.id for n in data.nodes}
+        new_ekeys: set[tuple] = set()
+        for e in data.edges:
+            new_ekeys.add((e.source_id, e.target_id, e.kind))
+
+        views = self.views()
+        for v in views:
+            v.setUpdatesEnabled(False)
+        try:
+            # ── Remove stale nodes ────────────────────────────────────────────
+            stale = [nid for nid in list(self._node_items) if nid not in new_ids]
+            for nid in stale:
+                self.removeItem(self._node_items.pop(nid))
+
+            # ── Remove stale edges ────────────────────────────────────────────
+            live_edges = []
+            for ei in self._edge_items:
+                ek = (ei._src.node().id, ei._tgt.node().id, ei._kind)
+                if ek in new_ekeys and ei._src.node().id not in stale and ei._tgt.node().id not in stale:
+                    live_edges.append(ei)
+                else:
+                    self.removeItem(ei)
+            self._edge_items = live_edges
+
+            # ── Position genuinely new nodes ──────────────────────────────────
+            truly_new = [n for n in data.nodes if n.id not in self._node_items]
+            if truly_new:
+                # Run hierarchy on the full dataset to get sensible positions
+                self._hierarchy_layout(data)
+                # Override existing nodes' layout coords with their live positions
+                for nid, item in self._node_items.items():
+                    node = next((n for n in data.nodes if n.id == nid), None)
+                    if node:
+                        node.x, node.y = item.x(), item.y()
+                # Position new hidden-by-default nodes relative to their parents
+                self._child_layout(data, {n.id for n in truly_new})
+                # Apply cache to new nodes (handles re-added nodes the user moved before)
+                for node in truly_new:
+                    if node.id in self._pos_cache:
+                        node.x, node.y = self._pos_cache[node.id]
+                for node in truly_new:
+                    item = NodeItem(node)
+                    self.addItem(item)
+                    self._node_items[node.id] = item
+
+            # ── Add new edges ─────────────────────────────────────────────────
+            live_ekeys = {(ei._src.node().id, ei._tgt.node().id, ei._kind)
+                          for ei in self._edge_items}
+            nmap = self._node_items
+            for edge in data.edges:
+                ek = (edge.source_id, edge.target_id, edge.kind)
+                if ek not in live_ekeys:
+                    si, ti = nmap.get(edge.source_id), nmap.get(edge.target_id)
+                    if si and ti:
+                        ei = EdgeItem(si, ti, edge.kind)
+                        self.addItem(ei)
+                        self._edge_items.append(ei)
+                        live_ekeys.add(ek)
+        finally:
+            for v in views:
+                v.setUpdatesEnabled(True)
+        self._refresh_visibility()
+
+    def reset_layout(self, data: GraphData) -> None:
+        """Wipe position cache, persist the wipe to DB, then do a clean rebuild."""
+        self._save_timer.stop()
+        self._pos_cache.clear()
+        self._expanded_nodes.clear()
+        self._focused_id = None
+        self._flush_positions()
+        self.build(data)
+        self.focusChanged.emit(False)
+
+    # ── Visibility management ─────────────────────────────────────────────────
+
+    def _refresh_visibility(self) -> None:
+        """Recompute visibility for every node and edge from scratch.
+
+        Two orthogonal rules (both must pass for a node to be visible):
+          1. hidden-by-default rule: endpoint/param nodes are visible only if
+             their parent node is in _expanded_nodes.
+          2. focus rule: if _focused_id is set, only nodes in the 1-hop
+             neighbourhood of the focused node are visible.
+        """
+        # Build parent map: child_id → parent_id  (for hidden-by-default checks)
+        parent_of: dict[str, str] = {}
+        for ei in self._edge_items:
+            if ei._kind in _CHILD_EDGE_KINDS:
+                parent_of[ei._tgt.node().id] = ei._src.node().id
+
+        # Focus neighbourhood
+        focus_ids: set[str] | None = (
+            self._neighbor_ids(self._focused_id)
+            if self._focused_id and self._focused_id in self._node_items
+            else None
+        )
+
+        for nid, item in self._node_items.items():
+            kind = item.node().kind
+            if kind in _HIDDEN_BY_DEFAULT:
+                base_vis = parent_of.get(nid) in self._expanded_nodes
+            else:
+                base_vis = True
+
+            visible = base_vis if focus_ids is None else (nid in focus_ids)
+            item.setVisible(visible)
+
+        # Edges: both endpoints must be visible
+        for ei in self._edge_items:
+            s = self._node_items.get(ei._src.node().id)
+            t = self._node_items.get(ei._tgt.node().id)
+            ei.setVisible(
+                s is not None and s.isVisible() and
+                t is not None and t.isVisible()
+            )
+        self.update()
+
+    def _neighbor_ids(self, node_id: str) -> set[str]:
+        """Return node_id + all nodes directly connected to it by any edge."""
+        ids: set[str] = {node_id}
+        for ei in self._edge_items:
+            if ei._src.node().id == node_id:
+                ids.add(ei._tgt.node().id)
+            elif ei._tgt.node().id == node_id:
+                ids.add(ei._src.node().id)
+        return ids
+
+    def focus_node(self, node_id: str) -> None:
+        """Show only the given node and its 1-hop neighbours. Hides everything else."""
+        self._focused_id = node_id
+        self._refresh_visibility()
+        self.focusChanged.emit(True)
+
+    def unfocus(self) -> None:
+        """Restore normal visibility (hidden-by-default rule only)."""
+        self._focused_id = None
+        self._refresh_visibility()
+        self.focusChanged.emit(False)
+
+    # ── Graph search ──────────────────────────────────────────────────────────
+
+    def set_search(self, query: str) -> None:
+        """Highlight nodes matching query; dim everything else.
+        Empty query restores normal visibility."""
+        self._search_query = query.strip().lower()
+        if not self._search_query:
+            for item in self._node_items.values():
+                item._search_match = None
+                item.update()
+            self._refresh_visibility()
+            return
+        # Search mode: override visibility — show ALL nodes, apply opacity
+        for nid, item in self._node_items.items():
+            match = self._node_matches(item.node(), self._search_query)
+            item._search_match = match
+            item.setVisible(True)
+            item.setOpacity(1.0 if match else 0.08)
+            item.update()
+        for ei in self._edge_items:
+            sm = self._node_items.get(ei._src.node().id)
+            tm = self._node_items.get(ei._tgt.node().id)
+            ei.setVisible(
+                bool(sm and sm._search_match) and bool(tm and tm._search_match)
+            )
+        self.update()
+
+    @staticmethod
+    def _node_matches(node: "GraphNode", q: str) -> bool:
+        if q in node.label.lower():
+            return True
+        for v in node.data.values():
+            if isinstance(v, str) and q in v.lower():
+                return True
+            if isinstance(v, list):
+                for item in v:
+                    if isinstance(item, str) and q in item.lower():
+                        return True
+        return False
+
+    def toggle_children(self, node_id: str) -> bool:
+        """Toggle visibility of hidden-by-default children of node_id.
+
+        The node_id is the PARENT (subdomain → endpoints, endpoint → params).
+        Returns True if children are now expanded, False if collapsed.
+        """
+        if node_id in self._expanded_nodes:
+            self._expanded_nodes.discard(node_id)
+            # Collapse any endpoint children that were themselves expanded
+            for ei in self._edge_items:
+                if ei._src.node().id == node_id and ei._kind in _CHILD_EDGE_KINDS:
+                    self._expanded_nodes.discard(ei._tgt.node().id)
+            self._refresh_visibility()
+            return False
         else:
-            self._random_positions(data)
+            self._expanded_nodes.add(node_id)
+            self._refresh_visibility()
+            return True
 
-        for node in data.nodes:
-            item = NodeItem(node)
-            self.addItem(item)
-            self._node_items[node.id] = item
-            self._vx[node.id] = 0.0
-            self._vy[node.id] = 0.0
+    # ── Position persistence ──────────────────────────────────────────────────
 
-        nmap = self._node_items
-        for edge in data.edges:
-            si, ti = nmap.get(edge.source_id), nmap.get(edge.target_id)
-            if si and ti:
-                ei = EdgeItem(si, ti, edge.kind)
-                self.addItem(ei)
-                self._edge_items.append(ei)
+    def _load_positions(self) -> None:
+        try:
+            from database.mongo import load_graph_positions
+            saved = load_graph_positions(self._project_dir, self._target)
+            self._pos_cache.update(saved)
+        except Exception as exc:
+            logger.debug("Could not load graph positions: %s", exc)
 
-        if layout == "force":
-            self._alpha = 1.0
-            self._timer.start(16)
+    def _flush_positions(self) -> None:
+        if not (self._project_dir and self._target):
+            return
+        try:
+            from database.mongo import save_graph_positions
+            save_graph_positions(
+                self._project_dir, self._target, dict(self._pos_cache)
+            )
+        except Exception as exc:
+            logger.debug("Could not save graph positions: %s", exc)
 
-    def stop_force(self):
-        self._timer.stop()
+    # ── Internal helpers ──────────────────────────────────────────────────────
+
+    def _bulk_add(self, data: GraphData) -> None:
+        """Add all nodes and edges with a single repaint at the end."""
+        views = self.views()
+        for v in views:
+            v.setUpdatesEnabled(False)
+        try:
+            for node in data.nodes:
+                item = NodeItem(node)
+                self.addItem(item)
+                self._node_items[node.id] = item
+
+            nmap = self._node_items
+            for edge in data.edges:
+                si, ti = nmap.get(edge.source_id), nmap.get(edge.target_id)
+                if si and ti:
+                    ei = EdgeItem(si, ti, edge.kind)
+                    self.addItem(ei)
+                    self._edge_items.append(ei)
+        finally:
+            for v in views:
+                v.setUpdatesEnabled(True)
+        self.update()
 
     # ── Layouts ───────────────────────────────────────────────────────────────
 
-    def _radial_layout(self, data: GraphData):
+    def _child_layout(
+        self,
+        data: GraphData,
+        only_ids: set[str] | None = None,
+    ) -> None:
+        """Position hidden-by-default nodes (endpoints, params) relative to
+        their parents. When only_ids is given, only positions nodes in that set."""
         nmap = {n.id: n for n in data.nodes}
-        children: dict[str, list[str]] = {n.id: [] for n in data.nodes}
+        from collections import defaultdict
+        ep_kids:  dict[str, list[str]] = defaultdict(list)  # subdomain → [endpoint]
+        pm_kids:  dict[str, list[str]] = defaultdict(list)  # endpoint  → [param]
         for e in data.edges:
-            if e.source_id in children:
-                children[e.source_id].append(e.target_id)
+            if e.kind == "has_endpoint":
+                ep_kids[e.source_id].append(e.target_id)
+            elif e.kind == "has_param":
+                pm_kids[e.source_id].append(e.target_id)
 
-        targets = [n for n in data.nodes if n.kind == "target"]
-        if not targets:
-            return
-        root = targets[0]
-        root.x = root.y = 0.0
+        X_EP, Y_EP = 200, 26    # endpoint offset from parent
+        X_PM, Y_PM = 170, 18    # param offset from endpoint
 
-        subs = [n for n in data.nodes if n.kind == "subdomain"]
-        n_sub = max(len(subs), 1)
-        r1 = max(200, n_sub * 35)
+        for parent_id, ep_ids in ep_kids.items():
+            parent = nmap.get(parent_id)
+            if not parent:
+                continue
+            n = len(ep_ids)
+            for i, ep_id in enumerate(ep_ids):
+                if only_ids and ep_id not in only_ids:
+                    continue
+                ep = nmap.get(ep_id)
+                if not ep or ep_id in self._pos_cache:
+                    continue
+                ep.x = parent.x + X_EP
+                ep.y = parent.y + (i - n / 2.0) * Y_EP
 
-        for i, sub in enumerate(subs):
-            ang = 2 * math.pi * i / n_sub
-            sub.x = r1 * math.cos(ang)
-            sub.y = r1 * math.sin(ang)
-
-            ip_nodes   = [nmap[c] for c in children.get(sub.id, [])
-                          if c in nmap and nmap[c].kind == "ip"]
-            vuln_nodes = [nmap[c] for c in children.get(sub.id, [])
-                          if c in nmap and nmap[c].kind in ("vuln", "osint")]
-
-            n_ip = max(len(ip_nodes), 1)
-            for j, ip in enumerate(ip_nodes):
-                a2 = ang - 0.5 + j / n_ip
-                ip.x = sub.x + 95 * math.cos(a2)
-                ip.y = sub.y + 95 * math.sin(a2)
-
-                port_nodes = [nmap[c] for c in children.get(ip.id, []) if c in nmap]
-                n_port = max(len(port_nodes), 1)
-                for k, port in enumerate(port_nodes):
-                    a3 = a2 - 0.3 + 0.6 * k / n_port
-                    port.x = ip.x + 60 * math.cos(a3)
-                    port.y = ip.y + 60 * math.sin(a3)
-
-                    tech_nodes = [nmap[c] for c in children.get(port.id, []) if c in nmap]
-                    n_tech = max(len(tech_nodes), 1)
-                    for m, tech in enumerate(tech_nodes):
-                        a4 = a3 - 0.25 + 0.5 * m / n_tech
-                        tech.x = port.x + 50 * math.cos(a4)
-                        tech.y = port.y + 50 * math.sin(a4)
-
-            for j, node in enumerate(vuln_nodes):
-                a2 = ang + 0.9 + 0.5 * j / max(len(vuln_nodes), 1)
-                node.x = sub.x + 80 * math.cos(a2)
-                node.y = sub.y + 80 * math.sin(a2)
-
-        osint = [n for n in data.nodes if n.kind == "osint"]
-        n_os = max(len(osint), 1)
-        for i, n in enumerate(osint):
-            ang = 2 * math.pi * i / n_os + math.pi / n_os
-            n.x = (r1 + 140) * math.cos(ang)
-            n.y = (r1 + 140) * math.sin(ang)
+                param_ids = pm_kids.get(ep_id, [])
+                m = len(param_ids)
+                for j, pm_id in enumerate(param_ids):
+                    if only_ids and pm_id not in only_ids:
+                        continue
+                    pm = nmap.get(pm_id)
+                    if not pm or pm_id in self._pos_cache:
+                        continue
+                    pm.x = ep.x + X_PM
+                    pm.y = ep.y + (j - m / 2.0) * Y_PM
 
     def _hierarchy_layout(self, data: GraphData):
-        nmap = {n.id: n for n in data.nodes}
-        children: dict[str, list[str]] = {n.id: [] for n in data.nodes}
+        # Only layout visible-kind nodes (skip hidden-by-default kinds so they
+        # don't affect spacing of the main graph)
+        nmap = {n.id: n for n in data.nodes
+                if n.kind not in _HIDDEN_BY_DEFAULT}
+        children: dict[str, list[str]] = {n.id: [] for n in data.nodes
+                                          if n.id in nmap}
         for e in data.edges:
-            if e.source_id in children:
+            if e.source_id in children and e.target_id in nmap:
                 children[e.source_id].append(e.target_id)
 
         targets = [n for n in data.nodes if n.kind == "target"]
@@ -936,83 +1624,29 @@ class NetworkGraphScene(QGraphicsScene):
                 node.x = lvl_i * x_gap
                 node.y = (i - n / 2.0) * y_gap
 
-    def _random_positions(self, data: GraphData):
-        spread = max(250, len(data.nodes) * 18)
-        import random
-        for n in data.nodes:
-            n.x = random.uniform(-spread, spread)
-            n.y = random.uniform(-spread, spread)
-
-    # ── Force simulation ──────────────────────────────────────────────────────
-
-    def _force_step(self):
-        if self._alpha < 0.004:
-            self._timer.stop()
-            return
-
-        items = list(self._node_items.values())
-        n = len(items)
-        if n == 0:
-            return
-
-        k = math.sqrt(800 * 600 / max(n, 1)) * 0.75
-
-        # repulsion O(n²) — acceptable for typical graph sizes (<200 nodes)
-        for i in range(n):
-            a = items[i]
-            aid = a.node().id
-            ax, ay = a.x(), a.y()
-            for j in range(i + 1, n):
-                b = items[j]
-                bid = b.node().id
-                dx = ax - b.x()
-                dy = ay - b.y()
-                d2 = max(dx * dx + dy * dy, 1.0)
-                d = math.sqrt(d2)
-                f = k * k / d2
-                fx, fy = dx / d * f, dy / d * f
-                self._vx[aid] += fx;  self._vy[aid] += fy
-                self._vx[bid] -= fx;  self._vy[bid] -= fy
-
-        # attraction along edges
-        for ei in self._edge_items:
-            si, ti = ei._src, ei._tgt
-            sid, tid = si.node().id, ti.node().id
-            dx = ti.x() - si.x()
-            dy = ti.y() - si.y()
-            d = max(math.hypot(dx, dy), 1.0)
-            f = d * d / k * 0.28
-            fx, fy = dx / d * f, dy / d * f
-            self._vx[sid] += fx;  self._vy[sid] += fy
-            self._vx[tid] -= fx;  self._vy[tid] -= fy
-
-        # update
-        for item in items:
-            nid = item.node().id
-            if nid in self._locked:
-                continue
-            vx = self._vx[nid] * 0.82
-            vy = self._vy[nid] * 0.82
-            item.setPos(item.x() + vx * self._alpha,
-                        item.y() + vy * self._alpha)
-            self._vx[nid] = vx
-            self._vy[nid] = vy
-
-        self._alpha *= 0.97
-
     # ── Background dot grid ───────────────────────────────────────────────────
 
     def drawBackground(self, painter: QPainter, rect: QRectF):
+        import math
         painter.fillRect(rect, QColor("#181825"))
+
+        l, t, r, b = rect.left(), rect.top(), rect.right(), rect.bottom()
+        # Guard: scene rect can be NaN when empty, or astronomically large when zoomed out
+        if not (math.isfinite(l) and math.isfinite(t) and
+                math.isfinite(r) and math.isfinite(b)):
+            return
+        _MAX = 40_000
+        l, t = max(l, -_MAX), max(t, -_MAX)
+        r, b = min(r,  _MAX), min(b,  _MAX)
+
         gs = 40
-        pen = QPen(QColor("#252538"), 1)
-        painter.setPen(pen)
-        lx = int(rect.left())  - (int(rect.left())  % gs)
-        ty = int(rect.top())   - (int(rect.top())   % gs)
+        painter.setPen(QPen(QColor("#252538"), 1))
+        lx = int(l) - (int(l) % gs)
+        ty = int(t) - (int(t) % gs)
         x = lx
-        while x < rect.right():
+        while x < r:
             y = ty
-            while y < rect.bottom():
+            while y < b:
                 painter.drawPoint(x, y)
                 y += gs
             x += gs
@@ -1028,7 +1662,7 @@ class NetworkGraphView(QGraphicsView):
             QPainter.TextAntialiasing |
             QPainter.SmoothPixmapTransform,
         )
-        self.setViewportUpdateMode(QGraphicsView.BoundingRectViewportUpdate)
+        self.setViewportUpdateMode(QGraphicsView.FullViewportUpdate)
         self.setDragMode(QGraphicsView.NoDrag)
         self.setTransformationAnchor(QGraphicsView.AnchorUnderMouse)
         self.setResizeAnchor(QGraphicsView.AnchorViewCenter)
@@ -1276,6 +1910,19 @@ class GraphDataLoader(QThread):
         def _node(nid, kind, label, data=None):
             if nid not in nodes:
                 nodes[nid] = GraphNode(nid, kind, label, data or {})
+            elif kind in ("cdn", "reverse_proxy") and data:
+                # Multiple sessions may report the same CDN/RP — merge.
+                ex = nodes[nid]
+                # Accumulate origin IPs
+                ex_ips = ex.data.setdefault("origin_ips", [])
+                for ip in (data.get("origin_ips") or []):
+                    if ip and ip not in ex_ips:
+                        ex_ips.append(ip)
+                # Prefer the most informative proxy_type
+                new_pt = data.get("proxy_type", "")
+                if "reverse proxy" in new_pt.lower():
+                    ex.data["proxy_type"] = new_pt
+                    ex.kind = "reverse_proxy"  # upgrade kind in-place
 
         def _edge(src, tgt, kind):
             k = (src, tgt, kind)
@@ -1359,9 +2006,62 @@ class GraphDataLoader(QThread):
                 _edge(parent_id, port_id, "has_port")
 
                 for tech in d.get("technologies", []):
-                    tech_id = f"tech:{tech}"
-                    _node(tech_id, "tech", tech, {"tech": tech})
-                    _edge(port_id, tech_id, "uses_tech")
+                    tech_lower = tech.lower()
+                    cdn_match  = next(
+                        ((prov, ptype) for key, (prov, ptype) in _CDN_TECH_MAP.items()
+                         if key in tech_lower),
+                        None,
+                    )
+                    if cdn_match:
+                        provider, proxy_type = cdn_match
+                        kind   = _cdn_node_kind(proxy_type)
+                        cdn_id = f"cdn:{provider.lower()}:{host}"
+                        _node(cdn_id, kind, provider, {
+                            "provider":      provider,
+                            "proxy_type":    proxy_type,
+                            "proxied_host":  host,
+                            "origin_masked": True,
+                            "origin_ips":    [],
+                            "bypass_hints":  [],
+                        })
+                        edge_kind = "routes_through" if kind == "reverse_proxy" else "proxied_by"
+                        _edge(sub_id, cdn_id, edge_kind)
+                    else:
+                        tech_id = f"tech:{tech}"
+                        _node(tech_id, "tech", tech, {"tech": tech})
+                        _edge(port_id, tech_id, "uses_tech")
+
+            # ── CDN / reverse proxy (explicit results) ────────────────────────
+            for r in repo.get_results(sid, "cdn"):
+                d         = r.get("data", {})
+                provider  = d.get("provider", "")
+                subdomain = d.get("subdomain", "")
+                if not provider:
+                    continue
+                proxy_type = d.get("proxy_type", "CDN")
+                kind       = _cdn_node_kind(proxy_type)
+                cdn_id     = f"cdn:{provider.lower()}:{subdomain.lower()}"
+                _node(cdn_id, kind, provider, {
+                    "provider":      provider,
+                    "proxy_type":    proxy_type,
+                    "proxied_host":  subdomain,
+                    "origin_masked": d.get("origin_masked", True),
+                    "origin_ips":    d.get("origin_ips", []),
+                    "bypass_hints":  d.get("bypass_hints", []),
+                    "sources":       r.get("sources", []),
+                })
+                parent_id = (f"subdomain:{subdomain}"
+                             if f"subdomain:{subdomain}" in nodes else root_id)
+                edge_kind = "routes_through" if kind == "reverse_proxy" else "proxied_by"
+                _edge(parent_id, cdn_id, edge_kind)
+                for origin_ip in d.get("origin_ips", []):
+                    if not origin_ip:
+                        continue
+                    oid = f"ip:{origin_ip}"
+                    _node(oid, "ip", origin_ip, {
+                        "ip": origin_ip, "note": "origin server"
+                    })
+                    _edge(cdn_id, oid, "origin_of")
 
             # ── vulnerabilities ───────────────────────────────────────────────
             for r in repo.get_results(sid, "vuln"):
@@ -1399,7 +2099,97 @@ class GraphDataLoader(QThread):
                 })
                 _edge(root_id, oid, "is_osint")
 
+            # ── Info notes ────────────────────────────────────────────────────
+            for r in repo.get_results(sid, "info"):
+                d         = r.get("data", {})
+                parent_id = d.get("parent_node_id", "")
+                content   = d.get("content", "")
+                if not parent_id or not content or parent_id not in nodes:
+                    continue
+                first_line = content.split("\n")[0].strip()
+                label = (first_line[:20] + "…") if len(first_line) > 20 else first_line
+                info_id = f"info:{parent_id}"
+                _node(info_id, "info", label, {
+                    "content":        content,
+                    "parent_node_id": parent_id,
+                })
+                _edge(parent_id, info_id, "annotates")
+
+            # ── Custom user nodes ──────────────────────────────────────────────
+            for r in repo.get_results(sid, "custom"):
+                d         = r.get("data", {})
+                parent_id = d.get("parent_node_id", "")
+                label     = d.get("label", "")
+                if not label or parent_id not in nodes:
+                    continue
+                custom_id = f"custom:{r.get('result_key', label)}"
+                _node(custom_id, "custom", label, {
+                    "label":          label,
+                    "description":    d.get("description", ""),
+                    "parent_node_id": parent_id,
+                })
+                _edge(parent_id, custom_id, "linked_to")
+
+            # ── Endpoints (hidden by default) ─────────────────────────────────
+            for r in repo.get_results(sid, "crawl"):
+                d      = r.get("data", {})
+                url    = d.get("url", "")
+                method = d.get("method", "GET")
+                if not url:
+                    continue
+                try:
+                    parsed  = urlsplit(url)
+                    host    = parsed.netloc
+                    path    = parsed.path or "/"
+                except Exception:
+                    continue
+                sub_id = f"subdomain:{host}"
+                if sub_id not in nodes:
+                    continue  # skip if subdomain not in main graph
+                path_lbl = path if len(path) <= 28 else path[:25] + "…"
+                ep_id    = f"endpoint:{method}:{url}"
+                _node(ep_id, "endpoint", f"{method} {path_lbl}", {
+                    "url":          url,
+                    "method":       method,
+                    "status_code":  d.get("status_code", 0),
+                    "content_type": d.get("content_type", ""),
+                })
+                _edge(sub_id, ep_id, "has_endpoint")
+
+            # ── Parameters (hidden by default, children of endpoints) ──────────
+            for r in repo.get_results(sid, "params"):
+                d        = r.get("data", {})
+                name     = d.get("name", "")
+                endpoint = d.get("endpoint", "")
+                method   = d.get("method", "GET")
+                if not name or not endpoint:
+                    continue
+                ep_id = f"endpoint:{method}:{endpoint}"
+                if ep_id not in nodes:
+                    continue  # endpoint not in graph
+                ptype    = d.get("param_type", "query")
+                param_id = f"param:{ep_id}:{name}"
+                _node(param_id, "param", f"{'?' if ptype == 'query' else '⬤'} {name}", {
+                    "name":       name,
+                    "param_type": ptype,
+                    "example":    d.get("example_value", ""),
+                    "endpoint":   endpoint,
+                    "method":     method,
+                })
+                _edge(ep_id, param_id, "has_param")
+
         return GraphData(nodes=list(nodes.values()), edges=list(edges.values()))
+
+
+# ── Search bar widget ────────────────────────────────────────────────────────
+
+class _SearchEdit(QLineEdit):
+    """QLineEdit that clears itself on Escape."""
+    def keyPressEvent(self, ev):
+        if ev.key() == Qt.Key_Escape:
+            self.clear()
+        else:
+            super().keyPressEvent(ev)
 
 
 # ── Legend chip ───────────────────────────────────────────────────────────────
@@ -1423,14 +2213,13 @@ def _legend_chip(kind: str) -> QLabel:
 class NetworkPage(QWidget):
     def __init__(self, project_dir: str, target: str, parent=None):
         super().__init__(parent)
-        self._project_dir    = project_dir
-        self._target         = target
+        self._project_dir = project_dir
+        self._target      = target
         self._data: GraphData | None = None
-        self._current_layout = "radial"
         self._loader: GraphDataLoader | None = None
-        self._manual_repo    = ManualDataRepository(project_dir, target)
+        self._manual_repo = ManualDataRepository(project_dir, target)
 
-        self._scene = NetworkGraphScene()
+        self._scene = NetworkGraphScene(project_dir, target)
         self._scene.nodeClicked.connect(self._on_node_clicked)
         self._scene.addDataRequested.connect(self._on_add_requested)
 
@@ -1473,27 +2262,6 @@ class NetworkPage(QWidget):
         title.setStyleSheet(
             "color:#94E2D5; font-size:11px; font-weight:bold; background:transparent;")
         hl.addWidget(title)
-        hl.addSpacing(12)
-
-        # layout toggle buttons
-        self._layout_btns: dict[str, QPushButton] = {}
-        _active_style   = ("QPushButton{background:#313244;color:#CDD6F4;"
-                           "border:1px solid #89B4FA;border-radius:4px;"
-                           "padding:2px 10px;font-size:10px;min-height:22px;}")
-        _inactive_style = ("QPushButton{background:transparent;color:#6C7086;"
-                           "border:1px solid #313244;border-radius:4px;"
-                           "padding:2px 10px;font-size:10px;min-height:22px;}"
-                           "QPushButton:hover{background:#252538;color:#CDD6F4;}")
-        for key, lbl in [("radial","Radial"), ("force","Force"), ("hierarchy","Hierarchy")]:
-            btn = QPushButton(lbl)
-            btn.setStyleSheet(_active_style if key == self._current_layout else _inactive_style)
-            btn.clicked.connect(lambda _, k=key,
-                                a=_active_style, i=_inactive_style: self._set_layout(k, a, i))
-            hl.addWidget(btn)
-            self._layout_btns[key] = btn
-        self._active_style   = _active_style
-        self._inactive_style = _inactive_style
-
         hl.addStretch()
 
         for kind in _NS:
@@ -1501,19 +2269,70 @@ class NetworkPage(QWidget):
 
         hl.addStretch()
 
-        for lbl, fn in [("↺ Refresh", self._load_data),
-                         ("⊡ Fit",     self._view.fit_all)]:
+        # ── Search bar ────────────────────────────────────────────────────────
+        search_lbl = QLabel("⌕")
+        search_lbl.setStyleSheet("color:#6C7086; font-size:14px; background:transparent;")
+        hl.addWidget(search_lbl)
+
+        self._search_edit = _SearchEdit()
+        self._search_edit.setPlaceholderText("Search nodes…")
+        self._search_edit.setFixedSize(160, 26)
+        self._search_edit.setStyleSheet(
+            "QLineEdit{background:#1E1E2E;color:#CDD6F4;"
+            "border:1px solid #45475A;border-radius:4px;"
+            "padding:0 8px;font-size:10px;}"
+            "QLineEdit:focus{border-color:#89B4FA;}"
+        )
+        # Debounce: fire 150 ms after the user stops typing
+        self._search_debounce = QTimer(self)
+        self._search_debounce.setSingleShot(True)
+        self._search_debounce.setInterval(150)
+        self._search_debounce.timeout.connect(
+            lambda: self._scene.set_search(self._search_edit.text())
+        )
+        self._search_edit.textChanged.connect(self._search_debounce.start)
+        hl.addWidget(self._search_edit)
+
+        _btn_ss = ("QPushButton{background:#313244;color:#CDD6F4;"
+                   "border:1px solid #45475A;border-radius:4px;"
+                   "padding:2px 10px;font-size:10px;min-height:26px;}"
+                   "QPushButton:hover{background:#45475A;}")
+        _focus_ss_active = ("QPushButton{background:#3D2B1F;color:#FAB387;"
+                            "border:1px solid #FE640B;border-radius:4px;"
+                            "padding:2px 10px;font-size:10px;min-height:26px;}"
+                            "QPushButton:hover{background:#4D3B2F;}")
+
+        for lbl, fn in [("↺ Refresh",      self._load_data),
+                        ("⊡ Fit",          self._view.fit_all),
+                        ("⊞ Reset Layout", self._on_reset_layout)]:
             btn = QPushButton(lbl)
             btn.setFixedHeight(26)
-            btn.setStyleSheet(
-                "QPushButton{background:#313244;color:#CDD6F4;"
-                "border:1px solid #45475A;border-radius:4px;"
-                "padding:2px 10px;font-size:10px;}"
-                "QPushButton:hover{background:#45475A;}")
+            btn.setStyleSheet(_btn_ss)
             btn.clicked.connect(fn)
             hl.addWidget(btn)
 
+        self._show_all_btn = QPushButton("⊗ Show All")
+        self._show_all_btn.setFixedHeight(26)
+        self._show_all_btn.setStyleSheet(_btn_ss)
+        self._show_all_btn.setEnabled(False)
+        self._show_all_btn.clicked.connect(self._scene.unfocus)
+        hl.addWidget(self._show_all_btn)
+
+        def _on_focus_changed(focused: bool):
+            if focused:
+                self._show_all_btn.setEnabled(True)
+                self._show_all_btn.setStyleSheet(_focus_ss_active)
+            else:
+                self._show_all_btn.setEnabled(False)
+                self._show_all_btn.setStyleSheet(_btn_ss)
+        self._scene.focusChanged.connect(_on_focus_changed)
+
         return bar
+
+    # ── Public API ────────────────────────────────────────────────────────────
+
+    def refresh(self) -> None:
+        self._load_data()
 
     # ── Slots ─────────────────────────────────────────────────────────────────
 
@@ -1527,16 +2346,28 @@ class NetworkPage(QWidget):
         self._loader.start()
 
     def _on_loaded(self, data: GraphData):
+        first_load = self._data is None
         self._data = data
-        self._scene.build(data, self._current_layout)
-        QTimer.singleShot(150, self._view.fit_all)
+        if first_load:
+            self._scene.build(data)
+            QTimer.singleShot(150, self._view.fit_all)
+        else:
+            self._scene.merge(data)   # preserves all node positions
+
         n = data.nodes
         counts = {k: sum(1 for nd in n if nd.kind == k) for k in _NS}
+        proxy_count = counts["cdn"] + counts["reverse_proxy"]
+        cdn_s = f"  ·  {proxy_count} CDN/proxies" if proxy_count else ""
         self._status.setText(
             f"{counts['subdomain']} subdomains  ·  {counts['ip']} IPs  ·  "
             f"{counts['port']} ports  ·  {counts['tech']} technologies  ·  "
-            f"{counts['vuln']} vulns  ·  {counts['osint']} OSINT"
+            f"{counts['vuln']} vulns  ·  {counts['osint']} OSINT{cdn_s}"
         )
+
+    def _on_reset_layout(self):
+        if self._data:
+            self._scene.reset_layout(self._data)
+            QTimer.singleShot(150, self._view.fit_all)
 
     def _on_node_clicked(self, node: GraphNode):
         self._detail.show_node(node)
@@ -1545,15 +2376,6 @@ class NetworkPage(QWidget):
         win = self.window()
         if hasattr(win, "openNewBrowserTab"):
             win.openNewBrowserTab(url)
-
-    def _set_layout(self, key: str, active_s: str, inactive_s: str):
-        self._current_layout = key
-        self._scene.stop_force()
-        for k, btn in self._layout_btns.items():
-            btn.setStyleSheet(active_s if k == key else inactive_s)
-        if self._data:
-            self._scene.build(self._data, key)
-            QTimer.singleShot(150, self._view.fit_all)
 
     # ── Manual data entry ─────────────────────────────────────────────────────
 
@@ -1634,6 +2456,44 @@ class NetworkPage(QWidget):
                     return
                 rtype, value, extra, provider = dlg.values()
                 self._manual_repo.add_osint(rtype, value, extra, provider)
+
+            elif action == "add_cdn":
+                host = _prefill_host()
+                dlg  = _AddCdnDlg(self, prefill_subdomain=host)
+                if dlg.exec() != QDialog.Accepted:
+                    return
+                subdomain, provider, proxy_type, origin_ips, bypass_hints = dlg.values()
+                self._manual_repo.add_cdn(subdomain, provider, proxy_type,
+                                          origin_ips, bypass_hints)
+
+            elif action in ("add_info", "edit_info"):
+                prefill = (self._manual_repo.get_info_note(nd.id)
+                           if action == "edit_info" else "")
+                dlg = _InfoNoteDlg(self,
+                                   node_label=nd.label if nd else "",
+                                   prefill=prefill)
+                if dlg.exec() != QDialog.Accepted:
+                    return
+                self._manual_repo.save_info_note(nd.id, dlg.content())
+
+            elif action == "add_custom":
+                dlg = _AddCustomNodeDlg(self,
+                                        parent_node_label=nd.label if nd else "")
+                if dlg.exec() != QDialog.Accepted:
+                    return
+                label, desc = dlg.values()
+                self._manual_repo.add_custom_node(nd.id, label, desc)
+
+            elif action == "add_origin_server":
+                dlg = _AddOriginServerDlg(
+                    self,
+                    provider=nd.label if nd else "",
+                    subdomain=nd.data.get("proxied_host", "") if nd else "",
+                )
+                if dlg.exec() != QDialog.Accepted:
+                    return
+                origin_ip, subdomain, provider = dlg.values()
+                self._manual_repo.add_origin_to_cdn(subdomain, provider, origin_ip)
 
             else:
                 return

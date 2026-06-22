@@ -141,69 +141,105 @@ class HoverButton(QPushButton):
 
 
 class SyntaxHighlighter(QSyntaxHighlighter):
+    """
+    Dual-purpose highlighter: colours HTTP request/response messages AND
+    generic JSON / code snippets.
+
+    Rule tuples: (QRegularExpression, QTextCharFormat, group_index)
+      group_index 0  → colour the full match
+      group_index N  → colour only capture group N (lets you split one pattern
+                        across multiple formats, e.g. header name vs value)
+    """
+
     def __init__(self, parent=None):
-        super(SyntaxHighlighter, self).__init__(parent)
+        super().__init__(parent)
 
-        # Keywords — Mauve #CBA6F7
-        keyword_fmt = QTextCharFormat()
-        keyword_fmt.setForeground(QColor("#CBA6F7"))
-        keywords = [
-            "class", "def", "if", "else", "elif", "for", "while", "try",
-            "except", "finally", "import", "from", "as", "return", "raise",
+        def _fmt(color, *, bold=False, italic=False) -> QTextCharFormat:
+            f = QTextCharFormat()
+            f.setForeground(QColor(color))
+            if bold:   f.setFontWeight(QFont.Weight.Bold)
+            if italic: f.setFontItalic(True)
+            return f
+
+        def _re(pattern) -> QRegularExpression:
+            return QRegularExpression(pattern)
+
+        R = []   # (QRegularExpression, QTextCharFormat, group_index)
+
+        # ── JSON / code body rules (applied first; HTTP rules override) ────────
+
+        # Quoted strings — Green
+        R += [
+            (_re(r'"[^"\\]*(?:\\.[^"\\]*)*"'), _fmt("#A6E3A1"), 0),
+            (_re(r"'[^'\\]*(?:\\.[^'\\]*)*'"), _fmt("#A6E3A1"), 0),
         ]
-        self.highlightRules = [
-            (QRegularExpression("\\b" + kw + "\\b"), keyword_fmt) for kw in keywords
-        ]
 
-        # Brackets — Blue #89B4FA
-        bracket_fmt = QTextCharFormat()
-        bracket_fmt.setForeground(QColor("#89B4FA"))
-        self.highlightRules.extend(
-            (QRegularExpression(ch), bracket_fmt)
-            for ch in [r"\(", r"\)", r"\{", r"\}", r"\[", r"\]"]
-        )
+        # JSON true / false / null — Peach
+        R += [(_re(r"\b(?:true|false|null)\b"), _fmt("#FAB387"), 0)]
 
-        # Comments — Overlay1 #7F849C
-        comment_fmt = QTextCharFormat()
-        comment_fmt.setForeground(QColor("#7F849C"))
-        comment_fmt.setFontItalic(True)
-        self.highlightRules.append((QRegularExpression("#.*"), comment_fmt))
+        # Numbers — Lavender
+        R += [(_re(r"\b\d+(?:\.\d+)?\b"), _fmt("#B4BEFE"), 0)]
 
-        # self — Sapphire #74C7EC
-        self_fmt = QTextCharFormat()
-        self_fmt.setForeground(QColor("#74C7EC"))
-        self.highlightRules.append((QRegularExpression(r"self(?=\.)"), self_fmt))
+        # Brackets / braces — Blue
+        bracket_fmt = _fmt("#89B4FA")
+        for ch in [r"\{", r"\}", r"\[", r"\]"]:
+            R.append((_re(ch), bracket_fmt, 0))
 
-        # Function names after def — Blue #89B4FA bold
-        func_fmt = QTextCharFormat()
-        func_fmt.setForeground(QColor("#89B4FA"))
-        func_fmt.setFontWeight(QFont.Weight.Bold)
-        self.highlightRules.append((QRegularExpression(r"(?<=def\s)\w+(?=\()"), func_fmt))
-
-        # Strings — Green #A6E3A1
-        string_fmt = QTextCharFormat()
-        string_fmt.setForeground(QColor("#A6E3A1"))
-        self.highlightRules.append((QRegularExpression(r'"[^"]*"'), string_fmt))
-        self.highlightRules.append((QRegularExpression(r"'[^']*'"), string_fmt))
-
-        # URLs — Peach #FAB387 underlined
-        url_fmt = QTextCharFormat()
-        url_fmt.setForeground(QColor("#FAB387"))
+        # Absolute URLs — Peach underlined
+        url_fmt = _fmt("#FAB387")
         url_fmt.setFontUnderline(True)
         url_fmt.setUnderlineColor(QColor("#FAB387"))
-        self.highlightRules.append(
-            (QRegularExpression(r"https?://[^\s\"\'>]+"), url_fmt)
-        )
+        R.append((_re(r"https?://[^\s\"\'<>]+"), url_fmt, 0))
+
+        # ── HTTP request / status line ─────────────────────────────────────────
+
+        # Method — bold Blue
+        _methods = "GET|POST|PUT|DELETE|PATCH|HEAD|OPTIONS|CONNECT|TRACE"
+        R.append((_re(rf"^({_methods})\b"), _fmt("#89B4FA", bold=True), 0))
+
+        # Relative path on request line (e.g. GET /api/v1 HTTP/1.1)
+        R.append((_re(rf"^(?:{_methods})\s+(/[^\s]*)"), _fmt("#FAB387"), 1))
+
+        # HTTP version (start of status line) — dim
+        R.append((_re(r"^HTTP/\S+"), _fmt("#585B70"), 0))
+
+        # Status code by class (group 1 = the 3-digit code)
+        R += [
+            (_re(r"^HTTP/\S+\s+(2\d{2})\b"), _fmt("#A6E3A1", bold=True), 1),  # 2xx green
+            (_re(r"^HTTP/\S+\s+(3\d{2})\b"), _fmt("#89B4FA", bold=True), 1),  # 3xx blue
+            (_re(r"^HTTP/\S+\s+(4\d{2})\b"), _fmt("#F9E2AF", bold=True), 1),  # 4xx yellow
+            (_re(r"^HTTP/\S+\s+(5\d{2})\b"), _fmt("#F38BA8", bold=True), 1),  # 5xx red
+        ]
+
+        # Reason phrase after status code — dim
+        R.append((_re(r"^HTTP/\S+\s+\d{3}\s+(.+)$"), _fmt("#6C7086"), 1))
+
+        # ── HTTP header lines ──────────────────────────────────────────────────
+        # Pattern anchored at line start; only fires on "Name: value" lines.
+        # [A-Za-z][A-Za-z0-9\-]+ then literal colon keeps false-positives minimal.
+
+        _hdr = r"^[A-Za-z][A-Za-z0-9\-]+"
+
+        # Header name — bold Mauve
+        R.append((_re(rf"{_hdr}(?=:)"), _fmt("#CBA6F7", bold=True), 0))
+
+        # Colon + optional space — dim (group 1)
+        R.append((_re(rf"{_hdr}(:\s?)"), _fmt("#585B70"), 1))
+
+        # Header value (everything after the colon) — Teal (group 1)
+        R.append((_re(rf"{_hdr}:\s?(.+)$"), _fmt("#89DCEB"), 1))
+
+        self._rules = R   # renamed from highlightRules to avoid external mutation
 
     def highlightBlock(self, text: str) -> None:
-        for pattern, format in self.highlightRules:
-            expression = QRegularExpression(pattern)
-            match_iter = expression.globalMatch(text)
-            while match_iter.hasNext():
-                match = match_iter.next()
-                index = match.capturedStart()
-                length = match.capturedLength()
-                self.setFormat(index, length, format)
+        for pattern, fmt, group in self._rules:
+            it = pattern.globalMatch(text)
+            while it.hasNext():
+                m = it.next()
+                start = m.capturedStart(group)
+                length = m.capturedLength(group)
+                if start >= 0 and length > 0:
+                    self.setFormat(start, length, fmt)
 
 
 class MessageBox(QMessageBox):

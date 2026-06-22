@@ -89,11 +89,13 @@ class DockerManager:
         return result
 
     def build_image(self, dockerfile_path: str, tag: str) -> Generator[str, None, None]:
-        """Generator — yields build log lines."""
+        """Generator — yields build log lines; raises RuntimeError on build failure."""
         import pathlib
         client = self._get_client()
         context = str(pathlib.Path(dockerfile_path).parent)
         dockerfile = pathlib.Path(dockerfile_path).name
+        failed = False
+        error_msg = ""
         try:
             for chunk in client.api.build(
                 path=context,
@@ -107,9 +109,13 @@ class DockerManager:
                     yield stream.rstrip()
                 err = chunk.get("error", "")
                 if err:
-                    yield f"ERROR: {err.rstrip()}"
+                    failed = True
+                    error_msg = err.rstrip()
+                    yield f"ERROR: {error_msg}"
         except BuildError as exc:
-            yield f"Build failed: {exc}"
+            raise RuntimeError(str(exc)) from exc
+        if failed:
+            raise RuntimeError(f"Build failed: {error_msg}")
 
     def remove_image(self, image: str, force: bool = False):
         self._get_client().images.remove(image, force=force)

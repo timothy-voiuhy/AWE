@@ -95,9 +95,12 @@ class AtomProxy(QThread, QObject):
         self.topParent.ThreadStarted.emit(self.topParent, self.objectName())
 
     def run(self):
-        command= f"{sys.executable} {RUNDIR}src/proxyhandlerv3.py -p {self.proxy_port}"
-        # self.process = subprocess.Popen(args=command, shell=True, cwd=RUNDIR + "/src/")
-        self.process = OpenProcess(process_name="atomProxy", shell=True, cwd=RUNDIR + "/src/", args=command)
+        # shell=False so terminate() hits the Python process directly, not a shell wrapper
+        cmd = [sys.executable, "-m", "proxy.server", "-p", str(self.proxy_port)]
+        self.process = OpenProcess(
+            process_name="atomProxy", shell=False,
+            cwd=RUNDIR + "src/", args=cmd,
+        )
         self.process.wait()
         self.topParent.socketIpc.processFinishedExecution.emit(self.topParent, self.objectName())
 

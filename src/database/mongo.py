@@ -71,3 +71,65 @@ def _ensure_indexes(db: Database):
         unique=True,
     )
     db.results.create_index([("session_id", 1), ("category", 1)])
+
+    # graph state — one document per target
+    db.graph_state.create_index("target", unique=True)
+
+
+# ── Graph layout persistence ──────────────────────────────────────────────────
+
+def load_graph_positions(
+    project_dir: str,
+    target: str,
+) -> dict[str, tuple[float, float]]:
+    """Return {node_id: (x, y)} from the last saved graph layout, or {} on miss."""
+    try:
+        doc = get_db(project_dir).graph_state.find_one(
+            {"target": target}, {"positions": 1}
+        )
+        if doc:
+            return {
+                entry["id"]: (float(entry["x"]), float(entry["y"]))
+                for entry in doc.get("positions", [])
+                if "id" in entry
+            }
+    except Exception:
+        pass
+    return {}
+
+
+def save_graph_positions(
+    project_dir: str,
+    target: str,
+    positions: dict[str, tuple[float, float]],
+) -> None:
+    """Persist node positions (upsert by target). Positions stored as an array
+    of {id, x, y} to avoid MongoDB dot-in-field-name restrictions."""
+    from datetime import datetime, timezone
+    pos_list = [{"id": k, "x": v[0], "y": v[1]} for k, v in positions.items()]
+    get_db(project_dir).graph_state.update_one(
+        {"target": target},
+        {"$set": {
+            "positions": pos_list,
+            "saved_at":  datetime.now(timezone.utc).isoformat(),
+        }},
+        upsert=True,
+    )
+
+
+# ── Global proxy traffic store (not per-project) ──────────────────────────────
+
+_PROXY_TRAFFIC_DB = "awe_proxy_traffic"
+
+
+def get_proxy_traffic_db(uri: str = _DEFAULT_URI) -> Database:
+    """Return the global proxy traffic database (shared across all projects)."""
+    db = _client(uri)[_PROXY_TRAFFIC_DB]
+    _ensure_proxy_indexes(db)
+    return db
+
+
+def _ensure_proxy_indexes(db: Database):
+    db.traffic.create_index("host")
+    db.traffic.create_index([("host", 1), ("timestamp", -1)])
+    db.traffic.create_index([("host", 1), ("method", 1), ("path", 1)])

@@ -246,6 +246,32 @@ class OSINTResult(BaseResult):
         return f"{self.result_type}|{self.value.lower()}"
 
 
+# ── CDN / cloud proxy detection ──────────────────────────────────────────────
+
+@dataclass
+class CdnResult(BaseResult):
+    subdomain:     str       = ""    # hostname being proxied
+    provider:      str       = ""    # Cloudflare | Akamai | Fastly | …
+    proxy_type:    str       = "CDN" # CDN | WAF | CDN/WAF | DDoS Protection | Reverse Proxy
+    origin_masked: bool      = True
+    origin_ips:    list[str] = field(default_factory=list)
+    bypass_hints:  list[str] = field(default_factory=list)
+
+    @property
+    def key(self) -> str:
+        return f"{self.provider.lower()}|{self.subdomain.lower()}"
+
+    def merge(self, other: "CdnResult") -> "CdnResult":
+        super().merge(other)
+        for ip in other.origin_ips:
+            if ip and ip not in self.origin_ips:
+                self.origin_ips.append(ip)
+        for hint in other.bypass_hints:
+            if hint and hint not in self.bypass_hints:
+                self.bypass_hints.append(hint)
+        return self
+
+
 # ── Wordlist (CeWL output) ────────────────────────────────────────────────────
 
 @dataclass
@@ -255,6 +281,32 @@ class WordlistEntry(BaseResult):
     @property
     def key(self) -> str:
         return self.word.lower()
+
+
+# ── User-created graph nodes ──────────────────────────────────────────────────
+
+@dataclass
+class InfoNote(BaseResult):
+    """Sticky-note attached to a graph node. One note per node (key by node_id)."""
+    parent_node_id: str = ""   # graph node ID, e.g. "subdomain:api.example.com"
+    content: str = ""
+
+    @property
+    def key(self) -> str:
+        return f"info:{self.parent_node_id}"
+
+
+@dataclass
+class CustomNode(BaseResult):
+    """Free-form user-defined node connected to any graph node."""
+    parent_node_id: str = ""
+    label:          str = ""
+    description:    str = ""
+
+    @property
+    def key(self) -> str:
+        slug = self.label.lower().strip()[:40]
+        return f"custom:{self.parent_node_id}:{slug}"
 
 
 # ── Category → model class mapping ───────────────────────────────────────────
@@ -269,6 +321,9 @@ CATEGORY_MODEL = {
     "fuzz":      FuzzResult,
     "vuln":      VulnFinding,
     "osint":     OSINTResult,
+    "cdn":    CdnResult,
+    "info":   InfoNote,
+    "custom": CustomNode,
 }
 
 

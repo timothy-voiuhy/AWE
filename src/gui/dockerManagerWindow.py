@@ -688,7 +688,11 @@ class DockerManagerWindow(QMainWindow):
         hdr.addWidget(ref_btn)
         vb.addLayout(hdr)
 
-        # table
+        split = QSplitter(Qt.Vertical)
+        split.setChildrenCollapsible(False)
+        split.setStyleSheet("QSplitter::handle{background:#313244;height:4px;}")
+
+        # ── top pane: table ───────────────────────────────────────────────────
         self.imageTable = QTableWidget(0, 5)
         self.imageTable.setHorizontalHeaderLabels(
             ["Tool", "Image", "Source", "Status", "Actions"]
@@ -698,31 +702,44 @@ class DockerManagerWindow(QMainWindow):
         hh.setSectionResizeMode(1, QHeaderView.Stretch)
         hh.setSectionResizeMode(2, QHeaderView.Fixed);     self.imageTable.setColumnWidth(2, 64)
         hh.setSectionResizeMode(3, QHeaderView.Fixed);     self.imageTable.setColumnWidth(3, 118)
-        hh.setSectionResizeMode(4, QHeaderView.Fixed);     self.imageTable.setColumnWidth(4, 96)
+        hh.setSectionResizeMode(4, QHeaderView.ResizeToContents)
         self.imageTable.setEditTriggers(QTableWidget.NoEditTriggers)
         self.imageTable.verticalHeader().setVisible(False)
         self.imageTable.setSelectionBehavior(QTableWidget.SelectRows)
         self.imageTable.setAlternatingRowColors(True)
-        vb.addWidget(self.imageTable)
+        split.addWidget(self.imageTable)
 
-        # inline progress for image ops (separate from container logs)
-        vb.addWidget(self._hline())
+        # ── bottom pane: image operations log ─────────────────────────────────
+        log_pane = QWidget()
+        log_vb = QVBoxLayout(log_pane)
+        log_vb.setContentsMargins(0, 4, 0, 0)
+        log_vb.setSpacing(4)
+
         img_log_hdr = QHBoxLayout()
-        img_log_hdr.addWidget(QLabel("Image operations log"))
+        log_title = QLabel("Image operations log")
+        log_title.setStyleSheet("color:#6C7086; font-size:10px;")
+        img_log_hdr.addWidget(log_title)
         img_log_hdr.addStretch()
         clr = QPushButton("Clear")
         clr.setFixedHeight(22)
+        clr.setStyleSheet(
+            "QPushButton{background:#313244;color:#6C7086;border:1px solid #45475A;"
+            "border-radius:3px;padding:0 8px;font-size:9px;}"
+            "QPushButton:hover{background:#45475A;}")
         img_log_hdr.addWidget(clr)
-        vb.addLayout(img_log_hdr)
+        log_vb.addLayout(img_log_hdr)
 
         self._imgLogView = QTextEdit()
         self._imgLogView.setReadOnly(True)
-        self._imgLogView.setFixedHeight(90)
         self._imgLogView.setFont(QFont("Cascadia Code", 8))
         self._imgLogView.setStyleSheet(
             "QTextEdit{background:#11111B;color:#A6ADC8;border:none;padding:4px;}")
         clr.clicked.connect(self._imgLogView.clear)
-        vb.addWidget(self._imgLogView)
+        log_vb.addWidget(self._imgLogView)
+        split.addWidget(log_pane)
+
+        split.setSizes([340, 160])
+        vb.addWidget(split)
         return w
 
     def _refresh_images(self):
@@ -750,7 +767,7 @@ class DockerManagerWindow(QMainWindow):
         for tool_key, cfg in TOOL_REGISTRY.items():
             row = self.imageTable.rowCount()
             self.imageTable.insertRow(row)
-            self.imageTable.setRowHeight(row, 34)
+            self.imageTable.setRowHeight(row, 36)
 
             self.imageTable.setItem(row, 0, _colored_item(cfg.display_name))
             self.imageTable.item(row, 0).setData(Qt.UserRole, tool_key)
@@ -780,11 +797,11 @@ class DockerManagerWindow(QMainWindow):
     def _image_action_cell(self, tool_key: str, cfg, size, busy: bool) -> QWidget:
         cell = QWidget()
         hl   = QHBoxLayout(cell)
-        hl.setContentsMargins(4, 2, 4, 2)
+        hl.setContentsMargins(4, 3, 4, 3)
         hl.setSpacing(4)
 
         _btn_base = (
-            "QPushButton{border-radius:4px;font-size:9px;padding:1px 8px;min-height:24px;}"
+            "QPushButton{border-radius:4px;font-size:9px;padding:0 10px;}"
             "QPushButton:disabled{color:#45475A;background:#1E1E2E;border:1px solid #313244;}"
         )
 

@@ -284,6 +284,77 @@ class AweRepository:
         ]
         return {d["_id"]: d["count"] for d in self._db.results.aggregate(pipeline)}
 
+    # ── Project Scope ─────────────────────────────────────────────────────────
+
+    def save_scope(self, config: "ScopeConfig") -> None:
+        from database.scope import ScopeConfig
+        doc = config.to_dict()
+        doc["project_dir"] = self._project_dir
+        doc["updated_at"]  = _now()
+        self._db.project_scope.update_one(
+            {"project_dir": self._project_dir},
+            {"$set": doc},
+            upsert=True,
+        )
+
+    def get_scope(self) -> "ScopeConfig":
+        from database.scope import ScopeConfig
+        doc = self._db.project_scope.find_one({"project_dir": self._project_dir})
+        if doc:
+            return ScopeConfig.from_dict(doc)
+        return ScopeConfig()   # empty = open scope (matches everything)
+
+    # ── Proxy Traffic pseudo-session ──────────────────────────────────────────
+
+    PROXY_SESSION_KEY = "proxy_traffic"
+
+    def get_or_create_proxy_session(self, target: str) -> str:
+        """Return the session_id for the persistent proxy_traffic pseudo-session."""
+        doc = self._db.scan_sessions.find_one({
+            "project_dir":  self._project_dir,
+            "pipeline_key": self.PROXY_SESSION_KEY,
+        })
+        if doc:
+            return _str(doc["_id"])
+        new_doc = {
+            "project_dir":   self._project_dir,
+            "pipeline_key":  self.PROXY_SESSION_KEY,
+            "pipeline_name": "Proxy Traffic (browser tap)",
+            "target":        target,
+            "status":        "running",
+            "started_at":    _now(),
+            "completed_at":  None,
+            "output_dir":    "",
+            "params":        {},
+            "in_scope":      [],
+            "out_of_scope":  [],
+        }
+        result = self._db.scan_sessions.insert_one(new_doc)
+        return _str(result.inserted_id)
+
+    def get_proxy_tool_run_id(self, session_id: str) -> str:
+        """Return the tool_run_id for the proxy_traffic_extractor run."""
+        doc = self._db.tool_runs.find_one({
+            "session_id": session_id,
+            "tool_key":   "proxy_traffic_extractor",
+        })
+        if doc:
+            return _str(doc["_id"])
+        new_doc = {
+            "session_id":   session_id,
+            "tool_key":     "proxy_traffic_extractor",
+            "display_name": "Proxy Traffic Extractor",
+            "category":     "crawl",
+            "stage":        0,
+            "status":       "running",
+            "started_at":   _now(),
+            "completed_at": None,
+            "result_count": 0,
+            "error_msg":    None,
+        }
+        result = self._db.tool_runs.insert_one(new_doc)
+        return _str(result.inserted_id)
+
 
 # ── helpers ───────────────────────────────────────────────────────────────────
 
