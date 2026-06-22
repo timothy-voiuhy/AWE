@@ -156,10 +156,19 @@ def _colored_item(text: str, color: str | None = None) -> QTableWidgetItem:
     return item
 
 
-def _icon_btn(label: str, tooltip: str) -> QPushButton:
+_ACTION_BTN = (
+    "QPushButton{{background:#313244;color:{c};border:1px solid #45475A;"
+    "border-radius:4px;padding:0 8px;font-size:9px;min-height:22px;}}"
+    "QPushButton:hover{{background:#45475A;border-color:{c};}}"
+    "QPushButton:disabled{{color:#45475A;background:#1E1E2E;border-color:#313244;}}"
+)
+
+
+def _action_btn(label: str, tooltip: str, color: str) -> QPushButton:
     b = QPushButton(label)
     b.setToolTip(tooltip)
-    b.setFixedSize(28, 24)
+    b.setFixedHeight(24)
+    b.setStyleSheet(_ACTION_BTN.format(c=color))
     return b
 
 
@@ -569,7 +578,7 @@ class DockerManagerWindow(QMainWindow):
         self.containerTable.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
         self.containerTable.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeToContents)
         self.containerTable.horizontalHeader().setSectionResizeMode(4, QHeaderView.Fixed)
-        self.containerTable.setColumnWidth(4, 76)
+        self.containerTable.setColumnWidth(4, 148)
         self.containerTable.setSelectionBehavior(QTableWidget.SelectRows)
         self.containerTable.setEditTriggers(QTableWidget.NoEditTriggers)
         self.containerTable.verticalHeader().setVisible(False)
@@ -590,25 +599,45 @@ class DockerManagerWindow(QMainWindow):
             self.containerTable.setItem(i, 1, _colored_item(info["image"]))
             self.containerTable.setItem(i, 2, _colored_item(info["status"], color))
             self.containerTable.setItem(i, 3, _colored_item(info["started"]))
-
-            cell = QWidget()
-            cell_layout = QHBoxLayout(cell)
-            cell_layout.setContentsMargins(2, 0, 2, 0)
-            cell_layout.setSpacing(4)
-
-            stop_btn = _icon_btn("■", "Stop container")
-            stop_btn.setEnabled(info["status"] == "running")
-            stop_btn.clicked.connect(lambda _, cid=info["full_id"]: self._stop_container(cid))
-
-            rm_btn = _icon_btn("✕", "Remove container")
-            rm_btn.clicked.connect(lambda _, cid=info["full_id"]: self._remove_container(cid))
-
-            cell_layout.addWidget(stop_btn)
-            cell_layout.addWidget(rm_btn)
-            self.containerTable.setCellWidget(i, 4, cell)
-
-            # store full_id in first column's data
+            self.containerTable.setCellWidget(i, 4,
+                self._container_action_cell(info))
             self.containerTable.item(i, 0).setData(Qt.UserRole, info["full_id"])
+
+    def _container_action_cell(self, info: dict) -> QWidget:
+        is_running = info["status"] == "running"
+        is_service = info["name"] in self._mgr.SERVICE_CONTAINERS
+
+        cell = QWidget()
+        hl = QHBoxLayout(cell)
+        hl.setContentsMargins(4, 2, 4, 2)
+        hl.setSpacing(4)
+
+        if is_service:
+            # Service containers: stop/start toggle — never a remove button
+            if is_running:
+                btn = _action_btn("⏹ Stop", "Stop service container", "#FAB387")
+                btn.clicked.connect(
+                    lambda _, cid=info["full_id"]: self._stop_container(cid))
+            else:
+                btn = _action_btn("▶ Start", "Start service container", "#A6E3A1")
+                btn.clicked.connect(
+                    lambda _, cid=info["full_id"]: self._start_container(cid))
+            hl.addWidget(btn)
+        else:
+            # Tool containers: stop (if running) + remove
+            stop_btn = _action_btn("⏹ Stop", "Stop container", "#FAB387")
+            stop_btn.setEnabled(is_running)
+            stop_btn.clicked.connect(
+                lambda _, cid=info["full_id"]: self._stop_container(cid))
+
+            rm_btn = _action_btn("✕ Remove", "Remove container", "#F38BA8")
+            rm_btn.clicked.connect(
+                lambda _, cid=info["full_id"]: self._remove_container(cid))
+
+            hl.addWidget(stop_btn)
+            hl.addWidget(rm_btn)
+
+        return cell
 
     def _on_container_selected(self):
         rows = self.containerTable.selectedItems()
@@ -623,6 +652,15 @@ class DockerManagerWindow(QMainWindow):
             self._refresh_containers()
         except Exception as exc:
             self._log(f"Stop failed: {exc}")
+
+    def _start_container(self, container_id: str):
+        try:
+            c = self._mgr.get_container(container_id)
+            if c:
+                c.start()
+            self._refresh_containers()
+        except Exception as exc:
+            self._log(f"Start failed: {exc}")
 
     def _remove_container(self, container_id: str):
         try:

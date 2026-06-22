@@ -102,6 +102,21 @@ class LiveHost(BaseResult):
     technologies: list[str] = field(default_factory=list)
     content_length: int = 0
     redirect_url: str = ""
+    # extended fields from httpx JSON output
+    host: str = ""                           # resolved hostname (input subdomain)
+    host_ip: str = ""                        # primary resolved IP
+    ip_addresses: list[str] = field(default_factory=list)   # all A records
+    ipv6_addresses: list[str] = field(default_factory=list) # all AAAA records
+    cname: list[str] = field(default_factory=list)
+    webserver: str = ""
+    scheme: str = ""
+    port: str = ""
+    words: int = 0
+    lines: int = 0
+    cdn: bool = False
+    cdn_name: str = ""
+    cdn_type: str = ""                       # waf | cdn | cloud | …
+    cpe: list[str] = field(default_factory=list)  # CPE identifiers
 
     @property
     def key(self) -> str:
@@ -116,11 +131,35 @@ class LiveHost(BaseResult):
             self.title = other.title
         if not self.status_code and other.status_code:
             self.status_code = other.status_code
+        if not self.host_ip and other.host_ip:
+            self.host_ip = other.host_ip
+        for ip in other.ip_addresses:
+            if ip not in self.ip_addresses:
+                self.ip_addresses.append(ip)
+        for ip in other.ipv6_addresses:
+            if ip not in self.ipv6_addresses:
+                self.ipv6_addresses.append(ip)
+        for c in other.cname:
+            if c not in self.cname:
+                self.cname.append(c)
+        if not self.webserver and other.webserver:
+            self.webserver = other.webserver
+        if not self.cdn_name and other.cdn_name:
+            self.cdn_name = other.cdn_name
+            self.cdn_type = other.cdn_type
+            self.cdn = other.cdn
+        for cpe in other.cpe:
+            if cpe not in self.cpe:
+                self.cpe.append(cpe)
         return self
 
     @property
     def tech_str(self) -> str:
         return ", ".join(self.technologies)
+
+    @property
+    def ip_str(self) -> str:
+        return ", ".join(self.ip_addresses)
 
 
 # ── Endpoints / crawl results ─────────────────────────────────────────────────

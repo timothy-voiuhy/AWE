@@ -358,6 +358,9 @@ class TargetWindow(QtWidgets.QMainWindow):
         self._debounce_timer.timeout.connect(self._sync_proxy_traffic)
 
         # Pages — order must match _NAV
+        # NOTE: _build_scope_page() (index 6) creates self._scopeEditor, so it
+        # must run before any page that wants to connect scope_changed.  All
+        # signal wiring happens in _wire_scope_signals() called below.
         self._stack.addWidget(self._build_browser_page())    # 0 Browser
         self._stack.addWidget(self._build_target_page())    # 1 Target
         self._stack.addWidget(self._build_pipeline_page())  # 2 Pipeline
@@ -370,6 +373,11 @@ class TargetWindow(QtWidgets.QMainWindow):
         self._stack.addWidget(self._build_repeater_page())  # 9 Repeater
         self._stack.addWidget(self._build_notes_page())     # 10 Notes
         self._stack.addWidget(self._build_settings_page())  # 11 Settings
+
+        # Wire scope_changed → all consumer pages now that every page exists.
+        # Also push the already-loaded scope into pages so their first render
+        # respects scope, not just future saves.
+        self._wire_scope_signals()
 
         self._switch_page(0)
         self.topParent.newProjectCreated.emit(self)
@@ -411,6 +419,33 @@ class TargetWindow(QtWidgets.QMainWindow):
         self.browserTabWidget.setTabsClosable(True)
         self.browserTabWidget.tabCloseRequested.connect(self._close_browser_tab_by_index)
 
+        _newTabBtn = QPushButton("+")
+        _newTabBtn.setObjectName("newBrowserTabButton")
+        _newTabBtn.setFixedSize(28, 28)
+        _newTabBtn.setToolTip("New tab")
+        _newTabBtn.setStyleSheet("""
+            QPushButton {
+                color: #CDD6F4;
+                background: transparent;
+                border: 1px solid #45475A;
+                border-radius: 4px;
+                font-size: 16px;
+                font-weight: bold;
+                padding: 0px;
+                min-width: 0px;
+            }
+            QPushButton:hover {
+                background: #313244;
+                border-color: #89B4FA;
+                color: #89B4FA;
+            }
+            QPushButton:pressed {
+                background: #45475A;
+            }
+        """)
+        _newTabBtn.clicked.connect(self.openNewBrowserTab)
+        self.browserTabWidget.setCornerWidget(_newTabBtn, Qt.TopRightCorner)
+
         # Context menu on the tab bar
         tb = self.browserTabWidget.tabBar()
         tb.setContextMenuPolicy(Qt.CustomContextMenu)
@@ -431,7 +466,9 @@ class TargetWindow(QtWidgets.QMainWindow):
 
     def _build_pipeline_page(self) -> QWidget:
         self._pipelineWindow = PipelineWindow(
-            project_dir=self.projectDirPath, parent=self
+            project_dir=self.projectDirPath,
+            target=self.main_server_name or "",
+            parent=self,
         )
         return self._pipelineWindow
 
@@ -451,8 +488,10 @@ class TargetWindow(QtWidgets.QMainWindow):
         self._networkPage = NetworkPage(
             project_dir=self.projectDirPath,
             target=self.main_server_name or "",
+            proxy_col=self._get_proxy_col(),
             parent=self,
         )
+        self._networkPage.send_to_repeater.connect(self._send_to_repeater)
         return self._networkPage
 
     def _build_scope_page(self) -> QWidget:
@@ -505,6 +544,24 @@ class TargetWindow(QtWidgets.QMainWindow):
         scroll.setWidget(page)
         return scroll
 
+    def _wire_scope_signals(self) -> None:
+        """Connect ScopeEditorWidget.scope_changed to all consumer pages and
+        push the already-loaded scope so the first render respects scope.
+
+        Called once after all pages have been built, so self._scopeEditor and
+        every page attribute are guaranteed to exist.
+        """
+        initial = self._scopeEditor.current_config()
+
+        # Network graph — apply scope immediately so the initial load filters
+        self._networkPage.on_scope_changed(initial)
+        self._scopeEditor.scope_changed.connect(self._networkPage.on_scope_changed)
+
+        # SiteMap and History — they load their own scope from DB in __init__,
+        # but we still connect so future saves propagate live.
+        self._scopeEditor.scope_changed.connect(self._siteMapPage.on_scope_changed)
+        self._scopeEditor.scope_changed.connect(self._historyPage.on_scope_changed)
+
     def _get_proxy_col(self):
         """Return the global proxy traffic MongoDB collection, or None on error."""
         try:
@@ -521,8 +578,6 @@ class TargetWindow(QtWidgets.QMainWindow):
             repository=self._repo,
             parent=self,
         )
-        if hasattr(self, "_scopeEditor"):
-            self._scopeEditor.scope_changed.connect(self._siteMapPage.on_scope_changed)
         self._siteMapPage.send_to_repeater.connect(self._send_to_repeater)
         self._siteMapPage.sync_requested.connect(self._sync_proxy_traffic)
         self._siteMapPage.traffic_changed.connect(self._debounce_timer.start)
@@ -534,8 +589,6 @@ class TargetWindow(QtWidgets.QMainWindow):
             repository=self._repo,
             parent=self,
         )
-        if hasattr(self, "_scopeEditor"):
-            self._scopeEditor.scope_changed.connect(self._historyPage.on_scope_changed)
         self._historyPage.send_to_repeater.connect(self._send_to_repeater)
         self._historyPage.traffic_changed.connect(self._debounce_timer.start)
         return self._historyPage

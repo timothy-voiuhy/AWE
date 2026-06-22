@@ -1,156 +1,114 @@
 """
-mongod lifecycle manager.
+MongoDB lifecycle manager — Docker-based.
 
-Responsibilities:
-  - Detect whether mongod is already running (ping)
-  - If not, find the mongod binary and start it as a background subprocess
-  - Wait until it is ready to accept connections
-  - Provide a clean shutdown (called via atexit)
+Runs the official mongo:7 image as a named container "awe_mongodb".
+Data persists in ~/.awe/mongodb/data so it survives container restarts.
+Port 27017 is bound to 127.0.0.1 only (not exposed on the network).
 
-Data directory: ~/.awe/mongodb/data/
-Log file:       ~/.awe/mongodb/mongod.log
-PID file:       ~/.awe/mongodb/mongod.pid
+AWE does not require MongoDB to be installed on the host system; the
+container is pulled automatically on first use.
 
-Public API
-──────────
+Public API (unchanged from the old subprocess-based version):
   ensure_running() -> (ok: bool, message: str)
-      Call once at startup. Safe to call multiple times — no-ops if already up.
   shutdown()
-      Gracefully stop the mongod instance AWE started (not one the user started).
+  status() -> dict
 """
 import atexit
 import logging
-import os
-import shutil
-import subprocess
 import time
 from pathlib import Path
 
-from database.mongo import ping, _client
+from database.mongo import ping
 
 logger = logging.getLogger(__name__)
 
-_AWE_HOME = Path.home() / ".awe" / "mongodb"
-_DATA_DIR  = _AWE_HOME / "data"
-_LOG_FILE  = _AWE_HOME / "mongod.log"
-_PID_FILE  = _AWE_HOME / "mongod.pid"
-_PORT      = 27017
+_CONTAINER_NAME = "awe_mongodb"
+_IMAGE          = "mongo:7"
+_PORT           = 27017
+_DATA_DIR       = Path.home() / ".awe" / "mongodb" / "data"
 
-_started_by_us: subprocess.Popen | None = None
+# True only when this AWE session brought the container up
+_started_by_us: bool = False
 
 
 def ensure_running() -> tuple[bool, str]:
-    """
-    Ensure mongod is up.  Returns (True, version_string) or (False, error).
+    """Ensure the MongoDB container is running.
+
+    Returns (True, version_string) on success, (False, error_message) on failure.
+    Safe to call multiple times — no-ops if MongoDB is already reachable.
     """
     global _started_by_us
 
-    # Already running?
+    # Already reachable (container running from a previous session, or system mongo)
     ok, msg = ping()
     if ok:
         return True, msg
 
-    # Find binary
-    mongod_bin = _find_mongod()
-    if not mongod_bin:
-        return False, (
-            "mongod not found. Install MongoDB: https://www.mongodb.com/try/download/community"
-        )
+    # Import here to avoid a circular dependency at module load time
+    try:
+        from containers.docker_manager import manager as docker
+    except Exception as exc:
+        return False, f"Docker manager unavailable: {exc}"
 
-    # Create dirs
+    docker_ok, docker_msg = docker.is_available()
+    if not docker_ok:
+        return False, f"Docker unavailable — cannot start MongoDB: {docker_msg}"
+
     _DATA_DIR.mkdir(parents=True, exist_ok=True)
 
-    logger.info("Starting mongod from %s", mongod_bin)
     try:
-        proc = subprocess.Popen(
-            [
-                mongod_bin,
-                "--dbpath", str(_DATA_DIR),
-                "--logpath", str(_LOG_FILE),
-                "--port",    str(_PORT),
-                "--quiet",
-            ],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+        docker.ensure_service_container(
+            name=_CONTAINER_NAME,
+            image=_IMAGE,
+            ports={"27017/tcp": ("127.0.0.1", _PORT)},
+            volumes={str(_DATA_DIR): {"bind": "/data/db", "mode": "rw"}},
         )
-        _started_by_us = proc
-        _PID_FILE.write_text(str(proc.pid))
+        _started_by_us = True
         atexit.register(shutdown)
-    except OSError as exc:
-        return False, f"Failed to start mongod: {exc}"
+    except Exception as exc:
+        return False, f"Could not start MongoDB container: {exc}"
 
-    # Wait up to 12 seconds for mongod to be ready
-    for attempt in range(24):
+    # Wait up to 15 s for mongod to be ready inside the container
+    for attempt in range(30):
         time.sleep(0.5)
-        if proc.poll() is not None:
-            # Process exited — read last log lines for diagnosis
-            tail = ""
-            try:
-                tail = _LOG_FILE.read_text()[-600:]
-            except Exception:
-                pass
-            return False, f"mongod exited (code {proc.returncode}). Log:\n{tail}"
-
         ok, msg = ping()
         if ok:
-            logger.info("mongod ready after %.1fs", (attempt + 1) * 0.5)
+            logger.info("MongoDB container ready after %.1fs", (attempt + 1) * 0.5)
             return True, msg
 
-    return False, "mongod did not become ready within 12 seconds"
+    return False, "MongoDB container did not become ready within 15 seconds"
 
 
-def shutdown():
-    """Stop the mongod instance AWE started, if we started one."""
+def shutdown() -> None:
+    """Stop the MongoDB container if this AWE session started it."""
     global _started_by_us
-    if _started_by_us is None:
+    if not _started_by_us:
         return
-    proc = _started_by_us
-    if proc.poll() is None:
-        logger.info("Stopping mongod (pid %d)", proc.pid)
-        try:
-            # Prefer clean shutdown via mongo admin command
-            try:
-                c = _client()
-                c.admin.command("shutdown", force=True)
-            except Exception:
-                pass
-            proc.wait(timeout=8)
-        except subprocess.TimeoutExpired:
-            proc.kill()
-    _started_by_us = None
+    logger.info("Stopping MongoDB container (%s)", _CONTAINER_NAME)
     try:
-        _PID_FILE.unlink(missing_ok=True)
-    except Exception:
-        pass
-
-
-def _find_mongod() -> str | None:
-    # 1. PATH
-    found = shutil.which("mongod")
-    if found:
-        return found
-    # 2. Common install locations
-    candidates = [
-        "/usr/bin/mongod",
-        "/usr/local/bin/mongod",
-        "/opt/mongodb/bin/mongod",
-        "/usr/local/mongodb/bin/mongod",
-        str(Path.home() / ".local" / "bin" / "mongod"),
-    ]
-    for c in candidates:
-        if os.path.isfile(c) and os.access(c, os.X_OK):
-            return c
-    return None
+        from containers.docker_manager import manager as docker
+        docker.stop_service_container(_CONTAINER_NAME)
+    except Exception as exc:
+        logger.warning("Error stopping MongoDB container: %s", exc)
+    _started_by_us = False
 
 
 def status() -> dict:
-    """Return a status dict for display in the UI."""
+    """Return a status dict suitable for display in the UI."""
     ok, msg = ping()
-    running_by_us = _started_by_us is not None and _started_by_us.poll() is None
+    container_status = "unknown"
+    try:
+        from containers.docker_manager import manager as docker
+        c = docker.get_container(_CONTAINER_NAME)
+        container_status = c.status if c else "not found"
+    except Exception:
+        pass
     return {
-        "connected": ok,
-        "message":   msg,
-        "managed":   running_by_us,
-        "pid":       _started_by_us.pid if running_by_us else None,
-        "data_dir":  str(_DATA_DIR),
+        "connected":      ok,
+        "message":        msg,
+        "managed":        _started_by_us,
+        "container_name": _CONTAINER_NAME,
+        "container_up":   container_status == "running",
+        "container_status": container_status,
+        "data_dir":       str(_DATA_DIR),
     }

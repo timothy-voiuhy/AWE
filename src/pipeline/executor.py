@@ -56,19 +56,21 @@ class PipelineExecutor(QThread):
         in_scope: list[str] | None = None,
         out_of_scope: list[str] | None = None,
         retry_tool_keys: set[str] | None = None,
+        session_id: str | None = None,
         mongo_uri: str = "mongodb://localhost:27017",
     ):
         super().__init__()
-        self._template        = template
-        self._project_dir     = project_dir
-        self._target          = target
-        self._params          = params or {}
-        self._in_scope        = in_scope or []
-        self._out_of_scope    = out_of_scope or []
-        self._retry_keys      = retry_tool_keys   # None = run all
-        self._mongo_uri       = mongo_uri
-        self._stop_event      = threading.Event()
-        self._session_id      = ""
+        self._template            = template
+        self._project_dir         = project_dir
+        self._target              = target
+        self._params              = params or {}
+        self._in_scope            = in_scope or []
+        self._out_of_scope        = out_of_scope or []
+        self._retry_keys          = retry_tool_keys   # None = run all
+        self._given_session_id    = session_id        # reuse existing if set
+        self._mongo_uri           = mongo_uri
+        self._stop_event          = threading.Event()
+        self._session_id          = ""
 
     def stop(self):
         self._stop_event.set()
@@ -79,22 +81,35 @@ class PipelineExecutor(QThread):
         repo     = AweRepository(self._project_dir, self._mongo_uri)
         settings = SettingsRepository(self._project_dir, self._mongo_uri)
 
-        ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
-        output_dir = os.path.join(
-            self._project_dir, "sessions",
-            f"{self._template.key}_{ts}",
-        )
-        os.makedirs(output_dir, exist_ok=True)
-
-        session_id = repo.create_session(
-            pipeline_key=self._template.key,
-            pipeline_name=self._template.name,
-            target=self._target,
-            output_dir=output_dir,
-            params=self._params,
-            in_scope=self._in_scope,
-            out_of_scope=self._out_of_scope,
-        )
+        if self._given_session_id:
+            # Resume / rerun within an existing session — preserve its output dir
+            session_id = self._given_session_id
+            session_doc = repo.get_session(session_id) or {}
+            output_dir = session_doc.get("output_dir", "")
+            if not output_dir or not os.path.isdir(output_dir):
+                ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+                output_dir = os.path.join(
+                    self._project_dir, "sessions",
+                    f"{self._template.key}_{ts}",
+                )
+            os.makedirs(output_dir, exist_ok=True)
+            repo.update_session_status(session_id, "running")
+        else:
+            ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+            output_dir = os.path.join(
+                self._project_dir, "sessions",
+                f"{self._template.key}_{ts}",
+            )
+            os.makedirs(output_dir, exist_ok=True)
+            session_id = repo.create_session(
+                pipeline_key=self._template.key,
+                pipeline_name=self._template.name,
+                target=self._target,
+                output_dir=output_dir,
+                params=self._params,
+                in_scope=self._in_scope,
+                out_of_scope=self._out_of_scope,
+            )
         self._session_id = session_id
 
         steps = self._template.steps
@@ -191,7 +206,14 @@ class PipelineExecutor(QThread):
                 return "skipped", 0
 
         try:
-            command = tool.build_command(**params)
+            # Use user-overridden command if one has been saved, otherwise
+            # generate from the tool's build_command() with resolved params.
+            override = settings.get_tool_command(step.tool_key)
+            if override:
+                command = override
+                self._emit(step.tool_key, "⚙ Using custom command override")
+            else:
+                command = tool.build_command(**params)
             volumes = tool.get_volumes(output_dir, input_dir_host)
             self._emit(step.tool_key, f"▶ {command[:140]}")
             self._run_container(step.tool_key, tool, command, volumes)
@@ -243,10 +265,15 @@ class PipelineExecutor(QThread):
                     if status:
                         self._emit(tool_key, f"{status} {prog}".strip())
 
-        # Always wrap command in sh -c so pipes / redirects / tee work
+        # Wrap command in sh -c so pipes / redirects / tee work correctly.
+        # entrypoint="" overrides any ENTRYPOINT set in the image — without this,
+        # Docker prepends the image entrypoint to ["sh", "-c", command], causing
+        # e.g. projectdiscovery/subfinder to run  "subfinder sh -c '...'"  instead
+        # of  "sh -c 'subfinder ...'" .
         container = client.containers.run(
             image=tool.image,
             command=["sh", "-c", command],
+            entrypoint="",
             volumes=volumes,
             name=tool.container_name(),
             detach=True,

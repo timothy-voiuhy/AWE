@@ -1,4 +1,4 @@
-FROM golang:1.21-alpine AS builder
+FROM golang:1.24-alpine AS builder
 RUN go install github.com/az7even/ctl@latest 2>/dev/null || \
     go install github.com/imthaghost/ctl@latest 2>/dev/null || true
 # Fallback: use subfinder which supports CTL internally

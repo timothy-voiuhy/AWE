@@ -2,7 +2,7 @@ FROM python:3.9-slim
 RUN apt-get update -qq && apt-get install -y --no-install-recommends git ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 RUN git clone --depth 1 https://github.com/initstring/cloud_enum.git /app/cloud_enum
-RUN pip install --no-cache-dir -r /app/cloud_enum/requirements.txt
+RUN pip install --no-cache-dir requests dnspython
 RUN mkdir /output
 WORKDIR /app/cloud_enum
 ENTRYPOINT ["python3", "cloud_enum.py"]

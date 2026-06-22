@@ -23,13 +23,17 @@ class BrowserWindow(QMainWindow):
         if not Path(self.downloadPath).exists():
             os.makedirs(self.downloadPath)
         self.init_link = link
+        # Hold strong references so PySide6 GC doesn't collect them before
+        # Qt processes acceptCertificate() — without this the call is a silent no-op.
+        self._pending_cert_errors: list = []
         centralWidget = QWidget()
         self.setCentralWidget(centralWidget)
         self.centralWidgetLayout = QVBoxLayout()
         centralWidget.setLayout(self.centralWidgetLayout)
         self.engine_profile = self.setupProfile()
         self.browser = QWebEngineView(self.engine_profile)
-        self.Page = QWebEnginePage()
+        # Must pass the profile so page settings actually apply to the active page.
+        self.Page = QWebEnginePage(self.engine_profile, self.browser)
         # Configure WebEngine for software rendering
         self.Page.settings().setAttribute(QWebEngineSettings.WebAttribute.WebGLEnabled, False)
         self.Page.settings().setAttribute(QWebEngineSettings.WebAttribute.Accelerated2dCanvasEnabled, False)
@@ -62,6 +66,7 @@ class BrowserWindow(QMainWindow):
         QSslConfiguration.setDefaultConfiguration(self.ssl_config)
 
     def browserCertificateError(self, error: QWebEngineCertificateError):
+        self._pending_cert_errors.append(error)  # prevent GC before Qt reads the decision
         error.acceptCertificate()
 
     def setupProfile(self):
@@ -101,6 +106,7 @@ class BrowserWindow(QMainWindow):
 
     def closeProgressBarWidget(self):
         self.browserProgressBar.setVisible(False)
+        self._pending_cert_errors.clear()
 
     # @Slot(int)
     def handleLoadProgress(self, prog):
@@ -123,6 +129,7 @@ class BrowserWindow(QMainWindow):
         self.searchButton = QPushButton()
         self.searchButton.setText("Go")
         self.searchButton.setObjectName("searchButton")
+        self.searchButton.setMinimumWidth(60)
         self.clearButton = HoverButton("✕", "clear the search area")
         self.clearButton.setObjectName("clearButton")
         self.clearButton.setFixedWidth(34)

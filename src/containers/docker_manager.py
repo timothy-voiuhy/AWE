@@ -188,14 +188,72 @@ class DockerManager:
         except Exception as exc:
             yield f"[log stream error: {exc}]"
 
+    # Names of long-lived service containers that should never be pruned
+    SERVICE_CONTAINERS: frozenset[str] = frozenset({"awe_mongodb"})
+
     def prune_stopped(self) -> int:
-        """Remove all stopped AWE containers; return count removed."""
+        """Remove all stopped tool containers; return count removed.
+        Service containers (e.g. awe_mongodb) are intentionally skipped."""
         removed = 0
         for info in self.list_awe_containers():
-            if info["status"] in ("exited", "dead", "created"):
+            if (info["status"] in ("exited", "dead", "created")
+                    and info["name"] not in self.SERVICE_CONTAINERS):
                 self.remove_container(info["full_id"])
                 removed += 1
         return removed
+
+    # ── Service containers (long-running, port-bound) ─────────────────────────
+
+    def ensure_service_container(
+        self,
+        name: str,
+        image: str,
+        ports: dict,
+        volumes: dict,
+        environment: Optional[dict] = None,
+        restart_policy: Optional[dict] = None,
+    ):
+        """Return a running service container, starting or creating it as needed.
+
+        `ports` uses Docker SDK format: {"<port>/tcp": ("<host_ip>", host_port)}
+        If the named container already exists but is stopped it is started rather
+        than recreated (data volumes are preserved).
+        """
+        client = self._get_client()
+        try:
+            container = client.containers.get(name)
+            if container.status != "running":
+                logger.info("Starting existing container %s", name)
+                container.start()
+            return container
+        except NotFound:
+            pass
+
+        if not self.image_exists(image):
+            logger.info("Pulling image %s …", image)
+            for line in self.pull_image(image):
+                logger.debug("pull %s: %s", image, line)
+
+        logger.info("Creating service container %s from %s", name, image)
+        return client.containers.run(
+            image=image,
+            name=name,
+            ports=ports,
+            volumes=volumes,
+            environment=environment or {},
+            restart_policy=restart_policy or {"Name": "unless-stopped"},
+            detach=True,
+        )
+
+    def stop_service_container(self, name: str, timeout: int = 10) -> None:
+        """Stop a named service container without removing it (data is preserved)."""
+        try:
+            container = self._get_client().containers.get(name)
+            if container.status == "running":
+                logger.info("Stopping service container %s", name)
+                container.stop(timeout=timeout)
+        except NotFound:
+            pass
 
 
 # Module-level singleton — safe to import anywhere

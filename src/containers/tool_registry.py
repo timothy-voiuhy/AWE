@@ -63,18 +63,29 @@ class _Amass(ToolConfig):
 
     def get_volumes(self, output_dir: str, input_dir: str | None = None) -> dict:
         os.makedirs(output_dir, exist_ok=True)
-        vols = {output_dir: {"bind": "/.config/amass", "mode": "rw"}}
+        # Mount output dir as /output (amass writes to /output/amass_results.txt via -o)
+        # Also expose it as /.config/amass so amass can persist its graph DB between runs
+        vols = {
+            output_dir: {"bind": "/output", "mode": "rw"},
+        }
         if input_dir:
             vols[input_dir] = {"bind": "/input", "mode": "ro"}
         return vols
 
     def build_command(self, domain: str = "", mode: str = "passive",
                       wordlist: str = "", **_) -> str:
-        cmd = f"enum -d {domain}"
+        # amass v4: enum subcommand requires an explicit mode flag.
+        # -passive  = OSINT/data-source lookups only, no direct DNS probing
+        # -active   = enables direct DNS queries, zone transfers, cert grabs
+        # -brute    = DNS brute-force (requires -w <wordlist>)
+        cmd = f"amass enum -d {domain} -o /output/amass_results.txt"
         if mode == "active":
-            cmd += " -brute -min-for-recursive 2"
-        if wordlist:
-            cmd += f" -w {wordlist}"
+            cmd += " -active"
+            if wordlist:
+                cmd += f" -brute -w {wordlist} -min-for-recursive 2"
+        else:
+            # passive is the safe default — works without any API keys
+            cmd += " -passive"
         return cmd
 
     def param_spec(self):
@@ -82,7 +93,8 @@ class _Amass(ToolConfig):
             {"key": "domain",   "label": "Target domain", "type": "text",  "default": ""},
             {"key": "mode",     "label": "Mode",          "type": "combo",
              "options": ["passive", "active"],            "default": "passive"},
-            {"key": "wordlist", "label": "Wordlist path (optional)", "type": "text", "default": ""},
+            {"key": "wordlist", "label": "Brute-force wordlist (active mode only)",
+             "type": "text", "default": ""},
         ]
 
 
@@ -97,7 +109,7 @@ class _Assetfinder(ToolConfig):
 
     def build_command(self, domain: str = "", subs_only: bool = True, **_) -> str:
         flag = "--subs-only" if subs_only else ""
-        return f"{flag} {domain} | tee /output/assetfinder_results.txt"
+        return f"assetfinder {flag} {domain} | tee /output/assetfinder_results.txt"
 
     def param_spec(self):
         return [
@@ -116,7 +128,7 @@ class _Subfinder(ToolConfig):
 
     def build_command(self, domain: str = "", all_sources: bool = False,
                       silent: bool = True, **_) -> str:
-        cmd = f"-d {domain} -o /output/subfinder_results.txt"
+        cmd = f"subfinder -d {domain} -o /output/subfinder_results.txt"
         if all_sources:
             cmd += " -all"
         if silent:
@@ -142,7 +154,7 @@ class _Sublist3r(ToolConfig):
 
     def build_command(self, domain: str = "", bruteforce: bool = False,
                       threads: str = "10", engines: str = "", **_) -> str:
-        cmd = f"-d {domain} -o /output/sublist3r_results.txt -t {threads} -v"
+        cmd = f"sublist3r -d {domain} -o /output/sublist3r_results.txt -t {threads} -v"
         if bruteforce:
             cmd += " -b"
         if engines:
@@ -168,7 +180,7 @@ class _SubDomainizer(ToolConfig):
     dockerfile: str = _DF + "Dockerfile.subdomainizer"
 
     def build_command(self, url: str = "", cookies: str = "", **_) -> str:
-        cmd = f"-u {url} -o /output/subdomainizer_results.txt -k"
+        cmd = f"python SubDomainizer.py -u {url} -o /output/subdomainizer_results.txt -k"
         if cookies:
             cmd += f" -c '{cookies}'"
         return cmd
@@ -191,22 +203,25 @@ class _ShuffleDNS(ToolConfig):
 
     def build_command(self, domain: str = "", wordlist: str = "/wordlists/all.txt",
                       resolvers: str = "/wordlists/resolvers.txt",
-                      rate: str = "10000", **_) -> str:
+                      threads: str = "10000", **_) -> str:
+        # massdns binary is at /usr/local/bin/massdns — shuffledns auto-detects it.
+        # -r  resolver list  (bundled in image at /wordlists/resolvers.txt)
+        # -w  wordlist for bruteforce
+        # -t  concurrent massdns resolves (default 10000)
         return (
-            f"-d {domain} -w {wordlist} -r {resolvers}"
-            f" -massdns /usr/local/bin/massdns -t {rate}"
-            f" -mode bruteforce -o /output/shuffledns_results.txt -silent"
+            f"shuffledns -d {domain} -w {wordlist} -r {resolvers}"
+            f" -t {threads} -mode bruteforce -o /output/shuffledns_results.txt -silent"
         )
 
     def param_spec(self):
         return [
-            {"key": "domain",    "label": "Target domain",             "type": "text",
+            {"key": "domain",    "label": "Target domain",              "type": "text",
              "default": ""},
-            {"key": "wordlist",  "label": "Wordlist (container path)", "type": "text",
+            {"key": "wordlist",  "label": "Wordlist (container path)",  "type": "text",
              "default": "/wordlists/all.txt"},
             {"key": "resolvers", "label": "Resolvers (container path)", "type": "text",
              "default": "/wordlists/resolvers.txt"},
-            {"key": "rate",      "label": "Rate limit",                "type": "text",
+            {"key": "threads",   "label": "Concurrent resolves",        "type": "text",
              "default": "10000"},
         ]
 
@@ -221,7 +236,9 @@ class _CTL(ToolConfig):
     dockerfile: str = _DF + "Dockerfile.ctl"
 
     def build_command(self, domain: str = "", **_) -> str:
-        return f"-d {domain} -s crtsh -o /output/ctl_results.txt -silent"
+        # Dockerfile entrypoint is ["subfinder", "-s", "crtsh"] — bypassed by sh -c,
+        # so we call subfinder directly with the crtsh source flag.
+        return f"subfinder -d {domain} -s crtsh -o /output/ctl_results.txt -silent"
 
     def param_spec(self):
         return [
@@ -242,7 +259,7 @@ class _DNSx(ToolConfig):
     def build_command(self, domain: str = "", record_types: str = "A,CNAME,MX",
                       silent: bool = True, input_file: str = "", **_) -> str:
         src = f"-l {input_file}" if input_file else f"-d {domain}"
-        cmd = f"{src} -resp -o /output/dnsx_results.txt"
+        cmd = f"dnsx {src} -resp -o /output/dnsx_results.txt"
         for rt in record_types.split(","):
             cmd += f" -{rt.strip().lower()}"
         if silent:
@@ -267,7 +284,7 @@ class _Metabigor(ToolConfig):
     dockerfile: str = _DF + "Dockerfile.metabigor"
 
     def build_command(self, query: str = "", mode: str = "net --org", **_) -> str:
-        return f"{mode} -i '{query}' | tee /output/metabigor_results.txt"
+        return f"metabigor {mode} -i '{query}' | tee /output/metabigor_results.txt"
 
     def param_spec(self):
         return [
@@ -290,7 +307,7 @@ class _Nmap(ToolConfig):
 
     def build_command(self, target: str = "", ports: str = "",
                       flags: str = "-sV -T4", **_) -> str:
-        cmd = f"{flags} {target} -oN /output/nmap_results.txt"
+        cmd = f"nmap {flags} {target} -oN /output/nmap_results.txt"
         if ports:
             cmd += f" -p {ports}"
         return cmd
@@ -314,7 +331,7 @@ class _Naabu(ToolConfig):
     def build_command(self, host: str = "", ports: str = "top-100",
                       rate: str = "1000", input_file: str = "", **_) -> str:
         src = f"-list {input_file}" if input_file else f"-host {host}"
-        return f"{src} -p {ports} -rate {rate} -o /output/naabu_results.txt -silent"
+        return f"naabu {src} -p {ports} -rate {rate} -o /output/naabu_results.txt -silent"
 
     def param_spec(self):
         return [
@@ -340,7 +357,7 @@ class _Httpx(ToolConfig):
         if flags:
             base += f" {flags}"
         src = f"-l {input_file}" if input_file else f"-u {target}"
-        return f"{src} -o /output/httpx_results.txt {base}"
+        return f"httpx {src} -o /output/httpx_results.txt {base}"
 
     def param_spec(self):
         return [
@@ -363,7 +380,7 @@ class _GoSpider(ToolConfig):
     def build_command(self, url: str = "", depth: str = "3",
                       concurrent: str = "10", timeout: str = "300", **_) -> str:
         return (
-            f"-s {url} -c {concurrent} -d {depth} -t 3"
+            f"gospider -s {url} -c {concurrent} -d {depth} -t 3"
             f" -m {timeout} --js --sitemap --robots -a -w -r"
             f" --blacklist '.(jpg|jpeg|gif|png|css|woff|woff2|ico|svg|ttf|eot)'"
             f" -o /output/gospider_results.txt"
@@ -389,7 +406,7 @@ class _Katana(ToolConfig):
     def build_command(self, url: str = "", depth: str = "3",
                       concurrency: str = "20", **_) -> str:
         return (
-            f"-u {url} -d {depth} -jc -j -silent"
+            f"katana -u {url} -d {depth} -jc -j -silent"
             f" -c {concurrency} -p 20 -retry 3 -rd 1 -rl 10"
             f" -timeout 120 -o /output/katana_results.txt"
         )
@@ -413,7 +430,7 @@ class _WaybackURLs(ToolConfig):
 
     def build_command(self, domain: str = "", dates: bool = False, **_) -> str:
         flags = "--dates" if dates else ""
-        return f"{flags} {domain} | tee /output/waybackurls_results.txt"
+        return f"waybackurls {flags} {domain} | tee /output/waybackurls_results.txt"
 
     def param_spec(self):
         return [
@@ -433,7 +450,7 @@ class _GAU(ToolConfig):
 
     def build_command(self, domain: str = "", providers: str = "",
                       threads: str = "1", **_) -> str:
-        cmd = f"--threads {threads} --o /output/gau_results.txt {domain}"
+        cmd = f"gau --threads {threads} --o /output/gau_results.txt {domain}"
         if providers:
             cmd += f" --providers {providers}"
         return cmd
@@ -457,7 +474,7 @@ class _LinkFinder(ToolConfig):
 
     def build_command(self, url: str = "", domain_crawl: bool = True,
                       cookies: str = "", **_) -> str:
-        cmd = f"-i {url} -o cli"
+        cmd = f"python3 linkfinder.py -i {url} -o cli"
         if domain_crawl:
             cmd += " -d"
         if cookies:
@@ -485,7 +502,7 @@ class _XnLinkFinder(ToolConfig):
 
     def build_command(self, url: str = "", depth: str = "2",
                       scope: str = "", cookies: str = "", **_) -> str:
-        cmd = f"-i {url} -o /output/xnlinkfinder_results.txt -d {depth} --no-banner"
+        cmd = f"xnLinkFinder -i {url} -o /output/xnlinkfinder_results.txt -d {depth} --no-banner"
         if scope:
             cmd += f" -sf {scope}"
         if cookies:
@@ -516,7 +533,7 @@ class _FFuf(ToolConfig):
                       threads: str = "40", extensions: str = "",
                       filter_code: str = "404", **_) -> str:
         cmd = (
-            f"-u {url}/FUZZ -w {wordlist} -t {threads}"
+            f"ffuf -u {url}/FUZZ -w {wordlist} -t {threads}"
             f" -fc {filter_code} -o /output/ffuf_results.json -of json -silent"
         )
         if extensions:
@@ -550,7 +567,7 @@ class _CeWL(ToolConfig):
     def build_command(self, url: str = "", depth: str = "2",
                       min_word_length: str = "5", **_) -> str:
         return (
-            f"-d {depth} -m {min_word_length}"
+            f"cewl -d {depth} -m {min_word_length}"
             f" -w /output/cewl_wordlist.txt {url}"
         )
 
@@ -579,7 +596,7 @@ class _Arjun(ToolConfig):
     def build_command(self, url: str = "", method: str = "GET",
                       threads: str = "5", delay: str = "0", **_) -> str:
         return (
-            f"-u {url} -m {method} -t {threads}"
+            f"arjun -u {url} -m {method} -t {threads}"
             f" -d {delay} --stable -o /output/arjun_results.json"
         )
 
@@ -604,7 +621,7 @@ class _Parameth(ToolConfig):
 
     def build_command(self, url: str = "", method: str = "GET",
                       wordlist: str = "", **_) -> str:
-        cmd = f"-u {url} -m {method} -o /output/parameth_results.txt"
+        cmd = f"python3 parameth.py -u {url} -m {method} -o /output/parameth_results.txt"
         if wordlist:
             cmd += f" -p {wordlist}"
         return cmd
@@ -630,7 +647,7 @@ class _X8(ToolConfig):
     def build_command(self, url: str = "", method: str = "GET",
                       workers: str = "10", body_type: str = "urlencode", **_) -> str:
         return (
-            f"-u {url} -o /output/x8_results.txt"
+            f"x8 -u {url} -o /output/x8_results.txt"
             f" --workers {workers} --method {method}"
             f" --body-type {body_type}"
             f" --learn-requests-count 9 --verify-requests-count 3 --value-size 5"
@@ -662,7 +679,7 @@ class _Nuclei(ToolConfig):
                       rate_limit: str = "150", input_file: str = "", **_) -> str:
         src = f"-l {input_file}" if input_file else f"-u {target}"
         cmd = (
-            f"{src} -o /output/nuclei_results.jsonl -jsonl -nh"
+            f"nuclei {src} -o /output/nuclei_results.jsonl -jsonl -nh"
             f" -c {concurrency} -rl {rate_limit} -timeout 10 -retries 1 -bs 25"
         )
         if severity:
@@ -694,7 +711,10 @@ class _GithubRecon(ToolConfig):
     dockerfile: str = _DF + "Dockerfile.github_recon"
 
     def build_command(self, domain: str = "", api_key: str = "", **_) -> str:
-        return f"-d {domain} -t {api_key} | tee /output/github_recon_results.txt"
+        return (
+            f"python3 /app/github-search/github-endpoints.py"
+            f" -d {domain} -t {api_key} | tee /output/github_recon_results.txt"
+        )
 
     def param_spec(self):
         return [
@@ -715,7 +735,7 @@ class _CloudEnum(ToolConfig):
     def build_command(self, keywords: str = "", threads: str = "20",
                       disable_azure: bool = False, disable_gcp: bool = False, **_) -> str:
         kw_flags = " ".join(f"-k {k.strip()}" for k in keywords.split(",") if k.strip())
-        cmd = f"{kw_flags} -t {threads} --logfile /output/cloud_enum_results.txt"
+        cmd = f"python3 cloud_enum.py {kw_flags} -t {threads} --logfile /output/cloud_enum_results.txt"
         if disable_azure:
             cmd += " --disable-azure"
         if disable_gcp:

@@ -45,6 +45,38 @@ class SettingsRepository:
         for k, v in mapping.items():
             self.set(k, v)
 
+    # ── Per-tool command overrides ────────────────────────────────────────────
+    # Stored as key = "tool_cmd:<tool_key>", value = command string
+
+    _CMD_PREFIX = "tool_cmd:"
+
+    def get_tool_command(self, tool_key: str) -> str | None:
+        """Return the user-overridden command string, or None if not set."""
+        return self.get(self._CMD_PREFIX + tool_key, default=None)
+
+    def set_tool_command(self, tool_key: str, command: str):
+        self.set(self._CMD_PREFIX + tool_key, command)
+
+    def reset_tool_command(self, tool_key: str):
+        """Delete the override — tool falls back to build_command()."""
+        self.delete(self._CMD_PREFIX + tool_key)
+
+    def get_all_tool_commands(self) -> dict[str, str]:
+        """Return {tool_key: command} for every stored override."""
+        prefix = self._CMD_PREFIX
+        return {
+            k[len(prefix):]: v
+            for k, v in self.get_all().items()
+            if k.startswith(prefix)
+        }
+
+    def reset_all_tool_commands(self):
+        """Delete every tool command override."""
+        prefix = self._CMD_PREFIX
+        all_keys = [k for k in self.get_all() if k.startswith(prefix)]
+        for k in all_keys:
+            self.delete(k)
+
 
 # Canonical setting keys — used across executor, UI, and tool registry
 class Keys:

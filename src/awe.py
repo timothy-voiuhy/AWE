@@ -443,10 +443,13 @@ class MainWin(QMainWindow, QtCore.QObject):
             self.selectedProjectLabel = QLabel("Select a project to view details")
             self.selectedProjectLabel.setObjectName("selectedProjectLabel")
             self.projectInfoLayout.addRow(QLabel("<b>Name:</b>"), self.selectedProjectLabel)
-            
+
+            self.projectTargetLabel = QLabel("")
+            self.projectInfoLayout.addRow(QLabel("<b>Target:</b>"), self.projectTargetLabel)
+
             self.projectPathLabel = QLabel("")
             self.projectInfoLayout.addRow(QLabel("<b>Path:</b>"), self.projectPathLabel)
-            
+
             self.projectCreatedLabel = QLabel("")
             self.projectInfoLayout.addRow(QLabel("<b>Created:</b>"), self.projectCreatedLabel)
             
@@ -547,7 +550,20 @@ class MainWin(QMainWindow, QtCore.QObject):
             self.projectPathLabel.setText(selected_project['path'])
             self.projectCreatedLabel.setText(selected_project['created'])
             self.choosenProjectDir = selected_project['name']
-            
+
+            # Read target from project.json if available
+            import json as _json
+            _meta_path = os.path.join(selected_project['path'], "project.json")
+            _target = ""
+            try:
+                if os.path.exists(_meta_path):
+                    with open(_meta_path) as _fh:
+                        _m = _json.load(_fh)
+                    _target = _m.get("target") or _m.get("target_url") or ""
+            except Exception:
+                pass
+            self.projectTargetLabel.setText(_target)
+
             # Enable action buttons
             self.openProjectButton.setEnabled(True)
             self.deleteProjectButton.setEnabled(True)
@@ -578,33 +594,72 @@ class MainWin(QMainWindow, QtCore.QObject):
         
         if confirm.exec() == QMessageBox.Ok:
             try:
-                # Recursive delete
-                shutil.rmtree(dir_name)
-
-                # Drop the project's MongoDB database
-                try:
-                    from database.mongo import _safe_db_name, _client
-                    _client().drop_database(_safe_db_name(dir_name))
-                except Exception as db_err:
-                    import logging
-                    logging.getLogger(__name__).warning(
-                        "Could not drop MongoDB database for %s: %s", dir_name, db_err
-                    )
-
-                # Refresh the projects list
-                if self.isProjectsTabOpen:
-                    current_index = self.tabManager.currentIndex()
-                    self.closeTab()
-                    self.addProjectsTab()
-                    self.tabManager.setCurrentIndex(current_index)
+                def _force_remove(func, path, _exc):
+                    try:
+                        os.chmod(path, 0o666)
+                        func(path)
+                    except Exception:
+                        pass
+                shutil.rmtree(dir_name, onerror=_force_remove)
             except Exception as e:
-                error = MessageBox(
-                    "Error", 
-                    f"Failed to delete project: {str(e)}", 
-                    "Critical", 
-                    "Ok"
+                MessageBox("Error", f"Failed to delete project: {str(e)}", "Critical", "Ok").exec()
+                return
+
+            # If some root-owned files blocked rmtree, try elevated deletion
+            if os.path.exists(dir_name):
+                import subprocess
+                try:
+                    result = subprocess.run(
+                        ["pkexec", "rm", "-rf", dir_name],
+                        timeout=30,
+                    )
+                    if result.returncode != 0 or os.path.exists(dir_name):
+                        MessageBox(
+                            "Deletion Failed",
+                            f"Could not delete project even with elevated permissions.\n"
+                            f"Path: {dir_name}",
+                            "Critical",
+                            "Ok",
+                        ).exec()
+                        return
+                except FileNotFoundError:
+                    MessageBox(
+                        "Permission Denied",
+                        f"Some files in this project are owned by root (written by Docker).\n"
+                        f"pkexec is not available on this system.\n\n"
+                        f"Run manually:\n  sudo rm -rf '{dir_name}'",
+                        "Warning",
+                        "Ok",
+                    ).exec()
+                    return
+                except subprocess.TimeoutExpired:
+                    MessageBox("Deletion Failed", "Authentication timed out.", "Warning", "Ok").exec()
+                    return
+
+            # Directory confirmed gone — drop the MongoDB database and update UI
+            try:
+                from database.mongo import _safe_db_name, _client
+                _client().drop_database(_safe_db_name(dir_name))
+            except Exception as db_err:
+                import logging
+                logging.getLogger(__name__).warning(
+                    "Could not drop MongoDB database for %s: %s", dir_name, db_err
                 )
-                error.exec()
+
+            self.projects_info = [
+                p for p in self.projects_info
+                if p["name"] != self.choosenProjectDir
+            ]
+            self.dirsModel.setStringList(
+                [p["name"] for p in self.projects_info]
+            )
+            self.choosenProjectDir = ""
+            self.selectedProjectLabel.setText("Select a project to view details")
+            self.projectTargetLabel.setText("")
+            self.projectPathLabel.setText("")
+            self.projectCreatedLabel.setText("")
+            self.openProjectButton.setEnabled(False)
+            self.deleteProjectButton.setEnabled(False)
 
     def openChoosenProject(self):
         if hasattr(self, 'choosenProjectDir') and self.choosenProjectDir:
@@ -675,17 +730,37 @@ class MainWin(QMainWindow, QtCore.QObject):
         # Strip protocol so we store just the bare domain
         target_domain = target_url.replace("https://", "").replace("http://", "").rstrip("/").split("/")[0]
         projectDirectory = os.path.join(self.defaultWorkspaceDir, tab_name)
-        if not Path(projectDirectory).exists():
-            os.makedirs(projectDirectory)
-        # Persist project metadata so it survives restarts
-        meta = {
-            "name":       tab_name,
-            "target_url": target_url,
-            "target":     target_domain,
-            "created_at": datetime.now().isoformat(),
-        }
-        with open(os.path.join(projectDirectory, "project.json"), "w") as fh:
-            json.dump(meta, fh, indent=2)
+        try:
+            if not Path(projectDirectory).exists():
+                os.makedirs(projectDirectory)
+            else:
+                # Directory may be root-owned from a previous Docker run — fix permissions
+                try:
+                    os.chmod(projectDirectory, 0o755)
+                except OSError:
+                    pass
+            # Persist project metadata so it survives restarts
+            meta = {
+                "name":       tab_name,
+                "target_url": target_url,
+                "target":     target_domain,
+                "created_at": datetime.now().isoformat(),
+            }
+            with open(os.path.join(projectDirectory, "project.json"), "w") as fh:
+                json.dump(meta, fh, indent=2)
+        except PermissionError as exc:
+            MessageBox(
+                "Permission Denied",
+                f"Cannot create project in:\n{projectDirectory}\n\n"
+                f"The directory may be owned by root (created by a Docker container).\n"
+                f"Run:  sudo chown -R $USER '{projectDirectory}'\nthen try again.",
+                "Critical",
+                "Ok",
+            ).exec()
+            return
+        except OSError as exc:
+            MessageBox("Error", f"Failed to create project:\n{exc}", "Critical", "Ok").exec()
+            return
         self.openProjectCount += 1
         self.mainWindowInstance = targetWindow.TargetWindow(projectDirectory,
                                                             self.proxy_port,
@@ -696,6 +771,15 @@ class MainWin(QMainWindow, QtCore.QObject):
         self.tabManager.setCurrentIndex(
             self.tabManager.indexOf(self.mainWindowInstance)
         )
+        # Refresh the Projects dashboard list so the new project is immediately visible
+        if hasattr(self, "projects_info") and hasattr(self, "dirsModel"):
+            new_entry = {
+                "name":    tab_name,
+                "path":    projectDirectory,
+                "created": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            }
+            self.projects_info.insert(0, new_entry)
+            self.dirsModel.setStringList([p["name"] for p in self.projects_info])
         self.newTargetWindow.close()
 
     def AddTargetTab(self, directory=""):

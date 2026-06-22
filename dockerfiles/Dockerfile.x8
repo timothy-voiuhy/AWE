@@ -1,11 +1,11 @@
-FROM rust:1.70-slim AS builder
+FROM rust:1.88-slim AS builder
 RUN apt-get update -qq && apt-get install -y --no-install-recommends \
     pkg-config libssl-dev && rm -rf /var/lib/apt/lists/*
 RUN cargo install x8
 
-FROM debian:bullseye-slim
+FROM debian:bookworm-slim
 RUN apt-get update -qq && apt-get install -y --no-install-recommends \
-    ca-certificates libssl1.1 && rm -rf /var/lib/apt/lists/*
+    ca-certificates libssl3 && rm -rf /var/lib/apt/lists/*
 COPY --from=builder /usr/local/cargo/bin/x8 /usr/local/bin/x8
 RUN mkdir /output
 ENTRYPOINT ["x8"]

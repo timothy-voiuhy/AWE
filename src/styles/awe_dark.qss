@@ -673,6 +673,7 @@ QWebEngineView {
     color: #1E1E2E;
 }
 
+
 /* ── WAPPALYZER PANEL ────────────────────────────────────── */
 #wappalzer {
     background-color: #181825;

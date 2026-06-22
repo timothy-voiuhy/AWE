@@ -254,6 +254,22 @@ class AweRepository:
         )
         return [d["tool_key"] for d in cursor]
 
+    def get_tool_run_statuses(self, session_id: str) -> dict[str, str]:
+        """Return {tool_key: status} for all tool runs in this session."""
+        cursor = self._db.tool_runs.find(
+            {"session_id": session_id},
+            {"tool_key": 1, "status": 1},
+        )
+        return {d["tool_key"]: d["status"] for d in cursor}
+
+    def reset_running_tool_runs(self, session_id: str) -> None:
+        """Mark any still-running or pending tool runs as failed.
+        Called before resuming a session that was interrupted by app close."""
+        self._db.tool_runs.update_many(
+            {"session_id": session_id, "status": {"$in": ["running", "pending"]}},
+            {"$set": {"status": "failed", "error_msg": "interrupted (app closed)"}},
+        )
+
     # ── Custom Pipelines ──────────────────────────────────────────────────────
 
     def save_custom_pipeline(self, pipeline_dict: dict):

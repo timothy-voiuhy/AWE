@@ -18,6 +18,25 @@ import httpx
 from proxy._http import strip_hop_by_hop
 from proxy._models import ProxyResponse
 
+
+def _build_accept_encoding() -> str:
+    """Encodings httpx can decode with currently-installed packages."""
+    parts = ["gzip", "deflate", "identity"]
+    try:
+        import brotli  # noqa: F401
+        parts.insert(0, "br")
+    except ImportError:
+        pass
+    try:
+        import zstandard  # noqa: F401
+        parts.insert(0, "zstd")
+    except ImportError:
+        pass
+    return ", ".join(parts)
+
+
+_ACCEPT_ENCODING = _build_accept_encoding()
+
 log = logging.getLogger(__name__)
 
 
@@ -53,6 +72,11 @@ class UpstreamClient:
         body: bytes,
     ) -> ProxyResponse:
         clean = strip_hop_by_hop(headers)
+        # Replace the browser's Accept-Encoding with only what httpx can decode.
+        # Forwarding encodings we can't decompress (e.g. br without brotli installed)
+        # causes the proxy to send compressed bytes with no Content-Encoding header.
+        clean = [(k, v) for k, v in clean if k.lower() != "accept-encoding"]
+        clean.append(("Accept-Encoding", _ACCEPT_ENCODING))
         try:
             r = await self._client.request(method, url, headers=clean, content=body)
         except httpx.TimeoutException as exc:
