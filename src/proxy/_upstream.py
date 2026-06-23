@@ -66,6 +66,12 @@ class UpstreamClient:
             ),
         )
 
+    def _clean_headers(self, headers: list[tuple[str, str]]) -> list[tuple[str, str]]:
+        clean = strip_hop_by_hop(headers)
+        clean = [(k, v) for k, v in clean if k.lower() != "accept-encoding"]
+        clean.append(("Accept-Encoding", _ACCEPT_ENCODING))
+        return clean
+
     async def request(
         self,
         method: str,
@@ -73,12 +79,7 @@ class UpstreamClient:
         headers: list[tuple[str, str]],
         body: bytes,
     ) -> ProxyResponse:
-        clean = strip_hop_by_hop(headers)
-        # Replace the browser's Accept-Encoding with only what httpx can decode.
-        # Forwarding encodings we can't decompress (e.g. br without brotli installed)
-        # causes the proxy to send compressed bytes with no Content-Encoding header.
-        clean = [(k, v) for k, v in clean if k.lower() != "accept-encoding"]
-        clean.append(("Accept-Encoding", _ACCEPT_ENCODING))
+        clean = self._clean_headers(headers)
         try:
             r = await self._client.request(method, url, headers=clean, content=body)
         except httpx.TimeoutException as exc:
@@ -102,6 +103,75 @@ class UpstreamClient:
             headers=resp_headers,
             body=r.content,
         )
+
+    async def stream_sse(
+        self,
+        method: str,
+        url: str,
+        headers: list[tuple[str, str]],
+        body: bytes,
+        writer: "asyncio.StreamWriter",
+    ) -> tuple[bool, ProxyResponse]:
+        """
+        Stream an SSE (text/event-stream) response directly to *writer*.
+
+        Returns (wrote_to_client, ProxyResponse).
+        - wrote_to_client=True  → headers + body already sent; caller must NOT
+                                   call build_response / writer.write again.
+        - wrote_to_client=False → upstream failed before anything was sent;
+                                   caller should write the returned error response.
+        """
+        import asyncio
+        # Force identity encoding — compressed SSE would be garbled on the wire
+        clean = strip_hop_by_hop(headers)
+        clean = [(k, v) for k, v in clean if k.lower() != "accept-encoding"]
+        clean.append(("Accept-Encoding", "identity"))
+
+        try:
+            async with self._client.stream(method, url, headers=clean, content=body) as r:
+                resp_headers = [
+                    (k, v) for k, v in r.headers.multi_items()
+                    if k.lower() not in (
+                        "content-encoding", "content-length", "transfer-encoding"
+                    )
+                ]
+                # Write status line + headers — no Content-Length (stream is open-ended)
+                hblock = "".join(f"{k}: {v}\r\n" for k, v in resp_headers)
+                writer.write(
+                    f"HTTP/1.1 {r.status_code} {r.reason_phrase or ''}\r\n"
+                    f"{hblock}\r\n".encode("iso-8859-1")
+                )
+                await writer.drain()
+
+                async for chunk in r.aiter_bytes():
+                    if not chunk:
+                        continue
+                    try:
+                        writer.write(chunk)
+                        await writer.drain()
+                    except OSError:
+                        break   # client disconnected mid-stream
+
+                capture_resp = ProxyResponse(
+                    status_code=r.status_code,
+                    reason=r.reason_phrase or "",
+                    http_version=r.http_version,
+                    headers=resp_headers,
+                    body=b"[SSE stream]",
+                )
+                return True, capture_resp
+
+        except httpx.TimeoutException as exc:
+            log.warning("SSE upstream timeout: %s %s — %s", method, url, exc)
+            return False, _error_response(504, "Gateway Timeout", str(exc))
+        except httpx.ConnectError as exc:
+            log.warning("SSE upstream connect error: %s %s — %s", method, url, exc)
+            return False, _error_response(502, "Bad Gateway", str(exc))
+        except (OSError, asyncio.CancelledError):
+            return True, _error_response(0, "", "")   # client closed first
+        except Exception as exc:
+            log.exception("SSE upstream unexpected error: %s %s", method, url)
+            return False, _error_response(502, "Bad Gateway", str(exc))
 
     async def aclose(self) -> None:
         try:

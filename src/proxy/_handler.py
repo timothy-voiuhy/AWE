@@ -203,6 +203,23 @@ class ConnectionHandler:
                 headers  = new_hdrs if new_hdrs else headers
                 body     = decision_body(decision, body)
 
+            # SSE — stream directly to client, skip buffering / rules / keep-alive
+            if "text/event-stream" in header_map(headers).get("accept", ""):
+                wrote, response = await self._upstream.stream_sse(
+                    method, url, headers, body, writer,
+                )
+                self._traffic.capture(host, method, url, headers, body, response)
+                if not wrote:
+                    try:
+                        writer.write(build_response(
+                            response.status_code, response.reason,
+                            response.headers, response.body,
+                        ))
+                        await writer.drain()
+                    except OSError:
+                        pass
+                break   # SSE connections don't keep-alive
+
             response = await self._upstream.request(method, url, headers, body)
 
             # Apply match-and-replace to the response
@@ -264,6 +281,23 @@ class ConnectionHandler:
                 new_hdrs = decision_headers(decision)
                 headers  = new_hdrs if new_hdrs else headers
                 body     = decision_body(decision, body)
+
+            # SSE — stream directly to client
+            if "text/event-stream" in header_map(headers).get("accept", ""):
+                wrote, response = await self._upstream.stream_sse(
+                    method, url, headers, body, self._writer,
+                )
+                self._traffic.capture(host, method, url, headers, body, response)
+                if not wrote:
+                    try:
+                        self._writer.write(build_response(
+                            response.status_code, response.reason,
+                            response.headers, response.body,
+                        ))
+                        await self._writer.drain()
+                    except OSError:
+                        pass
+                break   # SSE connections don't keep-alive
 
             response = await self._upstream.request(method, url, headers, body)
 
