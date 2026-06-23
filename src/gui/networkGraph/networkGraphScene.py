@@ -494,7 +494,13 @@ class NetworkGraphScene(QGraphicsScene):
         osint_ids   = [c for c, k in children.get(target.id, []) if k == "is_osint"]
 
         def _kids(nid: str, *kinds) -> list[str]:
-            return [c for c, k in children.get(nid, []) if k in kinds and c in nmap]
+            seen: set[str] = set()
+            result = []
+            for c, k in children.get(nid, []):
+                if k in kinds and c in nmap and c not in seen:
+                    seen.add(c)
+                    result.append(c)
+            return result
 
         def _all_kids(nid: str, *kinds) -> list[str]:
             """Like _kids but includes hidden-by-default node kinds (endpoint/param)."""

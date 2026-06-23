@@ -80,14 +80,23 @@ class SettingsRepository:
 
 # Canonical setting keys — used across executor, UI, and tool registry
 class Keys:
+    # API credentials
     GITHUB_TOKEN        = "github_token"
     SHODAN_KEY          = "shodan_api_key"
-    RESOLVER_PATH       = "resolver_path"        # inside container
-    DEFAULT_WORDLIST    = "default_wordlist"     # inside container
+    # Tool paths (container-relative)
+    RESOLVER_PATH       = "resolver_path"
+    DEFAULT_WORDLIST    = "default_wordlist"
     NUCLEI_TEMPLATES    = "nuclei_templates_path"
+    # Scan defaults
     DEFAULT_THREADS     = "default_threads"
     DEFAULT_RATE_LIMIT  = "default_rate_limit"
     DEFAULT_CONCURRENCY = "default_concurrency"
+    # Proxy
+    PROXY_PORT          = "proxy_listen_port"
+    UPSTREAM_PROXY      = "upstream_proxy_url"
+    # Display
+    EDITOR_FONT_SIZE    = "editor_font_size"
+    # Internal
     MONGO_URI           = "mongo_uri"
 
 DEFAULTS = {
@@ -96,4 +105,7 @@ DEFAULTS = {
     Keys.DEFAULT_THREADS:     "10",
     Keys.DEFAULT_RATE_LIMIT:  "150",
     Keys.DEFAULT_CONCURRENCY: "25",
+    Keys.PROXY_PORT:          "8080",
+    Keys.UPSTREAM_PROXY:      "",
+    Keys.EDITOR_FONT_SIZE:    "9",
 }

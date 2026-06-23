@@ -14,7 +14,7 @@ from PySide6.QtWidgets import (
 
 from gui.guiUtilities import MessageBox, HoverButton
 from gui.threadrunners import WhoisThreadRunner
-from utiliities import red, rm_same, yellow, runWhoisOnTarget
+from utilities import red, rm_same, yellow, runWhoisOnTarget
 
 
 # ── Reusable UI helpers ───────────────────────────────────────────────────────
@@ -110,7 +110,7 @@ def _divider() -> QFrame:
     return f
 
 
-class LeftDock(QObject):
+class TargetInfoPanel(QObject):
     openLinkInBrw = Signal(str)
 
     def __init__(self, main_window,
@@ -136,15 +136,17 @@ class LeftDock(QObject):
         self.topParent.socketIpc.processFinishedExecution.connect(self.display_whois_results)
 
         # ── Dock shell ────────────────────────────────────────────────────────
-        self.leftDockWidget = QWidget()
+        self._panel_widget = QWidget()
+        self._panel_widget.setStyleSheet("background: #1E1E2E;")
+        self._panel_widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         if not self._embed:
-            self.leftDock = QDockWidget()
-            self.leftDock.setTitleBarWidget(QWidget())
-            self.leftDock.setWidget(self.leftDockWidget)
-            self.leftDockArea = Qt.DockWidgetArea()
-            self.main_window.addDockWidget(self.leftDockArea.LeftDockWidgetArea, self.leftDock)
+            self._dock = QDockWidget()
+            self._dock.setTitleBarWidget(QWidget())
+            self._dock.setWidget(self._panel_widget)
+            self._dockArea = Qt.DockWidgetArea()
+            self.main_window.addDockWidget(self._dockArea.LeftDockWidgetArea, self._dock)
 
-        root_vbox = QVBoxLayout(self.leftDockWidget)
+        root_vbox = QVBoxLayout(self._panel_widget)
         root_vbox.setContentsMargins(0, 0, 0, 0)
         root_vbox.setSpacing(0)
 
@@ -214,6 +216,7 @@ class LeftDock(QObject):
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.NoFrame)
         scroll.setStyleSheet("QScrollArea { background: #1E1E2E; border: none; }")
+        scroll.viewport().setStyleSheet("background: #1E1E2E;")
         body_widget = QWidget()
         body_widget.setStyleSheet("background: #1E1E2E;")
         body_vbox = QVBoxLayout(body_widget)
@@ -406,10 +409,10 @@ class LeftDock(QObject):
             if ret == QMessageBox.Ok:
                 self.draw_location_table()
 
-    def InitializeLeftDock(self):
+    def widget(self):
         if self._embed:
-            return self.leftDockWidget
-        return self.leftDock
+            return self._panel_widget
+        return self._dock
 
     def draw_location_table(self):
         if not self.location_table_drawn:

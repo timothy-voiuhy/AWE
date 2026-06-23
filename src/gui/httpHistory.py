@@ -6,7 +6,7 @@ Clicking a row loads the full request/response in the pane below.
 Filter by scope is ON by default.
 Data comes from MongoDB (awe_proxy_traffic.traffic).
 
-Columns:  #  |  Method  |  Host  |  Path  |  Status  |  Length
+Columns:  #  |  Type  |  Method  |  Host  |  Path  |  Status  |  Length
 """
 from __future__ import annotations
 
@@ -23,48 +23,56 @@ from PySide6.QtWidgets import (
 )
 
 from database.scope import ScopeConfig
+from gui.appearance import load_ui_settings, save_ui_settings
+from gui.filterPanel import (
+    FilterPanel, _status_cat, _status_color, _file_type, _looks_like_rsc,
+    _RSC_LINE_RE,
+)
 from gui.guiUtilities import (
     SyntaxHighlighter, format_http_body, SearchBar,
     decode_text, DecodeDialog,
     parse_http_headers, set_header_clipboard, HeaderSelectorDialog,
+    ResponseRenderView,
 )
 
 log = logging.getLogger(__name__)
 
-_COLS = ["#", "Method", "Host", "Path", "Status", "Length"]
+_COLS = ["#", "Type", "Method", "Host", "Path", "Status", "Length"]
+_COL_SEQ    = 0
+_COL_TYPE   = 1
+_COL_METHOD = 2
+_COL_HOST   = 3
+_COL_PATH   = 4
+_COL_STATUS = 5
+_COL_LEN    = 6
+
+_SSE_FG  = "#CBA6F7"
+_SSE_ROW = "#1E1A2E"
+_RSC_FG  = "#89DCEB"
+_RSC_ROW = "#0F1F22"
 
 
-def _status_color(code) -> str:
-    try:
-        c = int(code)
-    except (TypeError, ValueError):
-        return "#6C7086"
-    if 200 <= c < 300: return "#A6E3A1"
-    if 300 <= c < 400: return "#89B4FA"
-    if 400 <= c < 500: return "#F9E2AF"
-    if 500 <= c < 600: return "#F38BA8"
-    return "#6C7086"
-
+# ── Main page ─────────────────────────────────────────────────────────────────
 
 class HttpHistoryPage(QWidget):
     send_to_repeater   = Signal(str)
     send_to_intruder   = Signal(str)
-    send_to_websocket  = Signal(str, str)   # (host, path)
+    send_to_websocket  = Signal(str, str)
     traffic_changed    = Signal()
 
     def __init__(self, proxy_col, repository=None, parent=None):
         super().__init__(parent)
-        self._col          = proxy_col   # pymongo Collection or None
+        self._col          = proxy_col
         self._repo         = repository
         self._scope        = ScopeConfig()
         self._filter_scope = True
         self._last_count   = -1
-        # (timestamp_str, doc_id_str) per visible row
         self._rows: list[tuple[str, str]] = []
 
         self._build_ui()
         self._scope_btn.setChecked(True)
         self._load_scope()
+        self._restore_saved_filters()
         self._refresh_table()
         self._start_poll_timer()
 
@@ -86,10 +94,11 @@ class HttpHistoryPage(QWidget):
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
 
-        # toolbar
+        # ── Toolbar ───────────────────────────────────────────────────────────
         tb = QHBoxLayout()
         tb.setContentsMargins(8, 6, 8, 6)
-        tb.setSpacing(10)
+        tb.setSpacing(8)
+
         title = QLabel("HTTP History")
         title.setStyleSheet("color:#CDD6F4; font-weight:bold; font-size:11px;")
         tb.addWidget(title)
@@ -99,31 +108,70 @@ class HttpHistoryPage(QWidget):
         self._count_lbl.setStyleSheet("color:#6C7086; font-size:9px;")
         tb.addWidget(self._count_lbl)
 
-        self._scope_btn = QPushButton("Filter by Scope: ON")
+        self._filter_active_lbl = QLabel("")
+        self._filter_active_lbl.setStyleSheet(
+            "color:#F9E2AF; font-size:9px; background:#2A2A1A;"
+            " border:1px solid #45475A; border-radius:3px; padding:0 6px;"
+        )
+        self._filter_active_lbl.setVisible(False)
+        tb.addWidget(self._filter_active_lbl)
+
+        self._scope_btn = QPushButton("Scope: ON")
         self._scope_btn.setCheckable(True)
         self._scope_btn.setFixedHeight(24)
         self._scope_btn.setStyleSheet(_TOGGLE_SS_ON)
         self._scope_btn.toggled.connect(self._on_scope_toggle)
         tb.addWidget(self._scope_btn)
 
+        self._filter_btn = QPushButton("Filters ▾")
+        self._filter_btn.setCheckable(True)
+        self._filter_btn.setFixedHeight(24)
+        self._filter_btn.setStyleSheet(_BTN_SS)
+        self._filter_btn.toggled.connect(self._on_filter_toggle)
+        tb.addWidget(self._filter_btn)
+
+        self._reset_btn = QPushButton("Reset")
+        self._reset_btn.setFixedHeight(24)
+        self._reset_btn.setStyleSheet(_BTN_SS)
+        self._reset_btn.clicked.connect(self._on_filter_reset)
+        self._reset_btn.setVisible(False)
+        tb.addWidget(self._reset_btn)
+
         ref_btn = QPushButton("Refresh")
         ref_btn.setFixedHeight(24)
         ref_btn.setStyleSheet(_BTN_SS)
         ref_btn.clicked.connect(self.refresh)
         tb.addWidget(ref_btn)
+
         root.addLayout(tb)
 
+        # ── Separator ─────────────────────────────────────────────────────────
         sep = QFrame()
         sep.setFrameShape(QFrame.HLine)
         sep.setFixedHeight(1)
         sep.setStyleSheet("background:#313244; border:none;")
         root.addWidget(sep)
 
+        # ── Filter panel (hidden by default) ──────────────────────────────────
+        self._filter_panel = FilterPanel(sections=FilterPanel.ALL_SECTIONS)
+        self._filter_panel.setVisible(False)
+        self._filter_panel.changed.connect(self._on_filter_changed)
+        root.addWidget(self._filter_panel)
+
+        sep2 = QFrame()
+        sep2.setFrameShape(QFrame.HLine)
+        sep2.setFixedHeight(1)
+        sep2.setStyleSheet("background:#313244; border:none;")
+        sep2.setObjectName("filter_sep")
+        sep2.setVisible(False)
+        self._filter_sep = sep2
+        root.addWidget(sep2)
+
+        # ── Table + request/response pane ─────────────────────────────────────
         splitter = QSplitter(Qt.Vertical)
         splitter.setChildrenCollapsible(False)
         splitter.setStyleSheet("QSplitter::handle{background:#313244;height:3px;}")
 
-        # table
         self._table = QTableWidget(0, len(_COLS))
         self._table.setHorizontalHeaderLabels(_COLS)
         self._table.setSelectionBehavior(QAbstractItemView.SelectRows)
@@ -132,7 +180,7 @@ class HttpHistoryPage(QWidget):
         self._table.setAlternatingRowColors(True)
         self._table.verticalHeader().setVisible(False)
         self._table.horizontalHeader().setStretchLastSection(False)
-        self._table.horizontalHeader().setSectionResizeMode(3, QHeaderView.Stretch)
+        self._table.horizontalHeader().setSectionResizeMode(_COL_PATH, QHeaderView.Stretch)
         self._table.setShowGrid(False)
         self._table.setStyleSheet(
             "QTableWidget{background:#1E1E2E; alternate-background-color:#181825;"
@@ -142,7 +190,8 @@ class HttpHistoryPage(QWidget):
             " border:none; border-bottom:1px solid #313244; padding:4px 8px;"
             " font-size:9px;}"
         )
-        for col, w in [(0, 45), (1, 65), (2, 200), (4, 55), (5, 70)]:
+        for col, w in [(_COL_SEQ, 45), (_COL_TYPE, 42), (_COL_METHOD, 65),
+                       (_COL_HOST, 200), (_COL_STATUS, 55), (_COL_LEN, 70)]:
             self._table.setColumnWidth(col, w)
         self._table.currentCellChanged.connect(self._on_row_changed)
         self._table.setContextMenuPolicy(Qt.CustomContextMenu)
@@ -160,8 +209,10 @@ class HttpHistoryPage(QWidget):
         )
         self._req_view  = _CodeView()
         self._resp_view = _CodeView()
-        self._tabs.addTab(self._req_view,  "Request")
-        self._tabs.addTab(self._resp_view, "Response")
+        self._render_view = ResponseRenderView()
+        self._tabs.addTab(self._req_view,    "Request")
+        self._tabs.addTab(self._resp_view,   "Response")
+        self._tabs.addTab(self._render_view, "Render")
         self._req_view.send_to_repeater.connect(self.send_to_repeater)
         self._req_view.send_to_intruder.connect(self.send_to_intruder)
         self._resp_view.send_to_repeater.connect(
@@ -174,26 +225,45 @@ class HttpHistoryPage(QWidget):
         self._search_bar.set_editor(self._req_view)
         rr_vb.addWidget(self._search_bar)
 
-        self._tabs.currentChanged.connect(
-            lambda _: self._search_bar.set_editor(self._tabs.currentWidget()))
+        self._current_doc: dict | None = None
+
+        def _on_tab_changed(idx: int) -> None:
+            current = self._tabs.widget(idx)
+            is_render = current is self._render_view
+            self._render_view.on_tab_visibility_changed(is_render)
+            self._search_bar.setVisible(not is_render)
+            if is_render:
+                self._render_current_response()
+            else:
+                self._search_bar.set_editor(current)
+
+        self._tabs.currentChanged.connect(_on_tab_changed)
         self._req_view.installEventFilter(self)
         self._resp_view.installEventFilter(self)
 
         splitter.addWidget(rr)
-
         splitter.setSizes([350, 300])
         root.addWidget(splitter, stretch=1)
 
     # ── table population ──────────────────────────────────────────────────────
 
     def _refresh_table(self) -> None:
+        # Remember which document was selected so we can restore it silently.
+        cur = self._table.currentRow()
+        _selected_id = (
+            self._rows[cur][1] if 0 <= cur < len(self._rows) else None
+        )
+
+        self._table.setUpdatesEnabled(False)
+        self._table.blockSignals(True)   # suppress currentCellChanged while rebuilding
         self._table.setRowCount(0)
+        self._table.blockSignals(False)
         self._rows.clear()
-        self._req_view.clear()
-        self._resp_view.clear()
+        # Don't touch req/resp views here — content stays visible during rebuild.
 
         if self._col is None:
             self._count_lbl.setText("database unavailable")
+            self._table.setUpdatesEnabled(True)
             return
 
         try:
@@ -201,6 +271,7 @@ class HttpHistoryPage(QWidget):
         except Exception as exc:
             log.warning("History DB query failed: %s", exc)
             self._count_lbl.setText("DB error")
+            self._table.setUpdatesEnabled(True)
             return
 
         in_scope = [
@@ -209,48 +280,112 @@ class HttpHistoryPage(QWidget):
         ]
         if not in_scope:
             self._count_lbl.setText("0 requests")
+            self._table.setUpdatesEnabled(True)
             return
 
         try:
             cursor = self._col.find(
                 {"host": {"$in": in_scope}},
-                {"host": 1, "path": 1, "method": 1,
-                 "status_code": 1, "timestamp": 1,
-                 "response.body": 1},
+                {"host": 1, "path": 1, "method": 1, "status_code": 1,
+                 "timestamp": 1, "is_sse": 1, "is_rsc": 1,
+                 "request.headers": 1, "request.body": 1,
+                 "response.body": 1, "response.headers": 1},
                 sort=[("timestamp", 1)],
             )
             docs = list(cursor)
         except Exception as exc:
             log.warning("History find failed: %s", exc)
+            self._table.setUpdatesEnabled(True)
             return
 
-        self._table.setUpdatesEnabled(False)
-        for seq, doc in enumerate(docs, start=1):
+        fp = self._filter_panel
+        seq = 0
+        for doc in docs:
+            req  = doc.get("request") or {}
+            resp = doc.get("response") or {}
+            body = resp.get("body", "")
+
+            ct = str((resp.get("headers") or {}).get("content-type", "")).lower()
+
+            # SSE detection (stored flag + legacy fallback)
+            is_sse = doc.get("is_sse", False)
+            if not is_sse:
+                is_sse = body == "[SSE stream]" or "text/event-stream" in ct
+
+            # RSC detection (stored flag + legacy fallback)
+            is_rsc = doc.get("is_rsc", False) if not is_sse else False
+            if not is_rsc and not is_sse:
+                is_rsc = "text/x-component" in ct or _looks_like_rsc(body)
+
+            length = len(body.encode("utf-8", errors="replace")) if body else 0
+
+            if not fp.passes(doc, req, resp, body, is_sse, is_rsc, length):
+                continue
+
+            seq   += 1
             ts     = doc.get("timestamp", "")
             host   = doc.get("host", "")
             path   = doc.get("path", "/")
             method = doc.get("method", "?")
             status = str(doc.get("status_code", "?"))
-            body   = (doc.get("response") or {}).get("body", "")
-            length = str(len(body.encode("utf-8", errors="replace"))) if body else "0"
             doc_id = str(doc["_id"])
 
-            color = QColor(_status_color(status))
-            row   = self._table.rowCount()
+            status_col = QColor(_status_color(status))
+            if is_sse:
+                row_bg   = QColor(_SSE_ROW)
+                type_lbl = "SSE"
+                type_fg  = QColor(_SSE_FG)
+            elif is_rsc:
+                row_bg   = QColor(_RSC_ROW)
+                type_lbl = "RSC"
+                type_fg  = QColor(_RSC_FG)
+            else:
+                row_bg   = None
+                type_lbl = ""
+                type_fg  = QColor("#313244")
+
+            row = self._table.rowCount()
             self._table.insertRow(row)
             self._rows.append((ts, doc_id))
 
-            for col, text in enumerate([str(seq), method, host, path, status, length]):
+            cells = [
+                (_COL_SEQ,    str(seq),  QColor("#6C7086")),
+                (_COL_TYPE,   type_lbl,  type_fg),
+                (_COL_METHOD, method,    QColor("#89B4FA")),
+                (_COL_HOST,   host,      QColor("#CDD6F4")),
+                (_COL_PATH,   path,      QColor("#CDD6F4")),
+                (_COL_STATUS, status,    status_col),
+                (_COL_LEN,    str(length), QColor("#CDD6F4")),
+            ]
+            for col, text, fg in cells:
                 cell = QTableWidgetItem(text)
-                cell.setForeground(color if col == 4 else QColor("#CDD6F4"))
-                if col == 1:
-                    cell.setForeground(QColor("#89B4FA"))
+                cell.setForeground(fg)
+                if row_bg:
+                    cell.setBackground(row_bg)
+                if col == _COL_TYPE and type_lbl:
+                    cell.setTextAlignment(Qt.AlignCenter)
                 self._table.setItem(row, col, cell)
             self._table.setRowHeight(row, 22)
+
+        # Restore the previously selected row without triggering a DB reload.
+        if _selected_id:
+            for i, (_, did) in enumerate(self._rows):
+                if did == _selected_id:
+                    self._table.blockSignals(True)
+                    self._table.setCurrentCell(i, 0)
+                    self._table.blockSignals(False)
+                    break
+            else:
+                # Row filtered out or deleted — clear the detail panes.
+                self._req_view.clear()
+                self._resp_view.clear()
+                self._current_doc = None
+                self._render_view.clear()
 
         self._table.setUpdatesEnabled(True)
         count = self._table.rowCount()
         self._count_lbl.setText(f"{count} request{'s' if count != 1 else ''}")
+        self._update_filter_indicator()
 
     # ── interactions ──────────────────────────────────────────────────────────
 
@@ -269,9 +404,32 @@ class HttpHistoryPage(QWidget):
         _, doc_id = self._rows[row]
         doc = self._load_doc(doc_id)
         if doc:
+            self._current_doc = doc
             self._req_view.setText(_fmt_request(doc.get("request", {})))
             self._resp_view.setText(_fmt_response(doc.get("response", {})))
-            self._tabs.setCurrentIndex(0)
+            if self._tabs.currentWidget() is self._render_view:
+                self._render_current_response()
+            else:
+                self._tabs.setCurrentIndex(0)
+
+    def _render_current_response(self) -> None:
+        doc = self._current_doc
+        if not doc:
+            self._render_view.clear()
+            return
+        resp = doc.get("response") or {}
+        body_str = resp.get("body", "") or ""
+        body_bytes = body_str.encode("utf-8", errors="replace")
+        # Extract content-type from response headers
+        hdrs = resp.get("headers") or {}
+        ct_val = hdrs.get("content-type") or hdrs.get("Content-Type") or ""
+        if isinstance(ct_val, list):
+            ct_val = ct_val[0] if ct_val else ""
+        content_type = str(ct_val).split(";")[0].strip()
+        # Build base URL from original request URL
+        req = doc.get("request") or {}
+        base_url = req.get("url") or ""
+        self._render_view.render_response(body_bytes, content_type, base_url)
 
     def _on_table_context_menu(self, pos: QPoint) -> None:
         row = self._table.rowAt(pos.y())
@@ -279,7 +437,7 @@ class HttpHistoryPage(QWidget):
             return
 
         _, doc_id = self._rows[row]
-        status_item = self._table.item(row, 4)
+        status_item = self._table.item(row, _COL_STATUS)
         is_ws = status_item is not None and status_item.text() == "101"
 
         menu       = QMenu(self)
@@ -315,9 +473,59 @@ class HttpHistoryPage(QWidget):
 
     def _on_scope_toggle(self, checked: bool) -> None:
         self._filter_scope = checked
-        self._scope_btn.setText(f"Filter by Scope: {'ON' if checked else 'OFF'}")
+        self._scope_btn.setText(f"Scope: {'ON' if checked else 'OFF'}")
         self._scope_btn.setStyleSheet(_TOGGLE_SS_ON if checked else _TOGGLE_SS_OFF)
         self._refresh_table()
+
+    def _on_filter_toggle(self, checked: bool) -> None:
+        self._filter_panel.setVisible(checked)
+        self._filter_sep.setVisible(checked)
+        self._filter_btn.setText("Filters ▴" if checked else "Filters ▾")
+
+    def _on_filter_changed(self) -> None:
+        self._refresh_table()
+        active = self._filter_panel.is_active()
+        self._reset_btn.setVisible(active)
+        self._save_filters()
+
+    def _on_filter_reset(self) -> None:
+        self._filter_panel.reset()
+        self._reset_btn.setVisible(False)
+        self._refresh_table()
+        self._save_filters()
+
+    def _save_filters(self) -> None:
+        try:
+            data = load_ui_settings()
+            data["http_history_filters"] = self._filter_panel.to_dict()
+            save_ui_settings(data)
+        except Exception:
+            pass
+
+    def _restore_saved_filters(self) -> None:
+        try:
+            data = load_ui_settings()
+            saved = data.get("http_history_filters")
+            if not saved:
+                return
+            self._filter_panel.from_dict(saved)
+            if self._filter_panel.is_active():
+                self._filter_btn.setChecked(True)
+                self._reset_btn.setVisible(True)
+        except Exception:
+            pass
+
+    def _update_filter_indicator(self) -> None:
+        if self._filter_panel.is_active():
+            try:
+                total = self._col.estimated_document_count() if self._col else 0
+            except Exception:
+                total = 0
+            shown = self._table.rowCount()
+            self._filter_active_lbl.setText(f"Filtered: {shown}/{total}")
+            self._filter_active_lbl.setVisible(True)
+        else:
+            self._filter_active_lbl.setVisible(False)
 
     def _load_scope(self) -> None:
         if self._repo:
@@ -404,6 +612,8 @@ _BTN_SS = (
     "QPushButton:hover{background:#45475A;color:#CDD6F4;}"
 )
 
+
+# ── Code view ─────────────────────────────────────────────────────────────────
 
 class _CodeView(QTextEdit):
     send_to_repeater = Signal(str)

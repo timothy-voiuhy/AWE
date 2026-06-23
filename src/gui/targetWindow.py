@@ -4,16 +4,15 @@ from pathlib import Path
 
 from PySide6 import QtWidgets, QtGui
 from PySide6.QtCore import Qt, QPoint, QTimer
-from PySide6.QtGui import QFont, QFontDatabase
+from PySide6.QtGui import QFont
 from PySide6.QtNetwork import QNetworkProxy, QNetworkProxyFactory
 from PySide6.QtWidgets import (
-    QStackedWidget, QFrame, QVBoxLayout, QHBoxLayout, QFormLayout,
+    QStackedWidget, QFrame, QVBoxLayout, QHBoxLayout,
     QPushButton, QLabel, QWidget, QLineEdit, QScrollArea, QTextEdit,
-    QSizePolicy, QMenu, QComboBox, QSpinBox, QApplication,
-    QCheckBox, QTableWidget, QTableWidgetItem, QHeaderView,
+    QMenu, QApplication,
 )
 
-from awe_net.wappy import find_techs
+from awe_net.tech_detector import find_techs
 from config.config import ROOT_CERT_FILE
 from database.repository import AweRepository
 from gui.browserWindow import BrowserWindow
@@ -21,8 +20,7 @@ from gui.certSetupDialog import CertSetupDialog
 from gui.dockerManagerWindow import DockerManagerWindow
 from gui.pipelineWindow import PipelineWindow
 from gui.resultsWindow import ResultsWindow
-from gui.leftDock import LeftDock
-from gui.networkWindow import NetworkWindow
+from gui.targetInfoPanel import TargetInfoPanel
 from gui.networkGraph import NetworkPage
 from gui.httpHistory import HttpHistoryPage
 from gui.interceptPage import InterceptPage
@@ -32,172 +30,60 @@ from gui.wsPage import WebSocketPage
 from gui.scopeEditor import ScopeEditorWidget
 from gui.siteMapWindow import SiteMapPage
 from proxy.traffic_extractor import _ExtractWorker
+from gui.appearance import load_ui_settings, apply_appearance
 
 
-# ── App-level settings persistence ───────────────────────────────────────────
+# ── Minimal card helper (used by the Scope page) ─────────────────────────────
 
-_SETTINGS_FILE = Path(os.path.expanduser("~")) / ".config" / "awe" / "ui_settings.json"
-
-_THEMES: dict[str, dict] = {
-    "Catppuccin Mocha": {
-        "base":    "#1E1E2E",
-        "mantle":  "#181825",
-        "surface": "#313244",
-        "overlay": "#45475A",
-        "text":    "#CDD6F4",
-        "subtext": "#BAC2DE",
-        "accent":  "#CBA6F7",
-        "accent2": "#89B4FA",
-        "green":   "#A6E3A1",
-        "red":     "#F38BA8",
-        "yellow":  "#F9E2AF",
-        "peach":   "#FAB387",
-    },
-    "Catppuccin Macchiato": {
-        "base":    "#1E2030",
-        "mantle":  "#181926",
-        "surface": "#363A4F",
-        "overlay": "#494D64",
-        "text":    "#CAD3F5",
-        "subtext": "#B8C0E0",
-        "accent":  "#C6A0F6",
-        "accent2": "#8AADF4",
-        "green":   "#A6DA95",
-        "red":     "#ED8796",
-        "yellow":  "#EED49F",
-        "peach":   "#F5A97F",
-    },
-    "Catppuccin Frappe": {
-        "base":    "#303446",
-        "mantle":  "#292C3C",
-        "surface": "#414559",
-        "overlay": "#51576D",
-        "text":    "#C6D0F5",
-        "subtext": "#B5BFE2",
-        "accent":  "#CA9EE6",
-        "accent2": "#8CAAEE",
-        "green":   "#A6D189",
-        "red":     "#E78284",
-        "yellow":  "#E5C890",
-        "peach":   "#EF9F76",
-    },
-    "Catppuccin Latte": {
-        "base":    "#EFF1F5",
-        "mantle":  "#E6E9EF",
-        "surface": "#CCD0DA",
-        "overlay": "#ACB0BE",
-        "text":    "#4C4F69",
-        "subtext": "#5C5F77",
-        "accent":  "#8839EF",
-        "accent2": "#1E66F5",
-        "green":   "#40A02B",
-        "red":     "#D20F39",
-        "yellow":  "#DF8E1D",
-        "peach":   "#FE640B",
-    },
-}
-
-_MONO_FONTS = [
-    "Cascadia Code", "JetBrains Mono", "Fira Code",
-    "Hack", "Inconsolata", "Source Code Pro",
-    "Ubuntu Mono", "DejaVu Sans Mono", "Monospace",
-]
-
-
-def _load_ui_settings() -> dict:
-    try:
-        return json.loads(_SETTINGS_FILE.read_text())
-    except Exception:
-        return {}
-
-
-def _save_ui_settings(data: dict):
-    _SETTINGS_FILE.parent.mkdir(parents=True, exist_ok=True)
-    _SETTINGS_FILE.write_text(json.dumps(data, indent=2))
-
-
-# Current appearance state — updated by _apply_appearance()
-_app_state: dict = {"theme": "Catppuccin Mocha", "font_family": "Monospace", "font_size": 10}
-
-
-def _apply_appearance(theme_name: str | None = None,
-                      font_family: str | None = None,
-                      font_size: int | None = None):
-    """Apply theme colours and font together in a single stylesheet.
-
-    Font must live inside the stylesheet's QWidget rule — calling
-    QApplication.setFont() alone cannot override widgets styled via CSS.
-    """
-    if theme_name   is not None: _app_state["theme"]       = theme_name
-    if font_family  is not None: _app_state["font_family"] = font_family
-    if font_size    is not None: _app_state["font_size"]   = font_size
-
-    t   = _THEMES.get(_app_state["theme"], _THEMES["Catppuccin Mocha"])
-    fam = _app_state["font_family"]
-    sz  = _app_state["font_size"]
-
-    # Keep QApplication font in sync so native dialogs / tooltips also update
-    QApplication.instance().setFont(QFont(fam, sz))
-
-    QApplication.instance().setStyleSheet(f"""
-        QWidget          {{ background:{t['base']}; color:{t['text']};
-                            font-family:'{fam}'; font-size:{sz}pt; }}
-        QMainWindow      {{ background:{t['mantle']}; }}
-        QFrame           {{ border:none; }}
-        QScrollBar:vertical   {{ background:{t['mantle']}; width:8px; border:none; }}
-        QScrollBar::handle:vertical {{ background:{t['surface']}; border-radius:4px; min-height:20px; }}
-        QScrollBar:horizontal {{ background:{t['mantle']}; height:8px; border:none; }}
-        QScrollBar::handle:horizontal {{ background:{t['surface']}; border-radius:4px; min-width:20px; }}
-        QScrollBar::add-line, QScrollBar::sub-line {{ width:0; height:0; }}
-        QTabWidget::pane {{ border:1px solid {t['surface']}; background:{t['base']}; }}
-        QTabBar::tab      {{ background:{t['mantle']}; color:{t['subtext']};
-                             padding:6px 14px; border:none; border-radius:4px 4px 0 0; }}
-        QTabBar::tab:selected {{ background:{t['surface']}; color:{t['text']}; }}
-        QTabBar::tab:hover    {{ background:{t['overlay']}; color:{t['text']}; }}
-        QPushButton  {{ background:{t['surface']}; color:{t['text']};
-                        border:1px solid {t['overlay']}; border-radius:5px;
-                        padding:5px 14px; min-height:26px; }}
-        QPushButton:hover {{ background:{t['overlay']}; border-color:{t['accent2']}; }}
-        QPushButton:pressed {{ background:{t['mantle']}; }}
-        QLineEdit, QComboBox, QTextEdit, QSpinBox {{
-            background:{t['mantle']}; color:{t['text']};
-            border:1px solid {t['overlay']}; border-radius:4px;
-            padding:3px 8px; }}
-        QLineEdit:focus, QComboBox:focus, QTextEdit:focus, QSpinBox:focus {{
-            border-color:{t['accent2']}; }}
-        QTableWidget  {{ background:{t['base']}; gridline-color:{t['surface']};
-                         alternate-background-color:{t['mantle']}; }}
-        QHeaderView::section {{ background:{t['surface']}; color:{t['subtext']};
-                                 border:none; padding:4px 8px; }}
-        QTreeView, QListView {{ background:{t['base']}; alternate-background-color:{t['mantle']}; }}
-        QToolTip  {{ background:{t['surface']}; color:{t['text']};
-                     border:1px solid {t['overlay']}; border-radius:4px; padding:4px; }}
-        QSplitter::handle {{ background:{t['surface']}; }}
-        QMenu     {{ background:{t['mantle']}; color:{t['text']};
-                     border:1px solid {t['surface']}; border-radius:6px; padding:4px; }}
-        QMenu::item:selected {{ background:{t['surface']}; border-radius:3px; }}
-        QMenu::separator {{ background:{t['surface']}; height:1px; margin:4px 6px; }}
+def _card(title: str, accent: str = "#9399B2") -> tuple:
+    card = QFrame()
+    card.setObjectName("scopeCard")
+    card.setStyleSheet(f"""
+        QFrame#scopeCard {{
+            background: #1E1E2E;
+            border: 1px solid #313244;
+            border-radius: 6px;
+            border-left: 3px solid {accent};
+        }}
     """)
+    vb = QVBoxLayout(card)
+    vb.setContentsMargins(16, 14, 16, 16)
+    vb.setSpacing(10)
+    hdr = QLabel(title.upper())
+    hdr.setStyleSheet(
+        f"color:{accent}; font-size:9px; letter-spacing:1.5px;"
+        " background:transparent; border:none; font-weight:bold;"
+    )
+    vb.addWidget(hdr)
+    div = QFrame()
+    div.setFrameShape(QFrame.HLine)
+    div.setFixedHeight(1)
+    div.setStyleSheet(f"background:{accent}; border:none;")
+    vb.addWidget(div)
+    return card, vb
 
 
 # ── Nav definitions ───────────────────────────────────────────────────────────
+# Each entry: (glyph_or_None, label, accent, icon_path_or_None)
+# If icon_path is set it takes priority over the glyph.
+
+_ICONS = "/home/mak-unipod/Documents/AWE/resources/icons"
 
 _NAV = [
-    ("◉",  "Browser",   "#89B4FA"),  # 0
-    ("◎",  "Target",    "#CBA6F7"),  # 1
-    ("⚡",  "Pipeline",  "#A6E3A1"),  # 2
-    ("⬡",  "Docker",    "#89DCEB"),  # 3
-    ("◈",  "Results",   "#FAB387"),  # 4
-    ("⊗",  "Network",   "#94E2D5"),  # 5
-    ("◎",  "Scope",     "#A6E3A1"),  # 6
-    ("◫",  "SiteMap",   "#89DCEB"),  # 7
-    ("⊟",  "History",     "#F9E2AF"),  # 8
-    ("⊕",  "Intercept",  "#F9E2AF"),  # 9
-    ("↻",  "Repeater",   "#F5C2E7"),  # 10
-    ("⊛",  "Intruder",   "#EE99A0"),  # 11
-    ("⇄",  "WebSockets", "#94E2D5"),  # 12
-    ("✎",  "Notes",      "#F38BA8"),  # 13
-    ("⚙",  "Settings",   "#9399B2"),  # 14
+    ("◉",  "Browser",    "#89B4FA", f"{_ICONS}/browser.png"),     # 0
+    ("◎",  "Target",     "#CBA6F7", f"{_ICONS}/target.png"),      # 1
+    ("⚡",  "Pipeline",   "#A6E3A1", f"{_ICONS}/pipeline.png"),    # 2
+    ("⬡",  "Docker",     "#89DCEB", f"{_ICONS}/docker.png"),      # 3
+    ("◈",  "Results",    "#FAB387", f"{_ICONS}/results.png"),     # 4
+    ("⊗",  "Network",    "#94E2D5", f"{_ICONS}/network.png"),     # 5
+    ("◫",  "SiteMap",    "#89DCEB", f"{_ICONS}/sitemap.png"),     # 6
+    ("⊟",  "History",    "#F9E2AF", f"{_ICONS}/http.png"),        # 7
+    ("⊕",  "Intercept",  "#F9E2AF", f"{_ICONS}/intercept.png"),   # 8
+    ("↻",  "Repeater",   "#F5C2E7", f"{_ICONS}/repeater.png"),    # 9
+    ("⊛",  "Intruder",   "#EE99A0", f"{_ICONS}/intruder.png"),    # 10
+    ("⇄",  "WebSockets", "#94E2D5", f"{_ICONS}/websocket.png"),   # 11
+    ("✎",  "Notes",      "#F38BA8", f"{_ICONS}/notes.png"),       # 12
+    ("⚙",  "Settings",   "#9399B2", f"{_ICONS}/settings-512.png"),# 13
 ]
 
 _NAV_W = 58
@@ -206,104 +92,79 @@ _NAV_W = 58
 # ── Activity-bar button ───────────────────────────────────────────────────────
 
 class _NavButton(QPushButton):
-    def __init__(self, icon: str, label: str, accent: str, parent=None):
+    def __init__(self, glyph: str, label: str, accent: str,
+                 icon_path: str | None = None, parent=None):
         super().__init__(parent)
         self._accent = accent
+        self._has_icon = False
+
         vb = QVBoxLayout(self)
-        vb.setContentsMargins(0, 8, 0, 8)
-        vb.setSpacing(2)
+        vb.setContentsMargins(0, 6, 0, 6)
+        vb.setSpacing(4)
+        vb.setAlignment(Qt.AlignCenter)
 
-        self._icon_lbl = QLabel(icon)
-        self._icon_lbl.setAlignment(Qt.AlignCenter)
-        self._icon_lbl.setStyleSheet("font-size:18px; background:transparent; color:#6C7086;")
-        vb.addWidget(self._icon_lbl)
+        # Try to load the image icon first
+        if icon_path:
+            from PySide6.QtGui import QPixmap
+            px = QPixmap(icon_path)
+            if not px.isNull():
+                self._has_icon = True
+                self._icon_lbl = QLabel()
+                self._icon_lbl.setAlignment(Qt.AlignCenter)
+                self._icon_lbl.setFixedSize(24, 24)
+                self._px_orig = px
+                self._icon_lbl.setPixmap(
+                    px.scaled(24, 24, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+                )
+                self._icon_lbl.setStyleSheet("background:transparent;")
+                vb.addWidget(self._icon_lbl, alignment=Qt.AlignHCenter)
 
-        self._txt_lbl = QLabel(label)
-        self._txt_lbl.setAlignment(Qt.AlignCenter)
-        self._txt_lbl.setStyleSheet("font-size:8px; background:transparent; color:#6C7086;")
-        vb.addWidget(self._txt_lbl)
+        if not self._has_icon:
+            # Fall back to Unicode glyph
+            self._icon_lbl = QLabel(glyph)
+            self._icon_lbl.setAlignment(Qt.AlignCenter)
+            self._icon_lbl.setFixedHeight(24)
+            self._icon_lbl.setStyleSheet("font-size:18px; background:transparent; color:#6C7086;")
+            vb.addWidget(self._icon_lbl)
+
+        self._txt_lbl = None  # labels removed; tooltip carries the name
 
         self.setFlat(True)
         self.setFixedWidth(_NAV_W)
-        self.setMinimumHeight(56)
+        self.setFixedHeight(44)
         self._set_active(False)
 
     def _set_active(self, active: bool):
         color = self._accent if active else "#6C7086"
-        border = f"border-left:3px solid {self._accent};" if active else "border-left:3px solid transparent;"
-        self.setStyleSheet(f"QPushButton {{ background:{'#1E1E2E' if active else 'transparent'}; border:none; {border} }}")
-        self._icon_lbl.setStyleSheet(f"font-size:18px; background:transparent; color:{color};")
-        self._txt_lbl.setStyleSheet(f"font-size:8px;  background:transparent; color:{color};")
+        border = (f"border-left:3px solid {self._accent};"
+                  if active else "border-left:3px solid transparent;")
+        self.setStyleSheet(
+            f"QPushButton {{ background:{'#1E1E2E' if active else 'transparent'};"
+            f" border:none; {border} }}"
+        )
+        if self._has_icon:
+            # Tint the pixmap: full color when active, grey when inactive
+            from PySide6.QtGui import QPixmap, QPainter, QColor
+            from PySide6.QtCore import QSize
+            tint = QColor(self._accent if active else "#6C7086")
+            src = self._px_orig.scaled(22, 22, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+            result = QPixmap(src.size())
+            result.fill(Qt.transparent)
+            painter = QPainter(result)
+            painter.drawPixmap(0, 0, src)
+            painter.setCompositionMode(QPainter.CompositionMode_SourceIn)
+            painter.fillRect(result.rect(), tint)
+            painter.end()
+            self._icon_lbl.setPixmap(result)
+        else:
+            self._icon_lbl.setStyleSheet(
+                f"font-size:18px; background:transparent; color:{color};"
+            )
 
     def set_active(self, active: bool):
         self._set_active(active)
 
 
-# ── Section card helper (for settings page) ───────────────────────────────────
-
-def _card(title: str, accent: str = "#9399B2") -> tuple[QFrame, QVBoxLayout]:
-    card = QFrame()
-    card.setStyleSheet(f"""
-        QFrame#settingsCard {{
-            background: #1E1E2E;
-            border: 1px solid #313244;
-            border-radius: 6px;
-            border-left: 3px solid {accent};
-        }}
-        QLabel {{
-            color: #CDD6F4;
-            background: transparent;
-            border: none;
-            font-size: 11px;
-        }}
-        QPushButton {{
-            background: #313244;
-            color: #CDD6F4;
-            border: 1px solid #45475A;
-            border-radius: 5px;
-            padding: 6px 16px;
-            font-size: 11px;
-            min-height: 28px;
-            text-align: center;
-        }}
-        QPushButton:hover {{
-            background: #45475A;
-            border-color: #89B4FA;
-            color: #CDD6F4;
-        }}
-        QPushButton:pressed {{
-            background: #585B70;
-            color: #CDD6F4;
-        }}
-        QLineEdit {{
-            background: #181825;
-            color: #CDD6F4;
-            border: 1px solid #45475A;
-            border-radius: 4px;
-            padding: 4px 8px;
-            font-size: 11px;
-            min-height: 26px;
-        }}
-        QLineEdit:focus {{
-            border-color: #89B4FA;
-        }}
-    """)
-    card.setObjectName("settingsCard")
-    vb = QVBoxLayout(card)
-    vb.setContentsMargins(16, 14, 16, 16)
-    vb.setSpacing(10)
-    hdr = QLabel(title.upper())
-    hdr.setStyleSheet(f"color:{accent}; font-size:9px; letter-spacing:1.5px; "
-                      "background:transparent; border:none; font-weight:bold;")
-    vb.addWidget(hdr)
-
-    div = QFrame()
-    div.setFrameShape(QFrame.HLine)
-    div.setFixedHeight(1)
-    div.setStyleSheet(f"background:{accent}; border:none; opacity:0.3;")
-    vb.addWidget(div)
-
-    return card, vb
 
 
 class TargetWindow(QtWidgets.QMainWindow):
@@ -333,8 +194,8 @@ class TargetWindow(QtWidgets.QMainWindow):
             self._repo = None
 
         # Apply persisted font / theme on first open
-        _s = _load_ui_settings()
-        _apply_appearance(
+        _s = load_ui_settings()
+        apply_appearance(
             theme_name=_s.get("theme"),
             font_family=_s.get("font_family"),
             font_size=_s.get("font_size"),
@@ -365,24 +226,23 @@ class TargetWindow(QtWidgets.QMainWindow):
         self._debounce_timer.timeout.connect(self._sync_proxy_traffic)
 
         # Pages — order must match _NAV
-        # NOTE: _build_scope_page() (index 6) creates self._scopeEditor, so it
-        # must run before any page that wants to connect scope_changed.  All
-        # signal wiring happens in _wire_scope_signals() called below.
+        # NOTE: _build_target_page() (index 1) also creates self._scopeEditor
+        # via its embedded Scope tab.  All signal wiring happens in
+        # _wire_scope_signals() called below.
         self._stack.addWidget(self._build_browser_page())    # 0 Browser
-        self._stack.addWidget(self._build_target_page())    # 1 Target
-        self._stack.addWidget(self._build_pipeline_page())  # 2 Pipeline
-        self._stack.addWidget(self._build_docker_page())    # 3 Docker
-        self._stack.addWidget(self._build_results_page())   # 4 Results
-        self._stack.addWidget(self._build_network_page())   # 5 Network
-        self._stack.addWidget(self._build_scope_page())     # 6 Scope
-        self._stack.addWidget(self._build_sitemap_page())   # 7 SiteMap
-        self._stack.addWidget(self._build_history_page())    # 8  History
-        self._stack.addWidget(self._build_intercept_page()) # 9  Intercept
-        self._stack.addWidget(self._build_repeater_page())  # 10 Repeater
-        self._stack.addWidget(self._build_intruder_page())  # 11 Intruder
-        self._stack.addWidget(self._build_ws_page())        # 12 WebSockets
-        self._stack.addWidget(self._build_notes_page())     # 13 Notes
-        self._stack.addWidget(self._build_settings_page())  # 14 Settings
+        self._stack.addWidget(self._build_target_page())     # 1 Target (includes Scope tab)
+        self._stack.addWidget(self._build_pipeline_page())   # 2 Pipeline
+        self._stack.addWidget(self._build_docker_page())     # 3 Docker
+        self._stack.addWidget(self._build_results_page())    # 4 Results
+        self._stack.addWidget(self._build_network_page())    # 5 Network
+        self._stack.addWidget(self._build_sitemap_page())    # 6 SiteMap
+        self._stack.addWidget(self._build_history_page())    # 7 History
+        self._stack.addWidget(self._build_intercept_page())  # 8 Intercept
+        self._stack.addWidget(self._build_repeater_page())   # 9 Repeater
+        self._stack.addWidget(self._build_intruder_page())   # 10 Intruder
+        self._stack.addWidget(self._build_ws_page())         # 11 WebSockets
+        self._stack.addWidget(self._build_notes_page())      # 12 Notes
+        self._stack.addWidget(self._build_settings_page())   # 13 Settings
 
         # Wire scope_changed → all consumer pages now that every page exists.
         # Also push the already-loaded scope into pages so their first render
@@ -402,12 +262,24 @@ class TargetWindow(QtWidgets.QMainWindow):
         vb.setContentsMargins(0, 4, 0, 4)
         vb.setSpacing(0)
 
-        for i, (icon, label, accent) in enumerate(_NAV):
-            btn = _NavButton(icon, label, accent)
+        for i, (glyph, label, accent, icon_path) in enumerate(_NAV):
+            btn = _NavButton(glyph, label, accent, icon_path)
             btn.setToolTip(label)
             btn.clicked.connect(lambda _, idx=i: self._switch_page(idx))
             vb.addWidget(btn)
             self._nav_btns.append(btn)
+            # thin separator after every button (inset 10px each side)
+            sep_wrap = QWidget()
+            sep_wrap.setFixedHeight(1)
+            sep_layout = QHBoxLayout(sep_wrap)
+            sep_layout.setContentsMargins(10, 0, 10, 0)
+            sep_layout.setSpacing(0)
+            sep = QFrame()
+            sep.setFrameShape(QFrame.HLine)
+            sep.setFixedHeight(1)
+            sep.setStyleSheet("background:#313244; border:none;")
+            sep_layout.addWidget(sep)
+            vb.addWidget(sep_wrap)
 
         vb.addStretch()
         return bar
@@ -466,13 +338,64 @@ class TargetWindow(QtWidgets.QMainWindow):
         return page
 
     def _build_target_page(self) -> QWidget:
-        self._leftDock = LeftDock(
+        from PySide6.QtWidgets import QTabWidget as _QTabWidget
+        self._infoPanel = TargetInfoPanel(
             self, self.projectDirPath,
             parent=self, top_parent=self.topParent,
             embed=True,
         )
-        self._leftDock.openLinkInBrw.connect(self.openNewBrowserTab)
-        return self._leftDock.InitializeLeftDock()
+        self._infoPanel.openLinkInBrw.connect(self.openNewBrowserTab)
+        info_widget = self._infoPanel.widget()
+
+        # ── Scope tab content ─────────────────────────────────────────────────
+        scope_page = QWidget()
+        scope_root = QVBoxLayout(scope_page)
+        scope_root.setContentsMargins(24, 20, 24, 24)
+        scope_root.setSpacing(16)
+
+        card, card_vb = _card("Project Scope", "#A6E3A1")
+        self._scopeEditor = ScopeEditorWidget(repository=self._repo, parent=card)
+        card_vb.addWidget(self._scopeEditor)
+        scope_root.addWidget(card, stretch=1)
+
+        scope_scroll = QScrollArea()
+        scope_scroll.setWidgetResizable(True)
+        scope_scroll.setFrameShape(QFrame.NoFrame)
+        scope_scroll.setStyleSheet(
+            "QScrollArea{background:#181825;border:none;}"
+            "QScrollBar:vertical{background:#181825;width:8px;border:none;}"
+            "QScrollBar::handle:vertical{background:#313244;border-radius:4px;min-height:20px;}"
+        )
+        scope_scroll.setWidget(scope_page)
+
+        # ── Combine into a tabbed container ───────────────────────────────────
+        tabs = _QTabWidget()
+        tabs.setStyleSheet("""
+            QTabWidget::pane {
+                border: none;
+                background: #1E1E2E;
+            }
+            QTabBar::tab {
+                background: #181825;
+                color: #6C7086;
+                border: none;
+                border-bottom: 2px solid transparent;
+                padding: 6px 18px;
+                font-size: 9px;
+            }
+            QTabBar::tab:selected {
+                color: #CDD6F4;
+                border-bottom: 2px solid #CBA6F7;
+                background: #1E1E2E;
+            }
+            QTabBar::tab:hover:!selected {
+                color: #CDD6F4;
+                background: #313244;
+            }
+        """)
+        tabs.addTab(info_widget, "Target")
+        tabs.addTab(scope_scroll,     "Scope")
+        return tabs
 
     def _build_pipeline_page(self) -> QWidget:
         self._pipelineWindow = PipelineWindow(
@@ -504,56 +427,6 @@ class TargetWindow(QtWidgets.QMainWindow):
         self._networkPage.send_to_repeater.connect(self._send_to_repeater)
         return self._networkPage
 
-    def _build_scope_page(self) -> QWidget:
-        from pathlib import Path
-        page = QWidget()
-        root = QVBoxLayout(page)
-        root.setContentsMargins(24, 20, 24, 24)
-        root.setSpacing(16)
-
-        # ── header ────────────────────────────────────────────────────────────
-        hrow = QHBoxLayout()
-        hrow.setSpacing(10)
-        icon = QLabel("◎")
-        icon.setStyleSheet("color:#A6E3A1; font-size:22px; background:transparent;")
-        hrow.addWidget(icon)
-        title = QLabel("Scope")
-        title.setStyleSheet(
-            "color:#CDD6F4; font-size:15px; font-weight:bold; background:transparent;"
-        )
-        hrow.addWidget(title)
-        hrow.addStretch()
-        target_lbl = QLabel(self.main_server_name or "")
-        target_lbl.setStyleSheet("color:#6C7086; font-size:11px; background:transparent;")
-        hrow.addWidget(target_lbl)
-        root.addLayout(hrow)
-
-        sep = QFrame()
-        sep.setFrameShape(QFrame.HLine)
-        sep.setStyleSheet("background:#313244; border:none;")
-        sep.setFixedHeight(1)
-        root.addWidget(sep)
-
-        # ── scope editor card ─────────────────────────────────────────────────
-        card, card_vb = _card("Project Scope", "#A6E3A1")
-
-        self._scopeEditor = ScopeEditorWidget(repository=self._repo, parent=card)
-        card_vb.addWidget(self._scopeEditor)
-
-        root.addWidget(card)
-        root.addStretch()
-
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QFrame.NoFrame)
-        scroll.setStyleSheet(
-            "QScrollArea{background:#181825; border:none;}"
-            "QScrollBar:vertical{background:#181825; width:8px; border:none;}"
-            "QScrollBar::handle:vertical{background:#313244; border-radius:4px; min-height:20px;}"
-        )
-        scroll.setWidget(page)
-        return scroll
-
     def _wire_scope_signals(self) -> None:
         """Connect ScopeEditorWidget.scope_changed to all consumer pages and
         push the already-loaded scope so the first render respects scope.
@@ -571,6 +444,10 @@ class TargetWindow(QtWidgets.QMainWindow):
         # but we still connect so future saves propagate live.
         self._scopeEditor.scope_changed.connect(self._siteMapPage.on_scope_changed)
         self._scopeEditor.scope_changed.connect(self._historyPage.on_scope_changed)
+
+        # WebSockets — push initial scope and connect for live updates.
+        self._wsPage.on_scope_changed(initial)
+        self._scopeEditor.scope_changed.connect(self._wsPage.on_scope_changed)
 
     def _get_proxy_col(self):
         """Return the global proxy traffic MongoDB collection, or None on error."""
@@ -639,24 +516,24 @@ class TargetWindow(QtWidgets.QMainWindow):
 
     def _send_to_repeater(self, request_text: str) -> None:
         self._repeaterPage.add_tab(request_text)
-        self._switch_page(10)  # Repeater is at index 10 in _NAV
+        self._switch_page(9)   # Repeater is at index 9 in _NAV
 
     def _send_to_intruder(self, request_text: str) -> None:
         self._intruderPage.load_request(request_text)
-        self._switch_page(11)  # Intruder is at index 11 in _NAV
+        self._switch_page(10)  # Intruder is at index 10 in _NAV
 
     def _send_to_websocket(self, host: str, path: str) -> None:
         self._wsPage.load_connection(host, path)
-        self._switch_page(12)  # WebSockets is at index 12 in _NAV
+        self._switch_page(11)  # WebSockets is at index 11 in _NAV
 
     def OpenIntruderWindow(self):
-        self._switch_page(11)
+        self._switch_page(10)
 
     def OpenWebSocketWindow(self):
-        self._switch_page(12)
+        self._switch_page(11)
 
     def OpenInterceptWindow(self):
-        self._switch_page(9)
+        self._switch_page(8)
 
     def _sync_proxy_traffic(self) -> None:
         """Extract data from proxy traffic DB and upsert into project results."""
@@ -711,331 +588,17 @@ class TargetWindow(QtWidgets.QMainWindow):
         return page
 
     def _build_settings_page(self) -> QWidget:
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QFrame.NoFrame)
-        scroll.setStyleSheet("""
-            QScrollArea { background:#181825; border:none; }
-            QScrollBar:vertical { background:#181825; width:8px; border:none; }
-            QScrollBar::handle:vertical { background:#313244; border-radius:4px; min-height:20px; }
-        """)
-
-        body = QWidget()
-        body.setStyleSheet("background:#181825;")
-        vb = QVBoxLayout(body)
-        vb.setContentsMargins(24, 20, 24, 24)
-        vb.setSpacing(16)
-
-        # ── Page header ───────────────────────────────────────────────────────
-        hrow = QHBoxLayout()
-        hrow.setSpacing(10)
-        icon_lbl = QLabel("⚙")
-        icon_lbl.setStyleSheet("color:#9399B2; font-size:22px; background:transparent;")
-        hrow.addWidget(icon_lbl)
-        title_lbl = QLabel(f"Settings")
-        title_lbl.setStyleSheet("color:#CDD6F4; font-size:15px; font-weight:bold; background:transparent;")
-        hrow.addWidget(title_lbl)
-        hrow.addStretch()
-        target_lbl = QLabel(self.main_server_name or "")
-        target_lbl.setStyleSheet("color:#6C7086; font-size:11px; background:transparent;")
-        hrow.addWidget(target_lbl)
-        vb.addLayout(hrow)
-
-        sep = QFrame(); sep.setFrameShape(QFrame.HLine)
-        sep.setStyleSheet("background:#313244; border:none;"); sep.setFixedHeight(1)
-        vb.addWidget(sep)
-
-        _saved = _load_ui_settings()
-
-        # ── Font card ─────────────────────────────────────────────────────────
-        font_card, font_vb = _card("Font", "#CBA6F7")
-
-        db = QFontDatabase()
-        available_families = set(db.families())
-        font_choices = [f for f in _MONO_FONTS if f in available_families] or ["Monospace"]
-
-        cur_font   = QApplication.instance().font()
-        saved_fam  = _saved.get("font_family", cur_font.family())
-        saved_size = _saved.get("font_size",   cur_font.pointSize() or 10)
-
-        font_row = QHBoxLayout()
-        font_row.setSpacing(12)
-
-        fam_col = QVBoxLayout(); fam_col.setSpacing(4)
-        fam_lbl = QLabel("Family")
-        fam_lbl.setStyleSheet("color:#6C7086; font-size:10px; background:transparent; border:none;")
-        fam_col.addWidget(fam_lbl)
-        self._fontFamilyCombo = QComboBox()
-        self._fontFamilyCombo.addItems(font_choices)
-        if saved_fam in font_choices:
-            self._fontFamilyCombo.setCurrentText(saved_fam)
-        fam_col.addWidget(self._fontFamilyCombo)
-        font_row.addLayout(fam_col, stretch=3)
-
-        sz_col = QVBoxLayout(); sz_col.setSpacing(4)
-        sz_lbl = QLabel("Size (pt)")
-        sz_lbl.setStyleSheet("color:#6C7086; font-size:10px; background:transparent; border:none;")
-        sz_col.addWidget(sz_lbl)
-        self._fontSizeSpin = QSpinBox()
-        self._fontSizeSpin.setRange(7, 20)
-        self._fontSizeSpin.setValue(saved_size)
-        sz_col.addWidget(self._fontSizeSpin)
-        font_row.addLayout(sz_col, stretch=1)
-
-        font_vb.addLayout(font_row)
-
-        self._fontPreview = QLabel("The quick brown fox  |  AaBbCc 012 <>{}[]")
-        self._fontPreview.setStyleSheet(
-            f"color:#BAC2DE; font-family:'{saved_fam}'; font-size:{saved_size}pt; "
-            "background:#11111B; padding:6px 10px; border-radius:4px; border:none;")
-        font_vb.addWidget(self._fontPreview)
-
-        def _update_font_preview():
-            fam  = self._fontFamilyCombo.currentText()
-            size = self._fontSizeSpin.value()
-            self._fontPreview.setStyleSheet(
-                f"color:#BAC2DE; font-family:'{fam}'; font-size:{size}pt; "
-                "background:#11111B; padding:6px 10px; border-radius:4px; border:none;")
-
-        self._fontFamilyCombo.currentTextChanged.connect(_update_font_preview)
-        self._fontSizeSpin.valueChanged.connect(_update_font_preview)
-
-        font_apply_btn = QPushButton("Apply Font")
-        font_apply_btn.setMinimumHeight(34)
-
-        def _apply_font_clicked():
-            fam  = self._fontFamilyCombo.currentText()
-            size = self._fontSizeSpin.value()
-            _apply_appearance(font_family=fam, font_size=size)
-            data = _load_ui_settings()
-            data["font_family"] = fam
-            data["font_size"]   = size
-            _save_ui_settings(data)
-
-        font_apply_btn.clicked.connect(_apply_font_clicked)
-        font_vb.addWidget(font_apply_btn)
-        vb.addWidget(font_card)
-
-        # ── Theme card ────────────────────────────────────────────────────────
-        theme_card, theme_vb = _card("Theme", "#F9E2AF")
-
-        saved_theme = _saved.get("theme", "Catppuccin Mocha")
-
-        th_lbl = QLabel("Color palette")
-        th_lbl.setStyleSheet("color:#6C7086; font-size:10px; background:transparent; border:none;")
-        theme_vb.addWidget(th_lbl)
-
-        self._themeCombo = QComboBox()
-        self._themeCombo.addItems(list(_THEMES.keys()))
-        if saved_theme in _THEMES:
-            self._themeCombo.setCurrentText(saved_theme)
-        theme_vb.addWidget(self._themeCombo)
-
-        # Swatch row – six colored dots previewing the palette
-        self._swatchRow = QHBoxLayout()
-        self._swatchRow.setSpacing(6)
-        self._swatchLabels: list[QLabel] = []
-        for _ in range(6):
-            sw = QLabel("  ")
-            sw.setFixedSize(28, 18)
-            sw.setStyleSheet("border-radius:4px;")
-            self._swatchLabels.append(sw)
-            self._swatchRow.addWidget(sw)
-        self._swatchRow.addStretch()
-        theme_vb.addLayout(self._swatchRow)
-
-        def _update_swatches(name: str):
-            t = _THEMES.get(name, {})
-            colors = [t.get("accent",""), t.get("accent2",""), t.get("green",""),
-                      t.get("red",""),   t.get("yellow",""), t.get("peach","")]
-            for sw, c in zip(self._swatchLabels, colors):
-                sw.setStyleSheet(f"background:{c}; border-radius:4px; border:none;")
-
-        _update_swatches(saved_theme)
-        self._themeCombo.currentTextChanged.connect(_update_swatches)
-
-        theme_apply_btn = QPushButton("Apply Theme")
-        theme_apply_btn.setMinimumHeight(34)
-
-        def _apply_theme_clicked():
-            name = self._themeCombo.currentText()
-            _apply_appearance(theme_name=name)
-            data = _load_ui_settings()
-            data["theme"] = name
-            _save_ui_settings(data)
-
-        theme_apply_btn.clicked.connect(_apply_theme_clicked)
-        theme_vb.addWidget(theme_apply_btn)
-        vb.addWidget(theme_card)
-
-        # ── Proxy card ────────────────────────────────────────────────────────
-        proxy_card, proxy_vb = _card("Proxy", "#89B4FA")
-
-        self._proxyStatusLbl = QLabel()
-        proxy_vb.addWidget(self._proxyStatusLbl)
-
-        # Host / port row
-        field_row = QHBoxLayout()
-        field_row.setSpacing(12)
-
-        host_col = QVBoxLayout()
-        host_col.setSpacing(4)
-        host_lbl = QLabel("Host")
-        host_lbl.setStyleSheet("color:#6C7086; font-size:10px; background:transparent; border:none;")
-        host_col.addWidget(host_lbl)
-        self._proxyHostEdit = QLineEdit("127.0.0.1")
-        host_col.addWidget(self._proxyHostEdit)
-        field_row.addLayout(host_col, stretch=3)
-
-        port_col = QVBoxLayout()
-        port_col.setSpacing(4)
-        port_lbl = QLabel("Port")
-        port_lbl.setStyleSheet("color:#6C7086; font-size:10px; background:transparent; border:none;")
-        port_col.addWidget(port_lbl)
-        self._proxyPortEdit = QLineEdit(str(self.proxy_port))
-        port_col.addWidget(self._proxyPortEdit)
-        field_row.addLayout(port_col, stretch=1)
-
-        # Apply-port button (aligned to bottom of the row, beside the port field)
-        apply_col = QVBoxLayout()
-        apply_col.setSpacing(4)
-        apply_col.addWidget(QLabel(""))   # spacer label to match the row height
-        self._proxyApplyBtn = QPushButton("Apply")
-        self._proxyApplyBtn.setFixedHeight(28)
-        self._proxyApplyBtn.setToolTip("Save port and restart proxy")
-        self._proxyApplyBtn.clicked.connect(self._apply_proxy_port)
-        apply_col.addWidget(self._proxyApplyBtn)
-        field_row.addLayout(apply_col)
-
-        proxy_vb.addLayout(field_row)
-
-        self._proxyToggleBtn = QPushButton("Enable Proxy")
-        self._proxyToggleBtn.setMinimumHeight(34)
-        self._proxyToggleBtn.clicked.connect(self._toggle_proxy_from_settings)
-        proxy_vb.addWidget(self._proxyToggleBtn)
-
-        vb.addWidget(proxy_card)
-        self._refresh_proxy_status()
-
-        # ── Certificate card ──────────────────────────────────────────────────
-        cert_card, cert_vb = _card("Certificate", "#A6E3A1")
-
-        self._certStatusLbl = QLabel()
-        cert_vb.addWidget(self._certStatusLbl)
-
-        cert_note = QLabel(
-            "AWE uses a local CA certificate to intercept HTTPS traffic. "
-            "Generate it once, then trust it in your OS and browser."
+        """Settings page — delegates to the unified SettingsWidget."""
+        from gui.settingsWindow import SettingsWidget
+        self._settingsWidget = SettingsWidget(
+            project_dir=self.projectDirPath,
+            mongo_uri="mongodb://localhost:27017",
+            proxy_port=self.proxy_port,
+            proxy_status=self.proxy_status,
+            target_window=self,
+            parent=self,
         )
-        cert_note.setWordWrap(True)
-        cert_note.setStyleSheet("color:#6C7086; font-size:10px; background:transparent; border:none;")
-        cert_vb.addWidget(cert_note)
-
-        cert_btn = QPushButton("🔒  Open Certificate Setup…")
-        cert_btn.setMinimumHeight(34)
-        cert_btn.clicked.connect(self.OpenCertSetup)
-        cert_vb.addWidget(cert_btn)
-
-        vb.addWidget(cert_card)
-        self._refresh_cert_status()
-
-        # ── Upstream Proxy card ───────────────────────────────────────────────
-        up_card, up_vb = _card("Upstream Proxy", "#CBA6F7")
-
-        up_note = QLabel(
-            "Route all proxy traffic through an upstream proxy (e.g. Tor, Burp, ZAP). "
-            "Changes take effect after restarting the proxy."
-        )
-        up_note.setWordWrap(True)
-        up_note.setStyleSheet("color:#6C7086; font-size:10px; background:transparent; border:none;")
-        up_vb.addWidget(up_note)
-
-        self._upstreamEnable = QCheckBox("Enable upstream proxy")
-        self._upstreamEnable.setStyleSheet("color:#CDD6F4; font-size:10px; background:transparent;")
-        up_vb.addWidget(self._upstreamEnable)
-
-        up_url_row = QHBoxLayout()
-        self._upstreamUrlEdit = QLineEdit()
-        self._upstreamUrlEdit.setPlaceholderText("http://127.0.0.1:9050")
-        up_url_row.addWidget(self._upstreamUrlEdit, stretch=1)
-        up_apply_btn = QPushButton("Apply")
-        up_apply_btn.setFixedHeight(28)
-        up_apply_btn.clicked.connect(self._apply_upstream_proxy)
-        up_url_row.addWidget(up_apply_btn)
-        up_vb.addLayout(up_url_row)
-
-        # Load persisted value
-        _ups_data = _load_ui_settings()
-        _ups_url  = _ups_data.get("upstream_proxy", "")
-        self._upstreamEnable.setChecked(bool(_ups_url))
-        self._upstreamUrlEdit.setText(_ups_url or "")
-
-        vb.addWidget(up_card)
-
-        # ── Match & Replace card ──────────────────────────────────────────────
-        mr_card, mr_vb = _card("Match & Replace", "#FAB387")
-
-        mr_note = QLabel(
-            "Rules are applied to every proxied request and response in order. "
-            "Pattern is a Python regex; replacement supports \\1 back-references. "
-            "Changes apply immediately — no restart needed."
-        )
-        mr_note.setWordWrap(True)
-        mr_note.setStyleSheet("color:#6C7086; font-size:10px; background:transparent; border:none;")
-        mr_vb.addWidget(mr_note)
-
-        self._rulesTable = QTableWidget(0, 5)
-        self._rulesTable.setHorizontalHeaderLabels(["✓", "Applies To", "Pattern", "Replacement", "Comment"])
-        self._rulesTable.verticalHeader().setVisible(False)
-        self._rulesTable.setColumnWidth(0, 28)
-        self._rulesTable.setColumnWidth(1, 130)
-        self._rulesTable.setColumnWidth(2, 180)
-        self._rulesTable.setColumnWidth(3, 180)
-        self._rulesTable.horizontalHeader().setStretchLastSection(True)
-        self._rulesTable.setMinimumHeight(160)
-        self._rulesTable.setEditTriggers(QTableWidget.NoEditTriggers)
-        self._rulesTable.setContextMenuPolicy(Qt.CustomContextMenu)
-        self._rulesTable.customContextMenuRequested.connect(self._rules_context_menu)
-        mr_vb.addWidget(self._rulesTable)
-
-        # Add-rule row
-        add_row = QHBoxLayout()
-        add_row.setSpacing(6)
-        self._ruleMatchIn   = QComboBox()
-        self._ruleMatchIn.addItems([
-            "request_headers", "request_body",
-            "response_headers", "response_body", "url",
-        ])
-        self._ruleMatchIn.setFixedHeight(26)
-        add_row.addWidget(self._ruleMatchIn)
-
-        self._rulePattern  = QLineEdit()
-        self._rulePattern.setPlaceholderText("Pattern (regex)")
-        self._rulePattern.setFixedHeight(26)
-        add_row.addWidget(self._rulePattern, stretch=2)
-
-        self._ruleReplace  = QLineEdit()
-        self._ruleReplace.setPlaceholderText("Replacement")
-        self._ruleReplace.setFixedHeight(26)
-        add_row.addWidget(self._ruleReplace, stretch=2)
-
-        self._ruleComment  = QLineEdit()
-        self._ruleComment.setPlaceholderText("Comment (optional)")
-        self._ruleComment.setFixedHeight(26)
-        add_row.addWidget(self._ruleComment, stretch=1)
-
-        add_btn = QPushButton("+ Add")
-        add_btn.setFixedHeight(26)
-        add_btn.clicked.connect(self._add_rule)
-        add_row.addWidget(add_btn)
-        mr_vb.addLayout(add_row)
-
-        vb.addWidget(mr_card)
-        self._load_rules()
-
-        vb.addStretch()
-        scroll.setWidget(body)
-        return scroll
+        return self._settingsWidget
 
     # ── Browser tab context menu ──────────────────────────────────────────────
 
@@ -1076,174 +639,6 @@ class TargetWindow(QtWidgets.QMainWindow):
         elif chosen == net_act:
             self.OpenNetworkWindow()
 
-    # ── Status helpers ────────────────────────────────────────────────────────
-
-    def _refresh_cert_status(self):
-        exists = Path(ROOT_CERT_FILE).exists()
-        dot    = "●" if exists else "○"
-        color  = "#A6E3A1" if exists else "#F38BA8"
-        text   = "Installed" if exists else "Not installed"
-        self._certStatusLbl.setText(
-            f"<span style='color:{color};'>{dot}</span>"
-            f"<span style='color:#CDD6F4;'>&nbsp; {text}</span>"
-        )
-
-    def _refresh_proxy_status(self):
-        dot   = "●" if self.proxy_status else "○"
-        color = "#A6E3A1" if self.proxy_status else "#F38BA8"
-        text  = f"Enabled — {self._proxyHostEdit.text()}:{self._proxyPortEdit.text()}" \
-                if self.proxy_status else "Disabled"
-        self._proxyStatusLbl.setText(
-            f"<span style='color:{color};'>{dot}</span>"
-            f"<span style='color:#CDD6F4;'>&nbsp; {text}</span>"
-        )
-        self._proxyToggleBtn.setText("Disable Proxy" if self.proxy_status else "Enable Proxy")
-
-    def _apply_proxy_port(self):
-        """Save the port from the field to settings and restart the global proxy."""
-        raw = self._proxyPortEdit.text().strip()
-        try:
-            port = int(raw)
-            if not (1 <= port <= 65535):
-                raise ValueError
-        except ValueError:
-            self._proxyPortEdit.setStyleSheet(
-                "QLineEdit { border:1px solid #F38BA8; background:#181825; "
-                "color:#CDD6F4; border-radius:4px; padding:2px 6px; }")
-            return
-
-        self._proxyPortEdit.setStyleSheet("")   # clear any error highlight
-
-        # Persist to shared settings file
-        data = _load_ui_settings()
-        data["proxy_port"] = port
-        _save_ui_settings(data)
-
-        # Restart the global proxy on the new port
-        self.proxy_port = port
-        try:
-            self.topParent.startproxy()
-            # Update the browser proxy config if it was already enabled
-            if self.proxy_status:
-                self.proxy.setPort(port)
-                from PySide6.QtNetwork import QNetworkProxy
-                QNetworkProxy.setApplicationProxy(self.proxy)
-        except Exception:
-            pass
-
-        self._refresh_proxy_status()
-
-    def _toggle_proxy_from_settings(self):
-        try:
-            self.proxy_port = int(self._proxyPortEdit.text())
-        except ValueError:
-            self._proxyPortEdit.setStyleSheet(
-                "QLineEdit { border:1px solid #F38BA8; background:#181825; "
-                "color:#CDD6F4; border-radius:4px; padding:2px 6px; }")
-            return
-        self.HandleProxy()
-        self._refresh_proxy_status()
-
-    def _apply_upstream_proxy(self) -> None:
-        enabled = self._upstreamEnable.isChecked()
-        url     = self._upstreamUrlEdit.text().strip() if enabled else ""
-        data    = _load_ui_settings()
-        data["upstream_proxy"] = url
-        _save_ui_settings(data)
-        # Restart proxy to pick up the new upstream setting
-        try:
-            self.topParent.startproxy()
-        except Exception:
-            pass
-
-    # ── Rules (Match & Replace) ───────────────────────────────────────────────
-
-    def _rules_file(self):
-        from pathlib import Path
-        return Path.home() / ".config" / "awe" / "proxy_rules.json"
-
-    def _load_rules(self) -> None:
-        import json
-        try:
-            rules = json.loads(self._rules_file().read_text())
-        except Exception:
-            rules = []
-        self._rulesTable.setRowCount(0)
-        for rule in rules:
-            self._append_rule_row(rule)
-
-    def _save_and_push_rules(self) -> None:
-        import json, uuid
-        rules = []
-        for r in range(self._rulesTable.rowCount()):
-            cb = self._rulesTable.cellWidget(r, 0)
-            rules.append({
-                "id":          self._rulesTable.item(r, 1).data(Qt.UserRole) or str(uuid.uuid4())[:8],
-                "enabled":     cb.isChecked() if cb else True,
-                "match_in":    self._rulesTable.item(r, 1).text(),
-                "pattern":     self._rulesTable.item(r, 2).text(),
-                "replacement": self._rulesTable.item(r, 3).text(),
-                "comment":     self._rulesTable.item(r, 4).text() if self._rulesTable.item(r, 4) else "",
-            })
-        self._rules_file().parent.mkdir(parents=True, exist_ok=True)
-        self._rules_file().write_text(json.dumps(rules, indent=2))
-        # Push to running proxy via control protocol
-        try:
-            from proxy._control import ControlClient
-            from config.config import RUNDIR
-            from pathlib import Path
-            port_file = Path(RUNDIR) / "tmp" / "proxy_control.txt"
-            port = int(port_file.read_text().strip())
-            ControlClient(port).set_rules(rules)
-        except Exception:
-            pass
-
-    def _append_rule_row(self, rule: dict) -> None:
-        r = self._rulesTable.rowCount()
-        self._rulesTable.insertRow(r)
-
-        cb = QCheckBox()
-        cb.setChecked(rule.get("enabled", True))
-        cb.stateChanged.connect(lambda: self._save_and_push_rules())
-        self._rulesTable.setCellWidget(r, 0, cb)
-
-        for col, key in enumerate(["match_in", "pattern", "replacement", "comment"], start=1):
-            item = QTableWidgetItem(rule.get(key, ""))
-            if col == 1:
-                item.setData(Qt.UserRole, rule.get("id", ""))
-            self._rulesTable.setItem(r, col, item)
-
-        self._rulesTable.setRowHeight(r, 24)
-
-    def _add_rule(self) -> None:
-        import uuid
-        pattern = self._rulePattern.text().strip()
-        if not pattern:
-            return
-        rule = {
-            "id":          str(uuid.uuid4())[:8],
-            "enabled":     True,
-            "match_in":    self._ruleMatchIn.currentText(),
-            "pattern":     pattern,
-            "replacement": self._ruleReplace.text(),
-            "comment":     self._ruleComment.text().strip(),
-        }
-        self._append_rule_row(rule)
-        self._rulePattern.clear()
-        self._ruleReplace.clear()
-        self._ruleComment.clear()
-        self._save_and_push_rules()
-
-    def _rules_context_menu(self, pos) -> None:
-        row = self._rulesTable.rowAt(pos.y())
-        if row < 0:
-            return
-        menu = QMenu(self)
-        rm = menu.addAction("Remove Rule")
-        if menu.exec(self._rulesTable.mapToGlobal(pos)) is rm:
-            self._rulesTable.removeRow(row)
-            self._save_and_push_rules()
-
     # ── Public API ────────────────────────────────────────────────────────────
 
     def OpenPipelineWindow(self):
@@ -1264,7 +659,6 @@ class TargetWindow(QtWidgets.QMainWindow):
     def OpenCertSetup(self):
         dlg = CertSetupDialog(self)
         dlg.exec()
-        self._refresh_cert_status()
 
     # ── Browser ───────────────────────────────────────────────────────────────
 
@@ -1378,4 +772,4 @@ class TargetWindow(QtWidgets.QMainWindow):
     def AddTopMenu(self):   pass
     def ViewTarget(self):   self._switch_page(1)
     def ViewTerminal(self): pass
-    def ViewNotepad(self):  self._switch_page(13)  # Notes at 13 (Intercept→9, WS→12)
+    def ViewNotepad(self):  self._switch_page(12)  # Notes at 12

@@ -45,8 +45,8 @@ from PySide6.QtWidgets import (
 )
 
 from config.config import RUNDIR
-from gui.guiUtilities import SyntaxHighlighter
-from gui.repeater import _CodeEdit, _PaneWrapper, _parse_raw_request
+from gui.guiUtilities import SyntaxHighlighter, ResponseRenderView
+from gui.repeater import _CodeEdit, _PaneWrapper, _parse_raw_request, _parse_resp_for_render
 
 log = logging.getLogger(__name__)
 
@@ -891,6 +891,12 @@ class IntruderPage(QWidget):
         resp_pane.body_layout().addWidget(self._resp_view)
         bottom_tabs.addTab(resp_pane, "Response")
 
+        self._intruder_render = ResponseRenderView()
+        bottom_tabs.addTab(self._intruder_render, "Render")
+        self._intruder_bottom_tabs = bottom_tabs
+        self._current_intruder_doc: dict | None = None
+        bottom_tabs.currentChanged.connect(self._on_intruder_bottom_tab_changed)
+
         splitter.addWidget(bottom_tabs)
         splitter.setSizes([420, 240])
         vb.addWidget(splitter, stretch=1)
@@ -972,6 +978,8 @@ class IntruderPage(QWidget):
         self._current_results.clear()
         self._req_view.clear()
         self._resp_view.clear()
+        self._current_intruder_doc = None
+        self._intruder_render.clear()
 
         # Persist run to MongoDB
         run_id = ""
@@ -1067,6 +1075,23 @@ class IntruderPage(QWidget):
 
     # ── result selection ──────────────────────────────────────────────────────
 
+    def _on_intruder_bottom_tab_changed(self, idx: int) -> None:
+        is_render = self._intruder_bottom_tabs.widget(idx) is self._intruder_render
+        self._intruder_render.on_tab_visibility_changed(is_render)
+        if is_render:
+            self._render_intruder_current()
+
+    def _render_intruder_current(self) -> None:
+        doc = self._current_intruder_doc
+        if not doc:
+            self._intruder_render.clear()
+            return
+        resp_text = doc.get("response_text", "") or ""
+        body_bytes, ct = _parse_resp_for_render(resp_text)
+        req_text = doc.get("request_text", "") or ""
+        _, url, _, _ = _parse_raw_request(req_text) if req_text.strip() else (None, "", None, None)
+        self._intruder_render.render_response(body_bytes, ct, url or "")
+
     def _on_row_changed(self, current, _previous):
         if not current.isValid():
             return
@@ -1077,8 +1102,11 @@ class IntruderPage(QWidget):
         seq = seq_item.data(Qt.UserRole)
         doc = self._current_results.get(seq)
         if doc:
+            self._current_intruder_doc = doc
             self._req_view.setPlainText(doc.get("request_text", ""))
             self._resp_view.setPlainText(doc.get("response_text", ""))
+            if self._intruder_bottom_tabs.currentWidget() is self._intruder_render:
+                self._render_intruder_current()
 
     def _on_filter_changed(self, text: str):
         self._proxy_model.setFilterFixedString(text)

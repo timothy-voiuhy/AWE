@@ -10,7 +10,7 @@ from PySide6.QtCore import QThread, QObject, Signal
 from config.config import RUNDIR
 from containers.docker_manager import manager as _docker_mgr, DockerUnavailableError
 from containers.tool_registry import TOOL_REGISTRY
-from utiliities import OpenProcess, runWhoisOnTarget
+from utilities import OpenProcess, runWhoisOnTarget
 
 
 # ── Docker-backed tool runner ─────────────────────────────────────────────────

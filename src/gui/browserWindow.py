@@ -10,8 +10,14 @@ from PySide6.QtWidgets import QWidget, QVBoxLayout, QMainWindow, QHBoxLayout, QL
     QProgressBar, QFileDialog
 from PySide6.QtGui import QAction
 from config.config import HOME_DIR, RUNDIR, CERTIFICATE_FILE
+from gui.appearance import load_ui_settings
 from gui.guiUtilities import HoverButton
-from utiliities import addHttpsScheme
+from utilities import addHttpsScheme
+
+_BROWSER_UA = {
+    "Chrome":  "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+    "Firefox": "Mozilla/5.0 (X11; Linux x86_64; rv:128.0) Gecko/20100101 Firefox/128.0",
+}
 
 
 class BrowserWindow(QMainWindow):
@@ -72,7 +78,10 @@ class BrowserWindow(QMainWindow):
     def setupProfile(self):
         self.profile = QWebEngineProfile.defaultProfile()
         self.profile.setPersistentCookiesPolicy(QWebEngineProfile.AllowPersistentCookies)
-        self.profile.setHttpUserAgent("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36")
+        _ui = load_ui_settings()
+        _browser = _ui.get("browser_engine", "Chrome")
+        _ua = _BROWSER_UA.get(_browser, _BROWSER_UA["Chrome"])
+        self.profile.setHttpUserAgent(_ua)
         self.profile.setDownloadPath(self.downloadPath)
         # self.profile.setPersistentStoragePath(self.downloadPath)
         self.profile.settings().setAttribute(QWebEngineSettings.WebAttribute.ForceDarkMode, True)

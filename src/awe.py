@@ -23,7 +23,7 @@ from gui import targetWindow
 from gui.actionsWidget import ActionsWidget
 from gui.guiUtilities import GuiProxyClient, HoverButton, TextEditor, SyntaxHighlighter, MessageBox
 from gui.threadrunners import AtomProxy
-from utiliities import red, cyan
+from utilities import red, cyan
 
 # Written by proxy.server on startup, deleted on shutdown
 _PROXY_CONTROL_FILE = Path(RUNDIR) / "tmp" / "proxy_control.txt"
@@ -927,12 +927,18 @@ if __name__ == "__main__":
                    "pymongo.topology", "urllib3", "charset_normalizer"):
         logging.getLogger(_noisy).setLevel(logging.WARNING)
                         
-    # Disable hardware acceleration for WebEngine
-    os.environ["QTWEBENGINE_CHROMIUM_FLAGS"] = "--disable-gpu"
+    # Disable hardware acceleration for WebEngine; route all WebEngine traffic
+    # through the AWE proxy so renders show up in HTTP history.
+    _proxy_port = _read_proxy_port()
+    os.environ["QTWEBENGINE_CHROMIUM_FLAGS"] = (
+        f"--disable-gpu "
+        f"--proxy-server=127.0.0.1:{_proxy_port} "
+        f"--ignore-certificate-errors"
+    )
     os.environ["QTWEBENGINE_DISABLE_GPU"] = "1"
     os.environ["QTWEBENGINE_DISABLE_SANDBOX"] = "1"
     os.environ["QTWEBENGINE_REMOTE_DEBUGGING"] = "9090"
-    
+
     App = QApplication()
 
     # ── Pre-flight: Docker must be running and MongoDB must be reachable ──────
@@ -977,10 +983,15 @@ if __name__ == "__main__":
     else:
         logging.warning(f"Stylesheet file not found: {stylesheet_path}")
         
-    # Set application font
-    font = QtGui.QFont("Segoe UI", 10)
-    App.setFont(font)
-    
+    # Apply saved font/theme so the dashboard already uses the user's settings.
+    from gui.appearance import apply_appearance, load_ui_settings
+    _ui = load_ui_settings()
+    apply_appearance(
+        theme_name=_ui.get("theme"),
+        font_family=_ui.get("font_family"),
+        font_size=_ui.get("font_size"),
+    )
+
     main_window = MainWin()
     main_window.showMaximized()
     sys.exit(App.exec())

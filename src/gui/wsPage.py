@@ -29,6 +29,7 @@ from PySide6.QtWidgets import (
     QSplitter, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
 )
 
+from database.scope import ScopeConfig
 from gui.repeater import _CodeEdit
 from proxy._ws_store import WSStore
 
@@ -189,6 +190,8 @@ class WebSocketPage(QWidget):
         self._current_conn_id: str  = ""
         self._worker: _WSClientWorker | None  = None
         self._live_conn_id: str = ""
+        self._scope        = ScopeConfig()
+        self._filter_scope = True
 
         self._build_ui()
 
@@ -236,6 +239,29 @@ class WebSocketPage(QWidget):
         self._clear_btn.setStyleSheet(_BTN_SS)
         self._clear_btn.clicked.connect(self._clear_all)
         tb.addWidget(self._clear_btn)
+
+        _scope_off = _BTN_SS
+        _scope_on  = (
+            "QPushButton{background:#1A2E1A;color:#A6E3A1;border:1px solid #A6E3A1;"
+            "border-radius:4px;padding:0 10px;min-height:24px;font-size:9px;}"
+            "QPushButton:hover{background:#253E25;}"
+        )
+        self._scope_btn = QPushButton("Scope")
+        self._scope_btn.setCheckable(True)
+        self._scope_btn.setChecked(True)
+        self._scope_btn.setStyleSheet(_scope_on)
+        self._scope_btn._ss_on  = _scope_on
+        self._scope_btn._ss_off = _scope_off
+
+        def _on_scope_toggle(checked: bool):
+            self._filter_scope = checked
+            self._scope_btn.setStyleSheet(
+                self._scope_btn._ss_on if checked else self._scope_btn._ss_off
+            )
+            self._refresh_connections()
+
+        self._scope_btn.toggled.connect(_on_scope_toggle)
+        tb.addWidget(self._scope_btn)
         vb.addLayout(tb)
         vb.addWidget(_hline())
 
@@ -270,7 +296,7 @@ class WebSocketPage(QWidget):
         splitter.addWidget(self._build_frame_log())
         splitter.addWidget(self._build_payload_viewer())
         splitter.addWidget(self._build_sender())
-        splitter.setSizes([280, 200, 220])
+        splitter.setSizes([300, 250, 150])
 
         vb.addWidget(splitter, stretch=1)
         return w
@@ -343,7 +369,7 @@ class WebSocketPage(QWidget):
 
         # URL row
         url_row = QHBoxLayout()
-        url_row.setContentsMargins(8, 6, 8, 4)
+        url_row.setContentsMargins(8, 2, 8, 2)
         url_row.setSpacing(6)
         self._url_edit = QLineEdit()
         self._url_edit.setPlaceholderText("wss://host/path")
@@ -371,12 +397,11 @@ class WebSocketPage(QWidget):
 
         # editor
         self._sender_edit = _CodeEdit(read_only=False)
-        self._sender_edit.setMaximumHeight(80)
-        vb.addWidget(self._sender_edit)
+        vb.addWidget(self._sender_edit, stretch=1)
 
         # send buttons
         send_row = QHBoxLayout()
-        send_row.setContentsMargins(8, 4, 8, 6)
+        send_row.setContentsMargins(8, 2, 8, 2)
         send_row.setSpacing(6)
         send_row.addStretch()
 
@@ -398,7 +423,11 @@ class WebSocketPage(QWidget):
     # ── Connection list ───────────────────────────────────────────────────────
 
     def _refresh_connections(self) -> None:
-        conns = self._ws_store.list_connections()
+        all_conns = self._ws_store.list_connections()
+        if self._filter_scope and self._scope.entries:
+            conns = [c for c in all_conns if self._scope.matches(c.get("host", ""))]
+        else:
+            conns = all_conns
         self._conn_rows = conns
 
         prev_id = self._current_conn_id
@@ -488,6 +517,11 @@ class WebSocketPage(QWidget):
         self._payload_view.setPlainText(text)
 
     # ── Public API ────────────────────────────────────────────────────────────
+
+    def on_scope_changed(self, config: ScopeConfig) -> None:
+        self._scope = config
+        if self._filter_scope:
+            self._refresh_connections()
 
     def load_connection(self, host: str, path: str) -> None:
         """Called from History 'View WebSocket' — select matching connection."""

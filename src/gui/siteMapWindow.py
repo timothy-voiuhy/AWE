@@ -27,10 +27,13 @@ from PySide6.QtWidgets import (
 )
 
 from database.scope import ScopeConfig
+from gui.appearance import load_ui_settings, save_ui_settings
+from gui.filterPanel import FilterPanel, _status_color, _file_type
 from gui.guiUtilities import (
     SyntaxHighlighter, format_http_body, SearchBar,
     decode_text, DecodeDialog,
     parse_http_headers, set_header_clipboard, HeaderSelectorDialog,
+    ResponseRenderView,
 )
 
 log = logging.getLogger(__name__)
@@ -38,33 +41,12 @@ log = logging.getLogger(__name__)
 _DOC_ID_ROLE = Qt.UserRole + 1   # MongoDB _id string on leaf items
 _KEY_ROLE    = Qt.UserRole + 2   # stable path key for expansion tracking
 
-# ── File-type filter groups ───────────────────────────────────────────────────
+# Sitemap filter panel shows search/method/status/hide_types only.
+# SSE-only and length filters are HTTP-History-specific.
+_SITEMAP_SECTIONS = frozenset({"search", "method", "status", "hide_types"})
 
-_EXT_GROUPS: dict[str, frozenset[str]] = {
-    "Images":  frozenset({".jpg", ".jpeg", ".png", ".gif", ".svg", ".ico",
-                           ".webp", ".bmp", ".avif", ".tiff"}),
-    "CSS":     frozenset({".css", ".scss", ".less", ".sass"}),
-    "Scripts": frozenset({".js", ".ts", ".jsx", ".tsx", ".mjs", ".cjs"}),
-    "Fonts":   frozenset({".woff", ".woff2", ".ttf", ".eot", ".otf"}),
-    "Media":   frozenset({".mp4", ".mp3", ".avi", ".wav", ".ogg", ".flac",
-                           ".mkv", ".webm", ".mov"}),
-}
-
-_DEFAULT_HIDDEN: frozenset[str] = frozenset({"Images", "CSS", "Fonts", "Media"})
-
-
-# ── helpers ───────────────────────────────────────────────────────────────────
-
-def _status_color(code) -> str:
-    try:
-        c = int(code)
-    except (TypeError, ValueError):
-        return "#6C7086"
-    if 200 <= c < 300: return "#A6E3A1"
-    if 300 <= c < 400: return "#89B4FA"
-    if 400 <= c < 500: return "#F9E2AF"
-    if 500 <= c < 600: return "#F38BA8"
-    return "#6C7086"
+# Default hidden types on first launch (no saved settings)
+_SITEMAP_DEFAULT_HIDDEN = ["images", "css", "fonts", "media"]
 
 
 class _PathNode:
@@ -129,15 +111,12 @@ class SiteMapPage(QWidget):
         self._filter_scope = True
         self._last_count   = -1          # for change detection
 
-        self._show_types: dict[str, bool] = {
-            g: (g not in _DEFAULT_HIDDEN) for g in _EXT_GROUPS
-        }
-        self._type_btns: dict[str, QPushButton] = {}
         self._tree_initialized = False   # True after first successful load
 
         self._build_ui()
         self._scope_btn.setChecked(True)
         self._load_scope()
+        self._restore_saved_filters()
         self._refresh_tree()
         self._start_poll_timer()
 
@@ -179,6 +158,28 @@ class SiteMapPage(QWidget):
         self._scope_btn.toggled.connect(self._on_scope_toggle)
         tb.addWidget(self._scope_btn)
 
+        self._filter_btn = QPushButton("Filters ▾")
+        self._filter_btn.setCheckable(True)
+        self._filter_btn.setFixedHeight(24)
+        self._filter_btn.setStyleSheet(_BTN_SS)
+        self._filter_btn.toggled.connect(self._on_filter_toggle)
+        tb.addWidget(self._filter_btn)
+
+        self._reset_btn = QPushButton("Reset")
+        self._reset_btn.setFixedHeight(24)
+        self._reset_btn.setStyleSheet(_BTN_SS)
+        self._reset_btn.clicked.connect(self._on_filter_reset)
+        self._reset_btn.setVisible(False)
+        tb.addWidget(self._reset_btn)
+
+        self._filter_active_lbl = QLabel("")
+        self._filter_active_lbl.setStyleSheet(
+            "color:#F9E2AF; font-size:9px; background:#2A2A1A;"
+            " border:1px solid #45475A; border-radius:3px; padding:0 6px;"
+        )
+        self._filter_active_lbl.setVisible(False)
+        tb.addWidget(self._filter_active_lbl)
+
         ref_btn = QPushButton("Refresh")
         ref_btn.setFixedHeight(24)
         ref_btn.setStyleSheet(_BTN_SS)
@@ -193,34 +194,24 @@ class SiteMapPage(QWidget):
         tb.addWidget(sync_btn)
         root.addLayout(tb)
 
-        # ── row 2: file-type filter bar ───────────────────────────────────────
-        fb = QHBoxLayout()
-        fb.setContentsMargins(8, 0, 8, 5)
-        fb.setSpacing(5)
-
-        show_lbl = QLabel("Show:")
-        show_lbl.setStyleSheet("color:#6C7086; font-size:9px; margin-right:2px;")
-        fb.addWidget(show_lbl)
-
-        for group in _EXT_GROUPS:
-            shown = self._show_types[group]
-            btn   = QPushButton(group)
-            btn.setCheckable(True)
-            btn.setChecked(shown)
-            btn.setFixedHeight(20)
-            btn.setStyleSheet(_TOGGLE_SS_ON if shown else _TOGGLE_SS_OFF)
-            btn.toggled.connect(lambda checked, g=group: self._on_type_toggle(g, checked))
-            self._type_btns[group] = btn
-            fb.addWidget(btn)
-
-        fb.addStretch()
-        root.addLayout(fb)
-
         sep = QFrame()
         sep.setFrameShape(QFrame.HLine)
         sep.setFixedHeight(1)
         sep.setStyleSheet("background:#313244; border:none;")
         root.addWidget(sep)
+
+        # ── filter panel (collapsed by default) ───────────────────────────────
+        self._filter_panel = FilterPanel(sections=_SITEMAP_SECTIONS)
+        self._filter_panel.setVisible(False)
+        self._filter_panel.changed.connect(self._on_filter_changed)
+        root.addWidget(self._filter_panel)
+
+        self._filter_sep = QFrame()
+        self._filter_sep.setFrameShape(QFrame.HLine)
+        self._filter_sep.setFixedHeight(1)
+        self._filter_sep.setStyleSheet("background:#313244; border:none;")
+        self._filter_sep.setVisible(False)
+        root.addWidget(self._filter_sep)
 
         # ── splitter — tree left, req/resp right ──────────────────────────────
         splitter = QSplitter(Qt.Horizontal)
@@ -259,8 +250,10 @@ class SiteMapPage(QWidget):
         )
         self._req_view  = _CodeView()
         self._resp_view = _CodeView()
-        self._tabs.addTab(self._req_view,  "Request")
-        self._tabs.addTab(self._resp_view, "Response")
+        self._render_view = ResponseRenderView()
+        self._tabs.addTab(self._req_view,    "Request")
+        self._tabs.addTab(self._resp_view,   "Response")
+        self._tabs.addTab(self._render_view, "Render")
         self._req_view.send_to_repeater.connect(self.send_to_repeater)
         self._req_view.send_to_intruder.connect(self.send_to_intruder)
         self._resp_view.send_to_repeater.connect(
@@ -273,8 +266,19 @@ class SiteMapPage(QWidget):
         self._search_bar.set_editor(self._req_view)
         rr_vb.addWidget(self._search_bar)
 
-        self._tabs.currentChanged.connect(
-            lambda _: self._search_bar.set_editor(self._tabs.currentWidget()))
+        self._current_doc: dict | None = None
+
+        def _on_tab_changed(idx: int) -> None:
+            current = self._tabs.widget(idx)
+            is_render = current is self._render_view
+            self._render_view.on_tab_visibility_changed(is_render)
+            self._search_bar.setVisible(not is_render)
+            if is_render:
+                self._render_current_response()
+            else:
+                self._search_bar.set_editor(current)
+
+        self._tabs.currentChanged.connect(_on_tab_changed)
         self._req_view.installEventFilter(self)
         self._resp_view.installEventFilter(self)
 
@@ -283,15 +287,6 @@ class SiteMapPage(QWidget):
         root.addWidget(splitter, stretch=1)
 
     # ── tree ──────────────────────────────────────────────────────────────────
-
-    def _should_show_path(self, path: str) -> bool:
-        ext = Path(path).suffix.lower()
-        if not ext:
-            return True
-        for group, exts in _EXT_GROUPS.items():
-            if ext in exts and not self._show_types[group]:
-                return False
-        return True
 
     def _refresh_tree(self) -> None:
         # Preserve the user's current tree state before clearing
@@ -330,16 +325,20 @@ class SiteMapPage(QWidget):
             }},
         ]
 
+        fp = self._filter_panel
         by_host: dict[str, list[tuple]] = {}
         try:
             for doc in self._col.aggregate(pipeline):
-                host   = doc["_id"]["host"]
-                method = doc["_id"]["method"]
-                path   = doc["_id"]["path"] or "/"
-                if not self._should_show_path(path):
+                host        = doc["_id"]["host"]
+                method      = doc["_id"]["method"]
+                path        = doc["_id"]["path"] or "/"
+                status_code = doc["status_code"]
+                mini = {"host": host, "method": method,
+                        "path": path, "status_code": status_code}
+                if not fp.passes(mini, {}, {}, "", False, False, 0):
                     continue
                 by_host.setdefault(host, []).append(
-                    (method, path, doc["status_code"], str(doc["doc_id"]))
+                    (method, path, status_code, str(doc["doc_id"]))
                 )
         except Exception as exc:
             log.warning("SiteMap aggregation failed: %s", exc)
@@ -370,6 +369,7 @@ class SiteMapPage(QWidget):
             total += len(entries)
 
         self._count_lbl.setText(f"{total} endpoint{'s' if total != 1 else ''}")
+        self._update_filter_indicator()
 
         # On first load expand all host nodes; afterwards restore what the user had open
         if is_first_load:
@@ -450,29 +450,68 @@ class SiteMapPage(QWidget):
             return
         doc = self._load_doc(doc_id)
         if doc:
+            self._current_doc = doc
             self._req_view.setText(_fmt_request(doc.get("request", {})))
             self._resp_view.setText(_fmt_response(doc.get("response", {})))
-            self._tabs.setCurrentIndex(0)
+            if self._tabs.currentWidget() is self._render_view:
+                self._render_current_response()
+            else:
+                self._tabs.setCurrentIndex(0)
+
+    def _render_current_response(self) -> None:
+        doc = self._current_doc
+        if not doc:
+            self._render_view.clear()
+            return
+        resp = doc.get("response") or {}
+        body_str = resp.get("body", "") or ""
+        body_bytes = body_str.encode("utf-8", errors="replace")
+        hdrs = resp.get("headers") or {}
+        ct_val = hdrs.get("content-type") or hdrs.get("Content-Type") or ""
+        if isinstance(ct_val, list):
+            ct_val = ct_val[0] if ct_val else ""
+        content_type = str(ct_val).split(";")[0].strip()
+        req = doc.get("request") or {}
+        base_url = req.get("url") or ""
+        self._render_view.render_response(body_bytes, content_type, base_url)
 
     def _on_tree_context_menu(self, pos: QPoint) -> None:
         index  = self._tree.indexAt(pos)
-        if not index.isValid():
-            return
-        item   = self._model.itemFromIndex(index)
+        item   = self._model.itemFromIndex(index) if index.isValid() else None
         doc_id = item.data(_DOC_ID_ROLE) if item else ""
-        if not doc_id:
-            return
-        menu       = QMenu(self)
-        action     = menu.addAction("Send to Repeater")
-        int_action = menu.addAction("Send to Intruder")
+
+        menu = QMenu(self)
+
+        expand_act   = menu.addAction("Expand All")
+        collapse_act = menu.addAction("Collapse All")
+        if index.isValid() and item and item.hasChildren():
+            menu.addSeparator()
+            expand_sub_act = menu.addAction("Expand Subtree")
+        else:
+            expand_sub_act = None
+
+        rep_act = int_act = None
+        if doc_id:
+            menu.addSeparator()
+            rep_act = menu.addAction("Send to Repeater")
+            int_act = menu.addAction("Send to Intruder")
+
         chosen = menu.exec(self._tree.mapToGlobal(pos))
-        doc = self._load_doc(doc_id)
-        if not doc:
-            return
-        if chosen is action:
-            self.send_to_repeater.emit(_fmt_request(doc.get("request", {})))
-        elif chosen is int_action:
-            self.send_to_intruder.emit(_fmt_request(doc.get("request", {})))
+
+        if chosen is expand_act:
+            self._tree.expandAll()
+        elif chosen is collapse_act:
+            self._tree.collapseAll()
+        elif expand_sub_act and chosen is expand_sub_act:
+            self._tree.expandRecursively(index)
+        elif doc_id and chosen in (rep_act, int_act):
+            doc = self._load_doc(doc_id)
+            if doc:
+                raw = _fmt_request(doc.get("request", {}))
+                if chosen is rep_act:
+                    self.send_to_repeater.emit(raw)
+                else:
+                    self.send_to_intruder.emit(raw)
 
     def eventFilter(self, obj, event) -> bool:
         if (event.type() == QEvent.Type.KeyPress
@@ -489,10 +528,50 @@ class SiteMapPage(QWidget):
         self._scope_btn.setStyleSheet(_TOGGLE_SS_ON if checked else _TOGGLE_SS_OFF)
         self._refresh_tree()
 
-    def _on_type_toggle(self, group: str, checked: bool) -> None:
-        self._show_types[group] = checked
-        self._type_btns[group].setStyleSheet(_TOGGLE_SS_ON if checked else _TOGGLE_SS_OFF)
+    def _on_filter_toggle(self, checked: bool) -> None:
+        self._filter_panel.setVisible(checked)
+        self._filter_sep.setVisible(checked)
+        self._filter_btn.setText("Filters ▴" if checked else "Filters ▾")
+
+    def _on_filter_changed(self) -> None:
         self._refresh_tree()
+        active = self._filter_panel.is_active()
+        self._reset_btn.setVisible(active)
+        self._save_filters()
+
+    def _on_filter_reset(self) -> None:
+        self._filter_panel.reset()
+        self._reset_btn.setVisible(False)
+        self._refresh_tree()
+        self._save_filters()
+
+    def _update_filter_indicator(self) -> None:
+        if self._filter_panel.is_active():
+            self._filter_active_lbl.setVisible(True)
+        else:
+            self._filter_active_lbl.setVisible(False)
+
+    def _save_filters(self) -> None:
+        try:
+            data = load_ui_settings()
+            data["sitemap_filters"] = self._filter_panel.to_dict()
+            save_ui_settings(data)
+        except Exception:
+            pass
+
+    def _restore_saved_filters(self) -> None:
+        try:
+            data   = load_ui_settings()
+            saved  = data.get("sitemap_filters")
+            if saved is None:
+                # First launch: apply sensible defaults (hide images/css/fonts/media)
+                saved = {"hide_types": _SITEMAP_DEFAULT_HIDDEN}
+            self._filter_panel.from_dict(saved)
+            if self._filter_panel.is_active():
+                self._filter_btn.setChecked(True)
+                self._reset_btn.setVisible(True)
+        except Exception:
+            pass
 
     def _load_scope(self) -> None:
         if self._repo:

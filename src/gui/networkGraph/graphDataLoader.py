@@ -52,9 +52,17 @@ class GraphDataLoader(QThread):
                     ex.data["proxy_type"] = new_pt
                     ex.kind = "reverse_proxy"  # upgrade kind in-place
 
+        _CDN_EDGE_KINDS = {"proxied_by", "routes_through"}
+
         def _edge(src, tgt, kind):
             k = (src, tgt, kind)
             if k not in edges:
+                # CDN relationship edge: replace any existing opposite-kind CDN edge
+                # so a node that upgrades from cdn→reverse_proxy doesn't end up with
+                # both a "proxied_by" and a "routes_through" edge to the same target.
+                if kind in _CDN_EDGE_KINDS:
+                    for other in _CDN_EDGE_KINDS - {kind}:
+                        edges.pop((src, tgt, other), None)
                 edges[k] = GraphEdge(src, tgt, kind)
 
         root_id = f"target:{target}"
@@ -118,7 +126,7 @@ class GraphDataLoader(QThread):
                 if not url:
                     continue
                 try:
-                    host = urlsplit(url).netloc
+                    host = urlsplit(url).hostname or ""
                 except Exception:
                     host = ""
                 if not host:
@@ -211,7 +219,7 @@ class GraphDataLoader(QThread):
                 if not name:
                     continue
                 try:
-                    host = urlsplit(url).netloc
+                    host = urlsplit(url).hostname or ""
                 except Exception:
                     host = ""
                 vid   = f"vuln:{d.get('template_id','?')}:{host}"

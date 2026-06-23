@@ -25,6 +25,7 @@ from gui.guiUtilities import (
     decode_text, DecodeDialog,
     parse_http_headers, set_header_clipboard, HeaderSelectorDialog,
     paste_headers, has_copied_headers,
+    ResponseRenderView,
 )
 
 log = logging.getLogger(__name__)
@@ -65,6 +66,22 @@ def _parse_raw_request(text: str) -> tuple[str, str, dict[str, str], bytes]:
         url = f"{scheme}://{host}{url}"
 
     return method, url, headers, body
+
+
+def _parse_resp_for_render(text: str) -> tuple[bytes, str]:
+    """Parse formatted raw HTTP response text → (body_bytes, content_type)."""
+    if "\n\n" in text:
+        hdr_block, body = text.split("\n\n", 1)
+    else:
+        return b"", ""
+    ct = ""
+    for line in hdr_block.split("\n")[1:]:
+        if ":" in line:
+            k, _, v = line.partition(":")
+            if k.strip().lower() == "content-type":
+                ct = v.strip().split(";")[0].strip()
+                break
+    return body.encode("utf-8", errors="replace"), ct
 
 
 # ── background send worker ────────────────────────────────────────────────────
@@ -199,8 +216,20 @@ class _TabPane(QWidget):
         splitter.addWidget(req_wrap)
 
         resp_wrap = _PaneWrapper("Response", "#6C7086")
-        self._resp_edit = _CodeEdit(read_only=True)
-        resp_wrap.body_layout().addWidget(self._resp_edit)
+        # Inner tab: Raw text | Render
+        self._resp_inner = QTabWidget()
+        self._resp_inner.setStyleSheet(
+            "QTabBar::tab{background:#181825;color:#6C7086;"
+            "padding:2px 10px;border:none;font-size:9px;}"
+            "QTabBar::tab:selected{background:#252540;color:#CDD6F4;}"
+            "QTabWidget::pane{border:none;}"
+        )
+        self._resp_edit   = _CodeEdit(read_only=True)
+        self._resp_render = ResponseRenderView()
+        self._resp_inner.addTab(self._resp_edit,   "Raw")
+        self._resp_inner.addTab(self._resp_render, "Render")
+        self._resp_inner.currentChanged.connect(self._on_resp_inner_tab_changed)
+        resp_wrap.body_layout().addWidget(self._resp_inner)
         splitter.addWidget(resp_wrap)
 
         splitter.setSizes([350, 300])
@@ -209,6 +238,8 @@ class _TabPane(QWidget):
         self._search_bar = SearchBar(self)
         self._search_bar.set_editor(self._req_edit)
         root.addWidget(self._search_bar)
+
+        self._last_resp_text: str = ""
 
         self._req_edit.installEventFilter(self)
         self._resp_edit.installEventFilter(self)
@@ -226,6 +257,22 @@ class _TabPane(QWidget):
 
     # ── send / receive ────────────────────────────────────────────────────────
 
+    def _on_resp_inner_tab_changed(self, idx: int) -> None:
+        w = self._resp_inner.widget(idx)
+        is_render = w is self._resp_render
+        self._resp_render.on_tab_visibility_changed(is_render)
+        self._search_bar.setVisible(not is_render)
+        if is_render:
+            self._do_render()
+
+    def _do_render(self) -> None:
+        if not self._last_resp_text:
+            self._resp_render.clear()
+            return
+        body_bytes, ct = _parse_resp_for_render(self._last_resp_text)
+        _, url, _, _ = _parse_raw_request(self._req_edit.toPlainText().strip() or "GET / HTTP/1.1\r\n\r\n")
+        self._resp_render.render_response(body_bytes, ct, url)
+
     def _on_send(self) -> None:
         raw = self._req_edit.toPlainText().strip()
         if not raw:
@@ -235,6 +282,8 @@ class _TabPane(QWidget):
         self._send_btn.setEnabled(False)
         self._status_lbl.setText("Sending…")
         self._resp_edit.clear()
+        self._last_resp_text = ""
+        self._resp_render.clear()
 
         self._worker = _SendWorker(method, url, headers, body, self._proxy_port)
         self._worker.done.connect(self._on_done)
@@ -246,6 +295,8 @@ class _TabPane(QWidget):
             self._status_lbl.setStyleSheet("color:#F38BA8; font-size:9px;")
             self._status_lbl.setText(f"Error — {error[:100]}")
             self._resp_edit.setPlainText(f"Error:\n{error}")
+            self._last_resp_text = ""
+            self._resp_render.clear()
         else:
             first = response.split('\n', 1)[0]
             # colour status label by response class
@@ -262,6 +313,9 @@ class _TabPane(QWidget):
             self._status_lbl.setStyleSheet(f"color:{color}; font-size:9px; font-weight:bold;")
             self._status_lbl.setText(first)
             self._resp_edit.setPlainText(response)
+            self._last_resp_text = response
+            if self._resp_inner.currentWidget() is self._resp_render:
+                self._do_render()
 
 
 # ── repeater page (embeddable) ────────────────────────────────────────────────

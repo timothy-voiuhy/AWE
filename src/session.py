@@ -14,7 +14,7 @@ import httpx
 import httpx._client as http_client
 
 from config.config import RUNDIR
-from utiliities import (yellow, cyan, red)
+from utilities import (yellow, cyan, red)
 
 
 # from PySide6.QtNetwork import QNetworkRequest

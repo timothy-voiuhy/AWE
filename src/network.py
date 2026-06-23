@@ -3,7 +3,7 @@ import socket
 import requests
 import scapy.all as scapy
 
-from utiliities import red, yellow, cyan
+from utilities import red, yellow, cyan
 
 
 class Network():

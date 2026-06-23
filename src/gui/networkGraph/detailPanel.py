@@ -353,6 +353,6 @@ class DetailPanel(QWidget):
     def _add_action(self, label: str, color: str, fn):
         btn = QPushButton(label)
         btn.setStyleSheet(self._BTN % (color, color))
-        btn.clicked.connect(fn)
+        btn.clicked.connect(lambda _checked=False: fn())
         self._act_vb.addWidget(btn)
 

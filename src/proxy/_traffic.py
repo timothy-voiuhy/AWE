@@ -80,11 +80,25 @@ class TrafficStore:
                 return
 
         parsed = urlsplit(url)
+        _ct    = str(dict(response.headers).get("content-type", "")).lower()
+        is_sse = (
+            response.body == b"[SSE stream]"
+            or "text/event-stream" in _ct
+        )
+        is_rsc = (
+            not is_sse
+            and "text/x-component" in _ct
+        ) or (
+            not is_sse
+            and _looks_like_rsc(response.body)
+        )
         entry = {
             "host":        host,
             "path":        parsed.path or "/",
             "method":      method.upper(),
             "status_code": response.status_code,
+            "is_sse":      is_sse,
+            "is_rsc":      is_rsc,
             "timestamp":   datetime.now(timezone.utc).isoformat(),
             "request": {
                 "method":        method,
@@ -144,6 +158,20 @@ def _body_str(raw: bytes) -> str:
         return raw.decode("utf-8")
     except UnicodeDecodeError:
         return base64.b64encode(raw).decode()
+
+
+_RSC_LINE_RE = re.compile(r'^(?:\d+:|:(?:HL|HC|HK|E|S|M|I)\[)')
+
+
+def _looks_like_rsc(body: bytes) -> bool:
+    """Heuristic: first few lines match the Next.js Flight wire format."""
+    try:
+        text = body[:512].decode("utf-8", errors="replace")
+    except Exception:
+        return False
+    lines = [l.strip() for l in text.splitlines() if l.strip()][:6]
+    matches = sum(1 for l in lines if _RSC_LINE_RE.match(l))
+    return matches >= 2
 
 
 def _headers_to_dict(headers: list[tuple[str, str]]) -> dict[str, str | list[str]]:

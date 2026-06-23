@@ -1205,7 +1205,7 @@ class PipelineWindow(QMainWindow):
         """Walk the parent chain to find the TargetWindow that owns us."""
         ancestor = self.parent()
         while ancestor is not None:
-            if hasattr(ancestor, "OpenResultsWindow") and hasattr(ancestor, "_resultsWindow"):
+            if hasattr(ancestor, "_switch_page") and hasattr(ancestor, "OpenResultsWindow"):
                 return ancestor
             ancestor = ancestor.parent()
         return None
@@ -1232,6 +1232,11 @@ class PipelineWindow(QMainWindow):
         self._resultsWindow.show()
 
     def _open_settings(self):
+        tw = self._find_target_window()
+        if tw is not None:
+            tw._switch_page(13)
+            return
+        # Fallback when not embedded in TargetWindow (e.g. standalone)
         dlg = SettingsWindow(self._project_dir, _MONGO_URI, parent=self)
         dlg.exec()
 

@@ -5,7 +5,7 @@ import socket
 from OpenSSL import SSL
 import certifi
 from awe_net.awe_net import Request
-from utiliities import DissectClientReqPkt
+from utilities import DissectClientReqPkt
 
 
 class ClientSslSocket:
