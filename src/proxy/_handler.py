@@ -27,13 +27,19 @@ from proxy._ca import CertificateAuthority
 from proxy._http import (
     build_request_bytes,
     build_response,
+    build_ws_upgrade_bytes,
     header_map,
     is_keep_alive,
     parse_header_block,
     read_request,
 )
+from proxy._intercept import InterceptGate, decision_body, decision_headers
+from proxy._models import ProxyResponse
+from proxy._rules import RulesEngine
 from proxy._traffic import TrafficStore
 from proxy._upstream import UpstreamClient
+from proxy._ws_frame import WSFrame, encode_frame, read_frame
+from proxy._ws_store import WSStore
 
 log = logging.getLogger(__name__)
 
@@ -42,21 +48,30 @@ _CONNECT_FAIL = b"HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\n\r\n"
 
 
 class ConnectionHandler:
-    __slots__ = ("_reader", "_writer", "_ca", "_upstream", "_traffic")
+    __slots__ = (
+        "_reader", "_writer", "_ca", "_upstream",
+        "_traffic", "_ws_store", "_rules", "_intercept",
+    )
 
     def __init__(
         self,
-        reader: asyncio.StreamReader,
-        writer: asyncio.StreamWriter,
-        ca: CertificateAuthority,
-        upstream: UpstreamClient,
-        traffic: TrafficStore,
+        reader:    asyncio.StreamReader,
+        writer:    asyncio.StreamWriter,
+        ca:        CertificateAuthority,
+        upstream:  UpstreamClient,
+        traffic:   TrafficStore,
+        ws_store:  WSStore | None       = None,
+        rules:     RulesEngine | None   = None,
+        intercept: InterceptGate | None = None,
     ) -> None:
-        self._reader   = reader
-        self._writer   = writer
-        self._ca       = ca
-        self._upstream = upstream
-        self._traffic  = traffic
+        self._reader    = reader
+        self._writer    = writer
+        self._ca        = ca
+        self._upstream  = upstream
+        self._traffic   = traffic
+        self._ws_store  = ws_store
+        self._rules     = rules
+        self._intercept = intercept
 
     # ── entry point ───────────────────────────────────────────────────────────
 
@@ -165,8 +180,41 @@ class ConnectionHandler:
                 )
                 break
 
-            url      = _build_url("https", host, port, target)
+            url = _build_url("https", host, port, target)
+
+            # Apply match-and-replace to the request
+            if self._rules:
+                method, url, headers, body = self._rules.apply_to_request(
+                    method, url, headers, body,
+                )
+
+            # Intercept — may pause until user decides
+            if self._intercept and self._intercept.is_enabled():
+                decision = await self._intercept.maybe_intercept(
+                    host, method, url, headers, body,
+                )
+                if decision.get("action") == "drop":
+                    writer.write(build_response(
+                        403, "Forbidden", [], b"[AWE] Dropped by intercept",
+                    ))
+                    await writer.drain()
+                    break
+                new_hdrs = decision_headers(decision)
+                headers  = new_hdrs if new_hdrs else headers
+                body     = decision_body(decision, body)
+
             response = await self._upstream.request(method, url, headers, body)
+
+            # Apply match-and-replace to the response
+            if self._rules:
+                resp_headers, resp_body = self._rules.apply_to_response(
+                    list(response.headers), response.body,
+                )
+                response = ProxyResponse(
+                    response.status_code, response.reason,
+                    response.http_version, resp_headers, resp_body,
+                )
+
             self._traffic.capture(host, method, url, headers, body, response)
 
             try:
@@ -196,7 +244,39 @@ class ConnectionHandler:
             host = hmap.get("host", "")
             url  = target if "://" in target else f"http://{host}{target}"
 
+            # Apply match-and-replace to the request
+            if self._rules:
+                method, url, headers, body = self._rules.apply_to_request(
+                    method, url, headers, body,
+                )
+
+            # Intercept — may pause until user decides
+            if self._intercept and self._intercept.is_enabled():
+                decision = await self._intercept.maybe_intercept(
+                    host, method, url, headers, body,
+                )
+                if decision.get("action") == "drop":
+                    self._writer.write(build_response(
+                        403, "Forbidden", [], b"[AWE] Dropped by intercept",
+                    ))
+                    await self._writer.drain()
+                    break
+                new_hdrs = decision_headers(decision)
+                headers  = new_hdrs if new_hdrs else headers
+                body     = decision_body(decision, body)
+
             response = await self._upstream.request(method, url, headers, body)
+
+            # Apply match-and-replace to the response
+            if self._rules:
+                resp_headers, resp_body = self._rules.apply_to_response(
+                    list(response.headers), response.body,
+                )
+                response = ProxyResponse(
+                    response.status_code, response.reason,
+                    response.http_version, resp_headers, resp_body,
+                )
+
             self._traffic.capture(host, method, url, headers, body, response)
 
             try:
@@ -217,7 +297,7 @@ class ConnectionHandler:
                     TimeoutError, asyncio.LimitOverrunError):
                 break
 
-    # ── WebSocket passthrough ─────────────────────────────────────────────────
+    # ── WebSocket frame-aware relay ───────────────────────────────────────────
 
     async def _handle_websocket(
         self,
@@ -229,7 +309,7 @@ class ConnectionHandler:
         headers: list[tuple[str, str]],
         body: bytes,
     ) -> None:
-        log.debug("WebSocket passthrough: %s:%d%s", host, port, path)
+        log.debug("WebSocket intercept: %s:%d%s", host, port, path)
         up_ctx = ssl.create_default_context()
         up_ctx.check_hostname = False
         up_ctx.verify_mode    = ssl.CERT_NONE
@@ -241,22 +321,59 @@ class ConnectionHandler:
             log.warning("WebSocket upstream connect failed %s:%d: %s", host, port, exc)
             return
 
-        upgrade_bytes = build_request_bytes("GET", path, headers, body)
+        upgrade_bytes = build_ws_upgrade_bytes(path, headers)
         try:
             up_writer.write(upgrade_bytes)
             await up_writer.drain()
             resp_raw = await up_reader.readuntil(b"\r\n\r\n")
-            client_writer.write(resp_raw)
+            # Strip permessage-deflate from the 101 response so the client
+            # also believes compression is disabled (matching what we sent upstream).
+            resp_clean = _strip_ws_compression_from_response(resp_raw)
+            client_writer.write(resp_clean)
             await client_writer.drain()
         except OSError as exc:
             log.warning("WebSocket handshake relay error: %s", exc)
             up_writer.close()
             return
 
-        await _bidirectional_tunnel(client_reader, client_writer, up_reader, up_writer)
+        conn_id = ""
+        if self._ws_store is not None:
+            conn_id = self._ws_store.create_connection(host, path)
+
+        try:
+            await _ws_frame_relay(
+                client_reader, client_writer,
+                up_reader, up_writer,
+                conn_id, self._ws_store,
+            )
+        finally:
+            if self._ws_store is not None and conn_id:
+                self._ws_store.close_connection(conn_id)
+            try:
+                up_writer.close()
+            except Exception:
+                pass
 
 
 # ── helpers ───────────────────────────────────────────────────────────────────
+
+def _strip_ws_compression_from_response(raw: bytes) -> bytes:
+    """
+    Remove any Sec-WebSocket-Extensions header from the server's 101 response
+    before forwarding to the client.  This ensures both sides believe compression
+    is disabled (matching the stripped upgrade we sent upstream).
+    """
+    try:
+        text = raw.decode("iso-8859-1")
+        lines = text.split("\r\n")
+        filtered = [
+            ln for ln in lines
+            if not ln.lower().startswith("sec-websocket-extensions")
+        ]
+        return "\r\n".join(filtered).encode("iso-8859-1")
+    except Exception:
+        return raw
+
 
 def _build_url(scheme: str, host: str, port: int, path: str) -> str:
     default = {"http": 80, "https": 443}
@@ -265,28 +382,49 @@ def _build_url(scheme: str, host: str, port: int, path: str) -> str:
     return f"{scheme}://{host}:{port}{path}"
 
 
-async def _pipe(
-    reader: asyncio.StreamReader,
-    writer: asyncio.StreamWriter,
+async def _ws_frame_relay(
+    c_reader: asyncio.StreamReader,
+    c_writer: asyncio.StreamWriter,
+    s_reader: asyncio.StreamReader,
+    s_writer: asyncio.StreamWriter,
+    conn_id: str,
+    ws_store,
 ) -> None:
-    try:
-        while True:
-            data = await reader.read(65536)
-            if not data:
-                break
-            writer.write(data)
-            await writer.drain()
-    except OSError:
-        pass
-    finally:
+    """
+    Bidirectional WS relay that decodes every frame for logging while
+    forwarding it faithfully to the other side.
+
+    Client→server frames arrive MASKED (RFC 6455 §5.3).  We unmask them
+    for logging, then re-mask before forwarding — RFC 6455 §5.1 requires
+    all client-to-server frames to be masked; servers MUST close on an
+    unmasked client frame (close code 1002).
+
+    Server→client frames arrive UNMASKED and are forwarded unmasked.
+    """
+
+    async def relay(
+        reader: asyncio.StreamReader,
+        writer: asyncio.StreamWriter,
+        direction: str,
+        masked_in: bool,
+        mask_out: bool,
+    ) -> None:
         try:
-            writer.close()
-        except Exception:
+            while True:
+                frame = await read_frame(reader, masked_in=masked_in)
+                frame.direction = direction
+                if ws_store is not None and conn_id:
+                    ws_store.append_frame(conn_id, frame)
+                writer.write(encode_frame(frame.opcode, frame.payload, mask=mask_out))
+                await writer.drain()
+                if frame.opcode == 0x8:   # close frame — both sides shut down
+                    break
+        except (asyncio.IncompleteReadError, asyncio.CancelledError,
+                OSError, ConnectionResetError):
             pass
 
-
-async def _bidirectional_tunnel(
-    r1: asyncio.StreamReader, w1: asyncio.StreamWriter,
-    r2: asyncio.StreamReader, w2: asyncio.StreamWriter,
-) -> None:
-    await asyncio.gather(_pipe(r1, w2), _pipe(r2, w1), return_exceptions=True)
+    await asyncio.gather(
+        relay(c_reader, s_writer, "↑", masked_in=True,  mask_out=True),   # client→server: must re-mask
+        relay(s_reader, c_writer, "↓", masked_in=False, mask_out=False),  # server→client: unmasked
+        return_exceptions=True,
+    )

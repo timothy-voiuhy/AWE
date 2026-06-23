@@ -35,6 +35,7 @@ _STATUS_ICON = {
     "completed": ("✓", "#A6E3A1"),
     "failed":    ("✗", "#F38BA8"),
     "cancelled": ("⊘", "#FAB387"),
+    "stopped":   ("⏹", "#FAB387"),
     "skipped":   ("⏭", "#6C7086"),
     "pending":   ("○", "#6C7086"),
 }
@@ -63,61 +64,97 @@ class _MongoStarter(QThread):
 
 # ── Live monitor row ──────────────────────────────────────────────────────────
 
+_ROW_BTN_SS = (
+    "QPushButton{background:transparent;color:#6C7086;border:none;"
+    "font-size:11px;padding:0 3px;min-width:20px;max-width:20px;"
+    "min-height:20px;max-height:20px;}"
+    "QPushButton:hover{color:#CDD6F4;background:#313244;border-radius:3px;}"
+    "QPushButton:disabled{color:#313244;}"
+)
+
+
 class _StepRow(QWidget):
     selected         = Signal(str)   # tool_key — emitted on click
-    rerun_requested  = Signal(str)   # tool_key — emitted on right-click rerun
+    rerun_requested  = Signal(str)   # tool_key — emitted on rerun button / context menu
 
     def __init__(self, tool_key: str, display_name: str, stage: int, parent=None):
         super().__init__(parent)
         self.tool_key = tool_key
         self._selected = False
         row = QHBoxLayout(self)
-        row.setContentsMargins(4, 2, 4, 2)
-        row.setSpacing(8)
+        row.setContentsMargins(4, 1, 4, 1)
+        row.setSpacing(4)
 
+        # Status icon — use app default font so Unicode symbols render reliably
         self._icon = QLabel("○")
-        self._icon.setFixedWidth(16)
-        self._icon.setFont(QFont("monospace", 10))
-        self._icon.setStyleSheet("color: #6C7086;")
+        self._icon.setFixedWidth(14)
+        self._icon.setStyleSheet("color:#6C7086; font-size:11px;")
         row.addWidget(self._icon)
 
         badge = QLabel(f"S{stage}")
-        badge.setFixedWidth(24)
+        badge.setFixedWidth(22)
         badge.setObjectName("certStepBadge")
         row.addWidget(badge)
 
         self._name = QLabel(display_name)
-        self._name.setFixedWidth(140)
         self._name.setFont(QFont("Cascadia Code", 9))
-        row.addWidget(self._name)
+        # Stretch so name takes the middle space; count and button stay right-aligned
+        row.addWidget(self._name, stretch=1)
 
         self._count = QLabel("")
-        self._count.setFixedWidth(60)
+        self._count.setFixedWidth(44)
         self._count.setFont(QFont("Cascadia Code", 9))
-        self._count.setStyleSheet("color: #A6E3A1;")
+        self._count.setStyleSheet("color:#A6E3A1; font-size:9px;")
+        self._count.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        self._count.setVisible(False)   # hidden until a non-zero count is set
         row.addWidget(self._count)
 
-        self._last = QLabel("")
-        self._last.setFont(QFont("Cascadia Code", 8))
-        self._last.setStyleSheet("color: #9399B2;")
-        self._last.setTextInteractionFlags(Qt.TextSelectableByMouse)
-        row.addWidget(self._last, stretch=1)
+        self._rerun_btn = QPushButton("↺")
+        self._rerun_btn.setToolTip("Rerun this tool")
+        self._rerun_btn.setStyleSheet(_ROW_BTN_SS)
+        self._rerun_btn.clicked.connect(lambda: self.rerun_requested.emit(self.tool_key))
+        row.addWidget(self._rerun_btn)
 
+        self.setFixedHeight(26)
         self.setCursor(Qt.PointingHandCursor)
-        self._update_selection_style()
+        self.setAttribute(Qt.WA_Hover, True)
+        self._hovered = False
+        self._update_style()
 
-    # ── selection ─────────────────────────────────────────────────────────────
+    # ── selection / hover ─────────────────────────────────────────────────────
 
     def set_selected(self, value: bool):
         self._selected = value
-        self._update_selection_style()
+        self._update_style()
 
-    def _update_selection_style(self):
+    def enterEvent(self, ev):
+        self._hovered = True
+        self._update_style()
+        super().enterEvent(ev)
+
+    def leaveEvent(self, ev):
+        self._hovered = False
+        self._update_style()
+        super().leaveEvent(ev)
+
+    def _update_style(self):
         if self._selected:
-            self.setStyleSheet(
-                "background:#2A2A3E; border-left:3px solid #89B4FA; border-radius:2px;")
+            bg     = "#2A2A3E"
+            border = "border-left:3px solid #89B4FA;"
+        elif self._hovered:
+            bg     = "#222235"
+            border = "border-left:3px solid #45475A;"
         else:
-            self.setStyleSheet("")
+            bg     = "transparent"
+            border = "border-left:3px solid transparent;"
+        self.setStyleSheet(
+            f"QWidget{{background:{bg};{border}border-radius:2px;}}"
+            "QLabel{background:transparent;border:none;}"
+            "QPushButton{background:transparent;color:#6C7086;border:none;"
+            "font-size:11px;padding:0 3px;min-width:20px;max-width:20px;"
+            "min-height:20px;max-height:20px;}"
+            "QPushButton:hover{color:#CDD6F4;background:#313244;border-radius:3px;}"
+        )
 
     def mousePressEvent(self, ev):
         self.selected.emit(self.tool_key)
@@ -136,12 +173,14 @@ class _StepRow(QWidget):
     def set_status(self, status: str, count: int = 0):
         icon, color = _STATUS_ICON.get(status, ("?", "#CDD6F4"))
         self._icon.setText(icon)
-        self._icon.setStyleSheet(f"color: {color};")
+        self._icon.setStyleSheet(f"color:{color}; font-size:11px;")
         if count:
             self._count.setText(str(count))
+            self._count.setVisible(True)
 
     def append_log(self, line: str):
-        self._last.setText(line[:80])
+        # Show last log line as a tooltip on the row rather than a cramped label
+        self.setToolTip(line[:120] if line else "")
 
 
 class _MonitorPanel(QWidget):
@@ -304,6 +343,15 @@ class _MonitorPanel(QWidget):
         r = self._rows.get(key)
         if r:
             r.set_status(status, count)
+
+    def set_tool_log(self, key: str, lines: list[str]) -> None:
+        """Pre-populate a tool's log buffer with persisted lines from the DB."""
+        if key not in self._log_buffer:
+            return
+        self._log_buffer[key] = list(lines)
+        if key == self._selected_key:
+            self._tool_log.setPlainText("\n".join(lines))
+            self._scroll_log_to_end()
 
     # ── internal ──────────────────────────────────────────────────────────────
 
@@ -627,6 +675,7 @@ class PipelineWindow(QMainWindow):
         if self._executor:
             self._executor.stop()
         self._stopBtn.setEnabled(False)
+        self._stageLabel.setText("⏹ Stopping — waiting for containers…")
 
     def _retry_failed(self):
         if not self._current_session_id:
@@ -793,9 +842,14 @@ class PipelineWindow(QMainWindow):
                                   in_scope=session_doc.get("in_scope"),
                                   out_scope=session_doc.get("out_of_scope"))
         elif chosen == a_view:
-            self._resultsWindow = ResultsWindow(
-                session_id=sid, repo=self._repo, parent=self)
-            self._resultsWindow.show()
+            tw = self._find_target_window()
+            if tw is not None:
+                tw._resultsWindow.load_session(sid, self._repo)
+                tw.OpenResultsWindow()
+            else:
+                self._resultsWindow = ResultsWindow(
+                    session_id=sid, repo=self._repo, parent=self)
+                self._resultsWindow.show()
         elif chosen == a_delete:
             self._repo.delete_session(sid)
             if self._current_session_id == sid:
@@ -874,22 +928,30 @@ class PipelineWindow(QMainWindow):
 
     def _on_step_done(self, key: str, status: str, count: int):
         self._monitor.on_done(key, status, count)
-        icon = {"completed": "✓", "skipped": "⏭", "failed": "✗"}.get(status, "?")
+        icon = {"completed": "✓", "skipped": "⏭", "failed": "✗", "stopped": "⏹"}.get(status, "?")
         self._log(f"  [{key}] {icon} {status}  ({count})")
 
     def _on_pipeline_done(self, session_id: str, success: bool, message: str):
         self._current_session_id = session_id
-        icon = "✓" if success else "✗"
-        self._log(f"\n{icon} Pipeline finished — {message}")
-        self._stageLabel.setText(f"{icon} Done: {message}")
+        was_stopped = not success and bool(
+            self._executor and self._executor._stop_event.is_set()
+        )
+        if success:
+            icon, label = "✓", "Done"
+        elif was_stopped:
+            icon, label = "⏹", "Stopped"
+        else:
+            icon, label = "✗", "Failed"
+        self._log(f"\n{icon} Pipeline {label} — {message}")
+        self._stageLabel.setText(f"{icon} {label}: {message}")
         self._progressBar.setVisible(False)
         self._runBtn.setEnabled(True)
         self._stopBtn.setEnabled(False)
         self._retryBtn.setEnabled(True)
-        self._resumeBtn.setEnabled(False)
+        self._resumeBtn.setEnabled(was_stopped or not success)
         self._monitor.set_running(False)
         self._refresh_sessions()
-        _notify("AWE — Pipeline finished", message)
+        _notify(f"AWE — Pipeline {label.lower()}", message)
 
     # ── Session history ───────────────────────────────────────────────────────
 
@@ -937,7 +999,9 @@ class PipelineWindow(QMainWindow):
             self._viewBtn.setToolTip(f"View results for session {sid[:12]}…")
             is_stale = sid in getattr(self, "_stale_session_ids", set())
             running  = self._executor is not None and self._executor.isRunning()
-            self._resumeBtn.setEnabled(is_stale and not running)
+            session_status = (self._repo.get_session(sid) or {}).get("status", "")
+            resumable = (is_stale or session_status in ("stopped", "failed")) and not running
+            self._resumeBtn.setEnabled(resumable)
             self._load_session_into_ui(sid)
 
     def _load_session_into_ui(self, session_id: str):
@@ -977,6 +1041,14 @@ class PipelineWindow(QMainWindow):
                 count  = run.get("result_count", 0)
                 if key:
                     self._monitor.on_done(key, status, count)
+            # Restore persisted per-tool logs so clicking a row shows output
+            try:
+                tool_logs = self._repo.get_tool_run_logs(session_id)
+                for key, lines in tool_logs.items():
+                    if lines:
+                        self._monitor.set_tool_log(key, lines)
+            except Exception:
+                pass
             self._monitor.set_running(False)
 
         # ── Log tab ───────────────────────────────────────────────────────────
@@ -1129,7 +1201,23 @@ class PipelineWindow(QMainWindow):
 
     # ── Results + settings ────────────────────────────────────────────────────
 
+    def _find_target_window(self):
+        """Walk the parent chain to find the TargetWindow that owns us."""
+        ancestor = self.parent()
+        while ancestor is not None:
+            if hasattr(ancestor, "OpenResultsWindow") and hasattr(ancestor, "_resultsWindow"):
+                return ancestor
+            ancestor = ancestor.parent()
+        return None
+
     def _open_results(self):
+        tw = self._find_target_window()
+        if tw is not None:
+            if self._current_session_id:
+                tw._resultsWindow.load_session(self._current_session_id, self._repo)
+            tw.OpenResultsWindow()
+            return
+        # Fallback when not embedded in TargetWindow
         if self._current_session_id:
             self._resultsWindow = ResultsWindow(
                 session_id=self._current_session_id,

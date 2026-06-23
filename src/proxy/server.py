@@ -40,8 +40,11 @@ from config.config import RUNDIR
 from proxy._ca import CertificateAuthority
 from proxy._control import ControlServer
 from proxy._handler import ConnectionHandler
+from proxy._intercept import InterceptGate
+from proxy._rules import RulesEngine
 from proxy._traffic import TrafficStore
 from proxy._upstream import UpstreamClient
+from proxy._ws_store import WSStore
 
 log = logging.getLogger(__name__)
 
@@ -50,12 +53,20 @@ _STREAM_LIMIT      = 256 * 1024   # per-connection read buffer — generous for 
 
 
 class ProxyServer:
-    def __init__(self, host: str = "127.0.0.1", port: int = 8080) -> None:
+    def __init__(
+        self,
+        host: str = "127.0.0.1",
+        port: int = 8080,
+        upstream_proxy: str | None = None,
+    ) -> None:
         self._host     = host
         self._port     = port
-        self._ca       = CertificateAuthority()
-        self._upstream = UpstreamClient()
-        self._traffic  = TrafficStore()
+        self._ca        = CertificateAuthority()
+        self._upstream  = UpstreamClient(upstream_proxy=upstream_proxy)
+        self._traffic   = TrafficStore()
+        self._ws_store  = WSStore()
+        self._rules     = RulesEngine()
+        self._intercept = InterceptGate()
         self._server: asyncio.Server | None     = None
         self._control: ControlServer | None     = None
         self._active   = 0
@@ -70,6 +81,8 @@ class ProxyServer:
             self._traffic,
             get_stats_fn=self._stats,
             stop_fn=self.stop,
+            rules=self._rules,
+            intercept=self._intercept,
         )
         await self._control.start()
 
@@ -108,6 +121,7 @@ class ProxyServer:
             await self._control.shutdown()
         await self._upstream.aclose()
         self._traffic.shutdown()
+        self._ws_store.shutdown()
         try:
             _CONTROL_PORT_FILE.unlink(missing_ok=True)
         except OSError:
@@ -127,7 +141,9 @@ class ProxyServer:
         self._active += 1
         try:
             handler = ConnectionHandler(
-                reader, writer, self._ca, self._upstream, self._traffic,
+                reader, writer, self._ca, self._upstream,
+                self._traffic, self._ws_store,
+                self._rules, self._intercept,
             )
             await handler.handle()
         except asyncio.CancelledError:
@@ -159,7 +175,8 @@ def _setup_logging(verbose: bool) -> None:
 
 
 async def _run(args: argparse.Namespace) -> None:
-    proxy = ProxyServer(host=args.host, port=args.port)
+    proxy = ProxyServer(host=args.host, port=args.port,
+                        upstream_proxy=args.upstream_proxy)
     try:
         await proxy.start()
     except (KeyboardInterrupt, asyncio.CancelledError):
@@ -169,9 +186,11 @@ async def _run(args: argparse.Namespace) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="AWE MITM Proxy")
-    parser.add_argument("-p", "--port",    type=int, default=8080)
-    parser.add_argument("--host",          default="127.0.0.1")
-    parser.add_argument("-v", "--verbose", action="store_true")
+    parser.add_argument("-p", "--port",         type=int, default=8080)
+    parser.add_argument("--host",               default="127.0.0.1")
+    parser.add_argument("--upstream-proxy",     default=None,
+                        help="Upstream proxy URL, e.g. http://127.0.0.1:9050")
+    parser.add_argument("-v", "--verbose",      action="store_true")
     args = parser.parse_args()
 
     _setup_logging(args.verbose)

@@ -1,0 +1,50 @@
+X-Forwarded-For: 127.0.0.1
+X-Forwarded-For: localhost
+X-Forwarded-For: 192.168.1.1
+X-Forwarded-For: 10.0.0.1
+X-Forwarded-For: 172.16.0.1
+X-Forwarded-Host: localhost
+X-Forwarded-Host: 127.0.0.1
+X-Forwarded-Host: evil.com
+X-Real-IP: 127.0.0.1
+X-Real-IP: localhost
+X-Originating-IP: 127.0.0.1
+X-Remote-IP: 127.0.0.1
+X-Remote-Addr: 127.0.0.1
+X-Client-IP: 127.0.0.1
+X-Host: localhost
+X-Custom-IP-Authorization: 127.0.0.1
+X-ProxyUser-Ip: 127.0.0.1
+True-Client-Ip: 127.0.0.1
+CF-Connecting-IP: 127.0.0.1
+Cluster-Client-IP: 127.0.0.1
+Referer: https://admin.example.com
+Referer: https://localhost/admin
+Referer: https://evil.com
+Origin: https://localhost
+Origin: null
+Origin: https://evil.com
+User-Agent: Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)
+User-Agent: sqlmap/1.7
+User-Agent: ' OR 1=1--
+User-Agent: <script>alert(1)</script>
+Authorization: Basic YWRtaW46YWRtaW4=
+Authorization: Bearer AAAAAAAAAAAAAAAAAAAAAAAAAAAA
+Authorization: null
+X-Api-Key: null
+X-Api-Key: admin
+X-Api-Key: test
+X-Auth-Token: admin
+X-Auth-Token: null
+Content-Type: application/json
+Content-Type: text/xml
+Content-Type: application/x-www-form-urlencoded
+Accept-Language: en-US,en;q=0.9
+X-HTTP-Method-Override: PUT
+X-HTTP-Method-Override: DELETE
+X-HTTP-Method-Override: PATCH
+X-Requested-With: XMLHttpRequest
+X-Requested-With: null
+Cache-Control: no-cache
+Cache-Control: max-age=0
+Pragma: no-cache

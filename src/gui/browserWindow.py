@@ -135,6 +135,7 @@ class BrowserWindow(QMainWindow):
         self.clearButton.setFixedWidth(34)
         self.clearButton.clicked.connect(self.urlTextClear)
         self.searchButton.clicked.connect(self.handleSearchButton)
+        self.urlText.returnPressed.connect(self.handleSearchButton)
         self.browserProgressBar = QProgressBar()
         self.browserProgressBar.setVisible(False)
         self.browserProgressBar.setFormat("Loading")

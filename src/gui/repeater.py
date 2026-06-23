@@ -13,14 +13,19 @@ from __future__ import annotations
 import logging
 
 import httpx
-from PySide6.QtCore import Qt, QThread, Signal
+from PySide6.QtCore import Qt, QThread, Signal, QEvent
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QSplitter, QTabWidget,
-    QPushButton, QLabel, QTextEdit, QFrame,
+    QPushButton, QLabel, QTextEdit, QFrame, QMenu, QToolTip, QDialog, QApplication,
 )
 
-from gui.guiUtilities import SyntaxHighlighter
+from gui.guiUtilities import (
+    SyntaxHighlighter, format_http_body, SearchBar,
+    decode_text, DecodeDialog,
+    parse_http_headers, set_header_clipboard, HeaderSelectorDialog,
+    paste_headers, has_copied_headers,
+)
 
 log = logging.getLogger(__name__)
 
@@ -121,6 +126,8 @@ class _SendWorker(QThread):
 class _TabPane(QWidget):
     """Content of one repeater tab: request editor + response viewer."""
 
+    send_to_intruder_requested = Signal(str)
+
     def __init__(
         self,
         request_text: str = "",
@@ -153,6 +160,20 @@ class _TabPane(QWidget):
         self._send_btn.clicked.connect(self._on_send)
         tb.addWidget(self._send_btn)
 
+        self._intruder_btn = QPushButton("⊛  Intruder")
+        self._intruder_btn.setFixedHeight(26)
+        self._intruder_btn.setStyleSheet(
+            "QPushButton{background:#2A1A2E;color:#EE99A0;border:1px solid #EE99A0;"
+            "border-radius:4px;padding:0 12px;font-size:10px;}"
+            "QPushButton:hover{background:#3A2A3E;}"
+        )
+        self._intruder_btn.clicked.connect(
+            lambda: self.send_to_intruder_requested.emit(
+                self._req_edit.toPlainText().strip()
+            )
+        )
+        tb.addWidget(self._intruder_btn)
+
         self._status_lbl = QLabel("")
         self._status_lbl.setStyleSheet("color:#6C7086; font-size:9px;")
         tb.addWidget(self._status_lbl)
@@ -184,6 +205,24 @@ class _TabPane(QWidget):
 
         splitter.setSizes([350, 300])
         root.addWidget(splitter, stretch=1)
+
+        self._search_bar = SearchBar(self)
+        self._search_bar.set_editor(self._req_edit)
+        root.addWidget(self._search_bar)
+
+        self._req_edit.installEventFilter(self)
+        self._resp_edit.installEventFilter(self)
+
+    # ── event filter (Ctrl+F → search bar) ───────────────────────────────────
+
+    def eventFilter(self, obj, event) -> bool:
+        if (event.type() == QEvent.Type.KeyPress
+                and event.modifiers() == Qt.ControlModifier
+                and event.key() == Qt.Key_F):
+            self._search_bar.set_editor(obj)
+            self._search_bar.activate()
+            return True
+        return super().eventFilter(obj, event)
 
     # ── send / receive ────────────────────────────────────────────────────────
 
@@ -230,6 +269,8 @@ class _TabPane(QWidget):
 class RepeaterPage(QWidget):
     """Per-target HTTP repeater.  Add to a QStackedWidget via targetWindow."""
 
+    send_to_intruder = Signal(str)
+
     def __init__(self, proxy_port: int = 8080, parent=None) -> None:
         super().__init__(parent)
         self._proxy_port  = proxy_port
@@ -248,6 +289,7 @@ class RepeaterPage(QWidget):
             proxy_port=self._proxy_port,
             parent=self,
         )
+        pane.send_to_intruder_requested.connect(self.send_to_intruder)
         idx = self._tabs.addTab(pane, title[:32])
         self._tabs.setCurrentIndex(idx)
 
@@ -340,8 +382,107 @@ class _CodeEdit(QTextEdit):
         super().__init__(parent)
         self.setReadOnly(read_only)
         self.setFont(QFont("Cascadia Code", 9))
-        self.setLineWrapMode(QTextEdit.NoWrap)
+        self.setLineWrapMode(QTextEdit.LineWrapMode.WidgetWidth)
         self.setStyleSheet(
             "QTextEdit{background:#11111B; color:#CDD6F4; border:none; padding:8px;}"
         )
         self._hl = SyntaxHighlighter(self.document())
+
+    def contextMenuEvent(self, event) -> None:
+        menu     = self.createStandardContextMenu()
+        txt      = self.toPlainText()
+        selected = self.textCursor().selectedText().strip()
+        has_text = bool(txt.strip())
+        has_body = '\n\n' in txt and bool(txt.split('\n\n', 1)[-1].strip())
+        has_sel  = bool(selected)
+        editable = not self.isReadOnly()
+
+        menu.addSeparator()
+        fmt_menu = menu.addMenu("Format Body")
+        fmt_menu.setEnabled(has_body and editable)
+        json_act = fmt_menu.addAction("JSON")
+        xml_act  = fmt_menu.addAction("XML")
+        html_act = fmt_menu.addAction("HTML")
+        js_act   = fmt_menu.addAction("JavaScript")
+
+        menu.addSeparator()
+        dec_menu = menu.addMenu("Decode Selection")
+        dec_menu.setEnabled(has_sel)
+        dec_auto = dec_menu.addAction("Auto-detect")
+        dec_menu.addSeparator()
+        dec_b64  = dec_menu.addAction("Base64")
+        dec_url  = dec_menu.addAction("URL")
+        dec_html = dec_menu.addAction("HTML Entities")
+        dec_hex  = dec_menu.addAction("Hex")
+        dec_jwt  = dec_menu.addAction("JWT")
+        dec_uni  = dec_menu.addAction("Unicode Escape")
+
+        menu.addSeparator()
+        copy_hdrs_menu = menu.addMenu("Copy Headers")
+        copy_hdrs_menu.setEnabled(has_text)
+        copy_all_act = copy_hdrs_menu.addAction("All Headers")
+        copy_sel_act = copy_hdrs_menu.addAction("Select Headers…")
+        copy_body_act = menu.addAction("Copy Body")
+        copy_body_act.setEnabled(has_body)
+
+        paste_rep_act = paste_add_act = None
+        if editable:
+            paste_menu = menu.addMenu("Paste Headers")
+            paste_menu.setEnabled(has_copied_headers())
+            paste_rep_act = paste_menu.addAction("Replace Existing")
+            paste_add_act = paste_menu.addAction("Add to Existing")
+
+        menu.addSeparator()
+        wrap_act = menu.addAction("Word Wrap")
+        wrap_act.setCheckable(True)
+        wrap_act.setChecked(self.lineWrapMode() != QTextEdit.LineWrapMode.NoWrap)
+
+        chosen = menu.exec(event.globalPos())
+
+        fmt_map = {json_act: 'json', xml_act: 'xml', html_act: 'html', js_act: 'javascript'}
+        dec_map = {dec_auto: 'auto', dec_b64: 'base64', dec_url: 'url',
+                   dec_html: 'html', dec_hex: 'hex', dec_jwt: 'jwt', dec_uni: 'unicode'}
+
+        if chosen in fmt_map and editable:
+            result = format_http_body(txt, fmt_map[chosen])
+            if result is not None:
+                self.setPlainText(result)
+        elif chosen in dec_map and has_sel:
+            result, used = decode_text(selected, dec_map[chosen])
+            if result is None:
+                QToolTip.showText(event.globalPos(), f"Cannot decode as {used}")
+            else:
+                DecodeDialog(result, used, parent=self.window()).show()
+        elif chosen is copy_all_act:
+            hdrs = parse_http_headers(txt)
+            set_header_clipboard(hdrs)
+            QToolTip.showText(event.globalPos(),
+                              f"Copied {len(hdrs)} header{'s' if len(hdrs) != 1 else ''}")
+        elif chosen is copy_sel_act:
+            hdrs = parse_http_headers(txt)
+            if not hdrs:
+                QToolTip.showText(event.globalPos(), "No headers found")
+            else:
+                dlg = HeaderSelectorDialog(hdrs, parent=self.window())
+                if dlg.exec() == QDialog.DialogCode.Accepted:
+                    sel = dlg.selected_headers()
+                    if sel:
+                        set_header_clipboard(sel)
+                        QToolTip.showText(event.globalPos(),
+                                          f"Copied {len(sel)} header{'s' if len(sel) != 1 else ''}")
+        elif chosen is copy_body_act:
+            body = txt.split('\n\n', 1)[-1]
+            QApplication.clipboard().setText(body)
+            QToolTip.showText(event.globalPos(), "Body copied")
+        elif chosen is paste_rep_act:
+            result = paste_headers(txt, 'replace')
+            if result is not None:
+                self.setPlainText(result)
+        elif chosen is paste_add_act:
+            result = paste_headers(txt, 'add')
+            if result is not None:
+                self.setPlainText(result)
+        elif chosen is wrap_act:
+            mode = (QTextEdit.LineWrapMode.WidgetWidth if wrap_act.isChecked()
+                    else QTextEdit.LineWrapMode.NoWrap)
+            self.setLineWrapMode(mode)

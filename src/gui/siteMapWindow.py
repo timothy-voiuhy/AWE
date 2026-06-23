@@ -18,16 +18,20 @@ import logging
 from pathlib import Path
 
 from bson import ObjectId
-from PySide6.QtCore import Qt, QModelIndex, QTimer, QPoint, Signal
+from PySide6.QtCore import Qt, QModelIndex, QTimer, QPoint, Signal, QEvent
 from PySide6.QtGui import QStandardItem, QStandardItemModel, QColor, QFont, QPainter, QPolygon
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QSplitter, QFrame,
     QPushButton, QLabel, QTreeView, QTabWidget, QTextEdit,
-    QProxyStyle, QStyle, QMenu,
+    QProxyStyle, QStyle, QMenu, QToolTip, QDialog, QApplication,
 )
 
 from database.scope import ScopeConfig
-from gui.guiUtilities import SyntaxHighlighter
+from gui.guiUtilities import (
+    SyntaxHighlighter, format_http_body, SearchBar,
+    decode_text, DecodeDialog,
+    parse_http_headers, set_header_clipboard, HeaderSelectorDialog,
+)
 
 log = logging.getLogger(__name__)
 
@@ -110,6 +114,7 @@ class _TreeStyle(QProxyStyle):
 
 class SiteMapPage(QWidget):
     send_to_repeater = Signal(str)
+    send_to_intruder = Signal(str)
     sync_requested   = Signal()
     traffic_changed  = Signal()
 
@@ -256,7 +261,23 @@ class SiteMapPage(QWidget):
         self._resp_view = _CodeView()
         self._tabs.addTab(self._req_view,  "Request")
         self._tabs.addTab(self._resp_view, "Response")
+        self._req_view.send_to_repeater.connect(self.send_to_repeater)
+        self._req_view.send_to_intruder.connect(self.send_to_intruder)
+        self._resp_view.send_to_repeater.connect(
+            lambda _: self.send_to_repeater.emit(self._req_view.toPlainText()))
+        self._resp_view.send_to_intruder.connect(
+            lambda _: self.send_to_intruder.emit(self._req_view.toPlainText()))
         rr_vb.addWidget(self._tabs)
+
+        self._search_bar = SearchBar(rr)
+        self._search_bar.set_editor(self._req_view)
+        rr_vb.addWidget(self._search_bar)
+
+        self._tabs.currentChanged.connect(
+            lambda _: self._search_bar.set_editor(self._tabs.currentWidget()))
+        self._req_view.installEventFilter(self)
+        self._resp_view.installEventFilter(self)
+
         splitter.addWidget(rr)
         splitter.setSizes([300, 680])
         root.addWidget(splitter, stretch=1)
@@ -441,13 +462,26 @@ class SiteMapPage(QWidget):
         doc_id = item.data(_DOC_ID_ROLE) if item else ""
         if not doc_id:
             return
-        menu   = QMenu(self)
-        action = menu.addAction("Send to Repeater")
+        menu       = QMenu(self)
+        action     = menu.addAction("Send to Repeater")
+        int_action = menu.addAction("Send to Intruder")
         chosen = menu.exec(self._tree.mapToGlobal(pos))
+        doc = self._load_doc(doc_id)
+        if not doc:
+            return
         if chosen is action:
-            doc = self._load_doc(doc_id)
-            if doc:
-                self.send_to_repeater.emit(_fmt_request(doc.get("request", {})))
+            self.send_to_repeater.emit(_fmt_request(doc.get("request", {})))
+        elif chosen is int_action:
+            self.send_to_intruder.emit(_fmt_request(doc.get("request", {})))
+
+    def eventFilter(self, obj, event) -> bool:
+        if (event.type() == QEvent.Type.KeyPress
+                and event.modifiers() == Qt.ControlModifier
+                and event.key() == Qt.Key_F):
+            self._search_bar.set_editor(obj)
+            self._search_bar.activate()
+            return True
+        return super().eventFilter(obj, event)
 
     def _on_scope_toggle(self, checked: bool) -> None:
         self._filter_scope = checked
@@ -526,15 +560,30 @@ def _fill_node(parent: QStandardItem, node: _PathNode) -> None:
 
 # ── formatting helpers ────────────────────────────────────────────────────────
 
+def _fmt_body(doc: dict) -> str:
+    body = doc.get("body", "")
+    if not body:
+        return ""
+    if doc.get("body_encoding") == "base64":
+        import base64 as _b64
+        try:
+            raw  = _b64.b64decode(body)
+            size = len(raw)
+        except Exception:
+            size = len(body) * 3 // 4
+        return f"[Binary content — {size:,} bytes, base64]\n{body}"
+    return body
+
+
 def _fmt_request(req: dict) -> str:
     method  = req.get("method", "")
     url     = req.get("url", "")
     headers = req.get("headers", {})
-    body    = req.get("body", "")
     lines   = [f"{method} {url}"]
     for k, v in (headers.items() if isinstance(headers, dict) else []):
         for val in ([v] if isinstance(v, str) else v):
             lines.append(f"{k}: {val}")
+    body = _fmt_body(req)
     if body:
         lines += ["", body]
     return "\n".join(lines)
@@ -545,11 +594,11 @@ def _fmt_response(resp: dict) -> str:
     reason  = resp.get("reason", "")
     version = resp.get("http_version", "HTTP/1.1")
     headers = resp.get("headers", {})
-    body    = resp.get("body", "")
     lines   = [f"{version} {status} {reason}"]
     for k, v in (headers.items() if isinstance(headers, dict) else []):
         for val in ([v] if isinstance(v, str) else v):
             lines.append(f"{k}: {val}")
+    body = _fmt_body(resp)
     if body:
         lines += ["", body]
     return "\n".join(lines)
@@ -577,6 +626,9 @@ _BTN_SS = (
 # ── code viewer ───────────────────────────────────────────────────────────────
 
 class _CodeView(QTextEdit):
+    send_to_repeater = Signal(str)
+    send_to_intruder = Signal(str)
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setReadOnly(True)
@@ -585,3 +637,86 @@ class _CodeView(QTextEdit):
             "QTextEdit{background:#11111B; color:#CDD6F4; border:none; padding:8px;}"
         )
         self._hl = SyntaxHighlighter(self.document())
+
+    def contextMenuEvent(self, event):
+        menu      = self.createStandardContextMenu()
+        txt       = self.toPlainText()
+        selected  = self.textCursor().selectedText().strip()
+        has_text  = bool(txt.strip())
+        has_body  = has_text and '\n\n' in txt and bool(txt.split('\n\n', 1)[-1].strip())
+        has_sel   = bool(selected)
+
+        menu.addSeparator()
+        rep_act = menu.addAction("Send to Repeater")
+        rep_act.setEnabled(has_text)
+        int_act = menu.addAction("Send to Intruder")
+        int_act.setEnabled(has_text)
+
+        menu.addSeparator()
+        fmt_menu = menu.addMenu("Format Body")
+        fmt_menu.setEnabled(has_body)
+        json_act = fmt_menu.addAction("JSON")
+        xml_act  = fmt_menu.addAction("XML")
+        html_act = fmt_menu.addAction("HTML")
+        js_act   = fmt_menu.addAction("JavaScript")
+
+        menu.addSeparator()
+        dec_menu = menu.addMenu("Decode Selection")
+        dec_menu.setEnabled(has_sel)
+        dec_auto = dec_menu.addAction("Auto-detect")
+        dec_menu.addSeparator()
+        dec_b64  = dec_menu.addAction("Base64")
+        dec_url  = dec_menu.addAction("URL")
+        dec_html = dec_menu.addAction("HTML Entities")
+        dec_hex  = dec_menu.addAction("Hex")
+        dec_jwt  = dec_menu.addAction("JWT")
+        dec_uni  = dec_menu.addAction("Unicode Escape")
+
+        menu.addSeparator()
+        copy_hdrs_menu = menu.addMenu("Copy Headers")
+        copy_hdrs_menu.setEnabled(has_text)
+        copy_all_act = copy_hdrs_menu.addAction("All Headers")
+        copy_sel_act = copy_hdrs_menu.addAction("Select Headers…")
+        copy_body_act = menu.addAction("Copy Body")
+        copy_body_act.setEnabled(has_body)
+
+        chosen = menu.exec(event.globalPos())
+        fmt_map = {json_act: 'json', xml_act: 'xml', html_act: 'html', js_act: 'javascript'}
+        dec_map = {dec_auto: 'auto', dec_b64: 'base64', dec_url: 'url',
+                   dec_html: 'html', dec_hex: 'hex', dec_jwt: 'jwt', dec_uni: 'unicode'}
+
+        if chosen is rep_act:
+            self.send_to_repeater.emit(txt)
+        elif chosen is int_act:
+            self.send_to_intruder.emit(txt)
+        elif chosen in fmt_map:
+            result = format_http_body(txt, fmt_map[chosen])
+            if result is not None:
+                self.setPlainText(result)
+        elif chosen in dec_map and has_sel:
+            result, used = decode_text(selected, dec_map[chosen])
+            if result is None:
+                QToolTip.showText(event.globalPos(), f"Cannot decode as {used}")
+            else:
+                DecodeDialog(result, used, parent=self.window()).show()
+        elif chosen is copy_all_act:
+            hdrs = parse_http_headers(txt)
+            set_header_clipboard(hdrs)
+            QToolTip.showText(event.globalPos(),
+                              f"Copied {len(hdrs)} header{'s' if len(hdrs) != 1 else ''}")
+        elif chosen is copy_sel_act:
+            hdrs = parse_http_headers(txt)
+            if not hdrs:
+                QToolTip.showText(event.globalPos(), "No headers found")
+            else:
+                dlg = HeaderSelectorDialog(hdrs, parent=self.window())
+                if dlg.exec() == QDialog.DialogCode.Accepted:
+                    sel = dlg.selected_headers()
+                    if sel:
+                        set_header_clipboard(sel)
+                        QToolTip.showText(event.globalPos(),
+                                          f"Copied {len(sel)} header{'s' if len(sel) != 1 else ''}")
+        elif chosen is copy_body_act:
+            body = txt.split('\n\n', 1)[-1]
+            QApplication.clipboard().setText(body)
+            QToolTip.showText(event.globalPos(), "Body copied")

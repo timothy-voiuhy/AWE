@@ -85,10 +85,11 @@ class WhoisThreadRunner(QThread):
         self.topParent.socketIpc.processFinishedExecution.emit(self.topParent, self.objectName())
 
 class AtomProxy(QThread, QObject):
-    def __init__(self, proxy_port, top_parent):
+    def __init__(self, proxy_port, top_parent, upstream_proxy: str | None = None):
         super().__init__()
-        self.topParent = top_parent
-        self.proxy_port = proxy_port
+        self.topParent      = top_parent
+        self.proxy_port     = proxy_port
+        self.upstream_proxy = upstream_proxy
         self.setObjectName("AtomProxy")
         self.process = 0
         self.topParent.threads.append(self)
@@ -97,6 +98,8 @@ class AtomProxy(QThread, QObject):
     def run(self):
         # shell=False so terminate() hits the Python process directly, not a shell wrapper
         cmd = [sys.executable, "-m", "proxy.server", "-p", str(self.proxy_port)]
+        if self.upstream_proxy:
+            cmd += ["--upstream-proxy", self.upstream_proxy]
         self.process = OpenProcess(
             process_name="atomProxy", shell=False,
             cwd=RUNDIR + "src/", args=cmd,

@@ -84,6 +84,7 @@ class ScopeEditorWidget(QWidget):
             "QCheckBox{color:#CDD6F4; font-size:10px; background:transparent;}"
             "QCheckBox::indicator{width:14px;height:14px;}"
         )
+        self._include_sub.toggled.connect(self.save)
         sub_row.addWidget(self._include_sub)
         sub_row.addStretch()
         vb.addLayout(sub_row)
@@ -100,16 +101,6 @@ class ScopeEditorWidget(QWidget):
         vb.addWidget(self._out_container, stretch=3)
         vb.addLayout(self._add_row(in_scope=False))
 
-        # ── Save ──────────────────────────────────────────────────────────────
-        save_btn = QPushButton("Save Scope")
-        save_btn.setMinimumHeight(32)
-        save_btn.setStyleSheet(
-            f"QPushButton{{background:#313244;color:{_IN_COLOR};"
-            "border:1px solid #45475A;border-radius:5px;padding:0 14px;}}"
-            "QPushButton:hover{background:#45475A;}"
-        )
-        save_btn.clicked.connect(self.save)
-        vb.addWidget(save_btn)
 
     def _add_row(self, in_scope: bool) -> QHBoxLayout:
         """Returns an HBox with type-combo + value-input + Add button."""
@@ -149,6 +140,7 @@ class ScopeEditorWidget(QWidget):
             self._entries.append(entry)
             self._rebuild_rows()
             edit.clear()
+            self.save()
 
         add_btn.clicked.connect(_add)
         edit.returnPressed.connect(_add)
@@ -180,6 +172,7 @@ class ScopeEditorWidget(QWidget):
         if entry in self._entries:
             self._entries.remove(entry)
         self._rebuild_rows()
+        self.save()
 
 
 # ── entry row widget ──────────────────────────────────────────────────────────

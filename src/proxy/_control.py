@@ -12,10 +12,15 @@ Response : {"ok": true,  "result": ...}
 
 Commands
 --------
-{"action": "set_scope",   "patterns": ["regex", ...]}
-{"action": "set_logging", "enabled": true|false}
-{"action": "get_stats"}   → {"ok": true, "result": {"active_connections": N}}
-{"action": "stop"}        → schedules proxy shutdown, returns {"ok": true}
+{"action": "set_scope",              "patterns": ["regex", ...]}
+{"action": "set_logging",            "enabled": true|false}
+{"action": "get_stats"}              → {"active_connections": N}
+{"action": "stop"}
+{"action": "set_rules",              "rules": [...]}
+{"action": "set_intercept",          "enabled": bool, "patterns": [...]}
+{"action": "get_pending_intercept"}  → list of pending request dicts
+{"action": "resolve_intercept",      "req_id": str, "action": "forward"|"drop",
+                                     "headers": [[k,v],...], "body_b64": str}
 """
 from __future__ import annotations
 
@@ -26,7 +31,9 @@ import socket
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from proxy._traffic import TrafficStore
+    from proxy._intercept import InterceptGate
+    from proxy._rules     import RulesEngine
+    from proxy._traffic   import TrafficStore
 
 log = logging.getLogger(__name__)
 
@@ -34,13 +41,17 @@ log = logging.getLogger(__name__)
 class ControlServer:
     def __init__(
         self,
-        traffic: "TrafficStore",
-        get_stats_fn,       # () -> dict
-        stop_fn,            # async () -> None
+        traffic:     "TrafficStore",
+        get_stats_fn,                    # () -> dict
+        stop_fn,                         # async () -> None
+        rules:       "RulesEngine | None"   = None,
+        intercept:   "InterceptGate | None" = None,
     ) -> None:
         self._traffic   = traffic
         self._get_stats = get_stats_fn
         self._stop      = stop_fn
+        self._rules     = rules
+        self._intercept = intercept
         self._server: asyncio.Server | None = None
 
     async def start(self) -> None:
@@ -105,6 +116,41 @@ class ControlServer:
         if action == "stop":
             asyncio.get_running_loop().create_task(self._stop())
             return None
+
+        # ── rules ──────────────────────────────────────────────────────────────
+        if action == "set_rules":
+            if self._rules is not None:
+                self._rules.set_rules(cmd.get("rules", []))
+            return None
+        if action == "get_rules":
+            if self._rules is not None:
+                return self._rules.to_list()
+            return []
+
+        # ── intercept ──────────────────────────────────────────────────────────
+        if action == "set_intercept":
+            if self._intercept is not None:
+                self._intercept.set_enabled(
+                    bool(cmd.get("enabled", False)),
+                    cmd.get("patterns", []),
+                )
+            return None
+        if action == "get_pending_intercept":
+            if self._intercept is not None:
+                return self._intercept.list_pending()
+            return []
+        if action == "resolve_intercept":
+            if self._intercept is not None:
+                self._intercept.resolve(
+                    cmd["req_id"],
+                    {
+                        "action":   cmd.get("decision", "forward"),
+                        "headers":  cmd.get("headers", []),
+                        "body_b64": cmd.get("body_b64", ""),
+                    },
+                )
+            return None
+
         raise ValueError(f"Unknown action: {action!r}")
 
 
@@ -126,6 +172,43 @@ class ControlClient:
 
     def stop(self) -> bool:
         return self._send({"action": "stop"})
+
+    # ── rules ─────────────────────────────────────────────────────────────────
+
+    def set_rules(self, rules: list[dict]) -> bool:
+        return self._send({"action": "set_rules", "rules": rules})
+
+    def get_rules(self) -> list[dict]:
+        reply = self._rpc({"action": "get_rules"})
+        return reply.get("result") or []
+
+    # ── intercept ─────────────────────────────────────────────────────────────
+
+    def set_intercept(self, enabled: bool, patterns: list[str] = ()) -> bool:
+        return self._send({
+            "action": "set_intercept",
+            "enabled": enabled,
+            "patterns": list(patterns),
+        })
+
+    def get_pending_intercept(self) -> list[dict]:
+        reply = self._rpc({"action": "get_pending_intercept"})
+        return reply.get("result") or []
+
+    def resolve_intercept(
+        self,
+        req_id:   str,
+        decision: str,          # "forward" | "drop"
+        headers:  list,         # [[k, v], ...]
+        body_b64: str = "",
+    ) -> bool:
+        return self._send({
+            "action":   "resolve_intercept",
+            "req_id":   req_id,
+            "decision": decision,
+            "headers":  headers,
+            "body_b64": body_b64,
+        })
 
     # ── private ───────────────────────────────────────────────────────────────
 

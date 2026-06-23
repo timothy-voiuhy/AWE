@@ -155,6 +155,32 @@ def build_request_bytes(
     return f"{method} {path} HTTP/1.1\r\n{header_block}\r\n".encode("iso-8859-1") + body
 
 
+# Proxy-only headers to strip from WebSocket upgrades — keeps Connection/Upgrade intact
+_PROXY_ONLY: frozenset[str] = frozenset({
+    "proxy-connection", "proxy-authenticate", "proxy-authorization",
+})
+
+
+def build_ws_upgrade_bytes(
+    path: str,
+    headers: list[tuple[str, str]],
+) -> bytes:
+    """
+    Build the HTTP/1.1 upgrade request to forward to the upstream WS server.
+    Unlike build_request_bytes, this does NOT strip Connection/Upgrade/
+    Sec-WebSocket-* headers — they are required for the handshake to succeed.
+
+    Sec-WebSocket-Extensions IS stripped so the server never negotiates
+    per-message deflate compression.  Compressed frames can't be logged as
+    readable text; disabling compression at the proxy layer keeps all frames
+    in plain form while the client and server remain unaware.
+    """
+    _skip = _PROXY_ONLY | frozenset({"sec-websocket-extensions"})
+    clean = [(k, v) for k, v in headers if k.lower() not in _skip]
+    header_block = "".join(f"{k}: {v}\r\n" for k, v in clean)
+    return f"GET {path} HTTP/1.1\r\n{header_block}\r\n".encode("iso-8859-1")
+
+
 def is_keep_alive(headers: list[tuple[str, str]], version: str) -> bool:
     conn = header_map(headers).get("connection", "").lower()
     if version.endswith("1.1"):

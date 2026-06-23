@@ -30,7 +30,7 @@ from PySide6.QtGui import QColor, QFont, QStandardItem, QStandardItemModel
 from PySide6.QtWidgets import (
     QAbstractItemView, QApplication, QComboBox, QFileDialog, QFrame,
     QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem,
-    QMainWindow, QPushButton, QSplitter, QTabWidget, QTableView,
+    QMainWindow, QMenu, QPushButton, QSplitter, QTabWidget, QTableView,
     QVBoxLayout, QWidget,
 )
 
@@ -213,6 +213,8 @@ class _ResultsTable(QWidget):
         self._view.setObjectName("siteMapTreeView")
         mono = QFont("Cascadia Code", 9)
         self._view.setFont(mono)
+        self._view.setContextMenuPolicy(Qt.CustomContextMenu)
+        self._view.customContextMenuRequested.connect(self._on_context_menu)
         vbox.addWidget(self._view)
 
     def load(self, results: list[BaseResult]):
@@ -263,6 +265,63 @@ class _ResultsTable(QWidget):
 
     def search_widget(self) -> QLineEdit:
         return self._search
+
+    # ── Context menu ──────────────────────────────────────────────────────────
+
+    def _on_context_menu(self, pos) -> None:
+        idx = self._view.indexAt(pos)
+        if not idx.isValid():
+            return
+        row_data = []
+        for col in range(self._model.columnCount()):
+            src = self._proxy.mapToSource(self._proxy.index(idx.row(), col))
+            it  = self._model.item(src.row(), src.column())
+            row_data.append(it.text() if it else "")
+
+        url = self._row_url(row_data)
+
+        menu     = QMenu(self)
+        open_act = menu.addAction("Open in Browser")
+        open_act.setEnabled(bool(url))
+
+        copy_act = menu.addAction("Copy Cell")
+        cell_text = row_data[idx.column()] if idx.column() < len(row_data) else ""
+        copy_act.setEnabled(bool(cell_text))
+
+        chosen = menu.exec(self._view.viewport().mapToGlobal(pos))
+        if chosen is open_act and url:
+            tw = self._find_target_window()
+            if tw:
+                tw.openNewBrowserTab(url)
+        elif chosen is copy_act and cell_text:
+            QApplication.clipboard().setText(cell_text)
+
+    def _find_target_window(self):
+        w = self.parent()
+        while w is not None:
+            if hasattr(w, 'openNewBrowserTab'):
+                return w
+            w = w.parent()
+        return None
+
+    def _row_url(self, row: list[str]) -> str | None:
+        if not row:
+            return None
+        cat = self._category
+        if cat == "subdomain":
+            return f"https://{row[0]}" if row[0] else None
+        if cat in ("http", "crawl", "fuzz"):
+            return row[0] or None
+        if cat == "vuln":
+            return row[2] if len(row) > 2 and row[2] else None
+        if cat == "params":
+            return row[1] if len(row) > 1 and row[1] else None
+        if cat == "portscan":
+            host, port = row[0], row[1] if len(row) > 1 else ""
+            if host and port:
+                scheme = "https" if port in ("443", "8443") else "http"
+                return f"{scheme}://{host}:{port}"
+        return None
 
 
 # ── Category panel (tabs per tool + combined) ─────────────────────────────────
@@ -416,6 +475,22 @@ class ResultsWindow(QMainWindow):
         self._mainLayout.addWidget(placeholder)
         self._placeholder = placeholder
         return self._mainStack
+
+    # ── Public refresh API ────────────────────────────────────────────────────
+
+    def load_session(self, session_id: str, repo) -> None:
+        """Switch to showing results from a specific pipeline session."""
+        self._session_id = session_id
+        self._repo = repo
+        self._output_dir = ""
+        self._panels.clear()
+        while self._mainLayout.count():
+            item = self._mainLayout.takeAt(0)
+            if item.widget():
+                item.widget().setParent(None)
+        self._mainLayout.addWidget(self._placeholder)
+        self._placeholder.show()
+        self._load()
 
     # ── Data loading ──────────────────────────────────────────────────────────
 

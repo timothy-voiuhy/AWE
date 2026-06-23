@@ -62,7 +62,7 @@ class AweRepository:
 
     def update_session_status(self, session_id: str, status: str):
         update: dict[str, Any] = {"status": status}
-        if status in ("completed", "failed", "cancelled"):
+        if status in ("completed", "failed", "cancelled", "stopped"):
             update["completed_at"] = _now()
         self._db.scan_sessions.update_one(
             {"_id": _oid(session_id)}, {"$set": update}
@@ -149,6 +149,24 @@ class AweRepository:
             {"session_id": session_id}, sort=[("stage", 1), ("started_at", 1)]
         )
         return [_flatten(d) for d in cursor]
+
+    def save_tool_run_log(self, run_id: str, lines: list[str]) -> None:
+        self._db.tool_runs.update_one(
+            {"_id": _oid(run_id)},
+            {"$set": {"log_lines": lines}},
+        )
+
+    def get_tool_run_logs(self, session_id: str) -> dict[str, list[str]]:
+        """Return {tool_key: [log_lines]} for every tool run in a session."""
+        cursor = self._db.tool_runs.find(
+            {"session_id": session_id},
+            {"tool_key": 1, "log_lines": 1},
+        )
+        return {
+            d["tool_key"]: d.get("log_lines", [])
+            for d in cursor
+            if d.get("tool_key")
+        }
 
     # ── Results ───────────────────────────────────────────────────────────────
 
@@ -263,11 +281,11 @@ class AweRepository:
         return {d["tool_key"]: d["status"] for d in cursor}
 
     def reset_running_tool_runs(self, session_id: str) -> None:
-        """Mark any still-running or pending tool runs as failed.
-        Called before resuming a session that was interrupted by app close."""
+        """Mark any lingering running/pending tool runs as stopped.
+        Called before resuming a session that was interrupted (user stop or app close)."""
         self._db.tool_runs.update_many(
             {"session_id": session_id, "status": {"$in": ["running", "pending"]}},
-            {"$set": {"status": "failed", "error_msg": "interrupted (app closed)"}},
+            {"$set": {"status": "stopped", "error_msg": "interrupted (app closed)"}},
         )
 
     # ── Custom Pipelines ──────────────────────────────────────────────────────

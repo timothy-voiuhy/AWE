@@ -71,9 +71,21 @@ class PipelineExecutor(QThread):
         self._mongo_uri           = mongo_uri
         self._stop_event          = threading.Event()
         self._session_id          = ""
+        self._active_containers: dict[str, object] = {}
+        self._containers_lock     = threading.Lock()
+        self._step_log_accum: dict[str, list[str]] = {}
+        self._log_accum_lock      = threading.Lock()
 
     def stop(self):
+        """Signal every running container to stop immediately, then set the event."""
         self._stop_event.set()
+        with self._containers_lock:
+            containers = list(self._active_containers.values())
+        for container in containers:
+            try:
+                container.stop(timeout=3)
+            except Exception:
+                pass
 
     # ── Main loop ─────────────────────────────────────────────────────────────
 
@@ -146,11 +158,12 @@ class PipelineExecutor(QThread):
                             self.step_done.emit(step.tool_key, "failed", 0)
                 self.stage_done.emit(stage_num)
 
-            final = "cancelled" if self._stop_event.is_set() else "completed"
+            was_stopped = self._stop_event.is_set()
+            final = "stopped" if was_stopped else "completed"
             repo.update_session_status(session_id, final)
             summary = repo.session_summary(session_id)
             msg = "  ·  ".join(f"{c}: {n}" for c, n in summary.items()) or "No results"
-            self.pipeline_done.emit(session_id, True, msg)
+            self.pipeline_done.emit(session_id, not was_stopped, msg)
 
         except Exception as exc:
             logger.exception("Pipeline %s failed", self._template.key)
@@ -179,66 +192,84 @@ class PipelineExecutor(QThread):
             session_id, step.tool_key, tool.display_name, tool.category, step.stage
         )
 
-        skip_reason = self._check_condition(step, repo, session_id)
-        if skip_reason:
-            self._emit(step.tool_key, f"⏭ Skipped: {skip_reason}")
-            repo.update_tool_run_skipped(run_id, skip_reason)
-            return "skipped", 0
-
-        if self._stop_event.is_set():
-            repo.update_tool_run_skipped(run_id, "pipeline stopped")
-            return "skipped", 0
-
-        repo.update_tool_run_started(run_id)
-
-        params = self._build_params(settings, step)
-        input_dir_host: str | None = None
-
-        if step.input_category:
-            input_dir_host, container_input_file = self._write_input_file(
-                repo, session_id, step.input_category, output_dir
-            )
-            if container_input_file:
-                params["input_file"] = container_input_file
-            else:
-                self._emit(step.tool_key, "⏭ No upstream results — skipping")
-                repo.update_tool_run_skipped(run_id, "no upstream results")
-                return "skipped", 0
+        # Start accumulating log lines for this run — flushed to DB in finally.
+        with self._log_accum_lock:
+            self._step_log_accum[step.tool_key] = []
 
         try:
-            # Use user-overridden command if one has been saved, otherwise
-            # generate from the tool's build_command() with resolved params.
-            override = settings.get_tool_command(step.tool_key)
-            if override:
-                command = override
-                self._emit(step.tool_key, "⚙ Using custom command override")
-            else:
-                command = tool.build_command(**params)
-            volumes = tool.get_volumes(output_dir, input_dir_host)
-            self._emit(step.tool_key, f"▶ {command[:140]}")
-            self._run_container(step.tool_key, tool, command, volumes)
+            skip_reason = self._check_condition(step, repo, session_id)
+            if skip_reason:
+                self._emit(step.tool_key, f"⏭ Skipped: {skip_reason}")
+                repo.update_tool_run_skipped(run_id, skip_reason)
+                return "skipped", 0
 
-            parser = PARSERS.get(step.tool_key)
-            results = []
-            if parser:
+            if self._stop_event.is_set():
+                repo.update_tool_run_skipped(run_id, "pipeline stopped")
+                return "skipped", 0
+
+            repo.update_tool_run_started(run_id)
+
+            params = self._build_params(settings, step)
+            input_dir_host: str | None = None
+
+            if step.input_category:
+                input_dir_host, container_input_file = self._write_input_file(
+                    repo, session_id, step.input_category, output_dir
+                )
+                if container_input_file:
+                    params["input_file"] = container_input_file
+                else:
+                    self._emit(step.tool_key, "⏭ No upstream results — skipping")
+                    repo.update_tool_run_skipped(run_id, "no upstream results")
+                    return "skipped", 0
+
+            try:
+                # Use user-overridden command if one has been saved, otherwise
+                # generate from the tool's build_command() with resolved params.
+                override = settings.get_tool_command(step.tool_key)
+                if override:
+                    command = override
+                    self._emit(step.tool_key, "⚙ Using custom command override")
+                else:
+                    command = tool.build_command(**params)
+                volumes = tool.get_volumes(output_dir, input_dir_host)
+                self._emit(step.tool_key, f"▶ {command[:140]}")
+                self._run_container(step.tool_key, tool, command, volumes)
+
+                if self._stop_event.is_set():
+                    repo.update_tool_run_done(run_id, "stopped", 0, "pipeline stopped by user")
+                    return "stopped", 0
+
+                parser = PARSERS.get(step.tool_key)
+                results = []
+                if parser:
+                    try:
+                        results = parser(output_dir)
+                    except Exception as exc:
+                        self._emit(step.tool_key, f"⚠ Parser error: {exc}")
+
+                count = 0
+                if results:
+                    count = repo.upsert_results(session_id, run_id, tool.category, results)
+                    self._emit(step.tool_key, f"✓ {len(results)} raw  →  {count} new unique")
+
+                repo.update_tool_run_done(run_id, "completed", len(results))
+                return "completed", len(results)
+
+            except Exception as exc:
+                msg = str(exc)
+                self._emit(step.tool_key, f"✗ {msg}")
+                repo.update_tool_run_done(run_id, "failed", 0, msg)
+                return "failed", 0
+
+        finally:
+            with self._log_accum_lock:
+                log_lines = self._step_log_accum.pop(step.tool_key, [])
+            if run_id and log_lines:
                 try:
-                    results = parser(output_dir)
-                except Exception as exc:
-                    self._emit(step.tool_key, f"⚠ Parser error: {exc}")
-
-            count = 0
-            if results:
-                count = repo.upsert_results(session_id, run_id, tool.category, results)
-                self._emit(step.tool_key, f"✓ {len(results)} raw  →  {count} new unique")
-
-            repo.update_tool_run_done(run_id, "completed", len(results))
-            return "completed", len(results)
-
-        except Exception as exc:
-            msg = str(exc)
-            self._emit(step.tool_key, f"✗ {msg}")
-            repo.update_tool_run_done(run_id, "failed", 0, msg)
-            return "failed", 0
+                    repo.save_tool_run_log(run_id, log_lines)
+                except Exception:
+                    pass
 
     def _run_container(self, tool_key: str, tool, command: str, volumes: dict):
         import docker
@@ -280,6 +311,9 @@ class PipelineExecutor(QThread):
             remove=False,
         )
 
+        with self._containers_lock:
+            self._active_containers[tool_key] = container
+
         try:
             for chunk in container.logs(stream=True, follow=True):
                 if self._stop_event.is_set():
@@ -289,6 +323,8 @@ class PipelineExecutor(QThread):
                 if line:
                     self._emit(tool_key, line)
         finally:
+            with self._containers_lock:
+                self._active_containers.pop(tool_key, None)
             try:
                 container.wait(timeout=10)
             except Exception:
@@ -302,6 +338,10 @@ class PipelineExecutor(QThread):
 
     def _emit(self, tool_key: str, line: str):
         self.step_log.emit(tool_key, line)
+        with self._log_accum_lock:
+            buf = self._step_log_accum.get(tool_key)
+            if buf is not None:
+                buf.append(line)
 
     def _build_params(self, settings: SettingsRepository, step: PipelineStep) -> dict:
         all_settings = settings.get_all()

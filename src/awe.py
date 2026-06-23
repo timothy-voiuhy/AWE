@@ -872,9 +872,31 @@ class MainWin(QMainWindow, QtCore.QObject):
         self.proxy_port = _read_proxy_port()
         self.proxy_hostname = "127.0.0.1"
         logging.info("Starting proxy on port %d", self.proxy_port)
-        self.proxy_ = AtomProxy(self.proxy_port, top_parent=self)
+        try:
+            from gui.targetWindow import _load_ui_settings
+            _ups = _load_ui_settings().get("upstream_proxy") or None
+        except Exception:
+            _ups = None
+        self.proxy_ = AtomProxy(self.proxy_port, top_parent=self, upstream_proxy=_ups)
         self.proxy_.start()
         self.isProxyRunning = True
+        # Push persisted match-replace rules to the new proxy process after a short delay
+        from PySide6.QtCore import QTimer
+        QTimer.singleShot(2500, self._push_proxy_rules)
+
+    def _push_proxy_rules(self) -> None:
+        try:
+            import json
+            from pathlib import Path
+            from proxy._control import ControlClient
+            from config.config import RUNDIR
+            rules_file = Path.home() / ".config" / "awe" / "proxy_rules.json"
+            rules = json.loads(rules_file.read_text()) if rules_file.exists() else []
+            port_file = Path(RUNDIR) / "tmp" / "proxy_control.txt"
+            port = int(port_file.read_text().strip())
+            ControlClient(port).set_rules(rules)
+        except Exception:
+            pass
 
     def openProject(self, index):
         self.projectSelected(index)
@@ -913,17 +935,39 @@ if __name__ == "__main__":
     
     App = QApplication()
 
-    # Start MongoDB in the background so it's ready when the pipeline window opens
-    import threading as _threading
-    def _start_mongo():
+    # ── Pre-flight: Docker must be running and MongoDB must be reachable ──────
+    sys.path.insert(0, os.path.dirname(__file__))
+
+    def _preflight() -> tuple[bool, str]:
         try:
-            sys.path.insert(0, os.path.dirname(__file__))
+            from containers.docker_manager import manager as _docker
+            docker_ok, docker_msg = _docker.is_available()
+            if not docker_ok:
+                return False, (
+                    "Docker is not running.\n\n"
+                    "AWE stores its data in a MongoDB container managed by Docker. "
+                    "Docker must be running before the application can start.\n\n"
+                    "Please start Docker and relaunch AWE.\n\n"
+                    f"Details: {docker_msg}"
+                )
             from database.mongod_manager import ensure_running
             ok, msg = ensure_running()
-            logging.info("MongoDB startup: %s — %s", ok, msg)
+            if not ok:
+                return False, (
+                    "Could not connect to the MongoDB database.\n\n"
+                    f"{msg}\n\n"
+                    "Make sure Docker is running and the awe_mongodb container can start, "
+                    "then relaunch AWE."
+                )
+            return True, msg
         except Exception as exc:
-            logging.warning("MongoDB startup skipped: %s", exc)
-    _threading.Thread(target=_start_mongo, daemon=True).start()
+            return False, f"Startup check failed: {exc}"
+
+    _pre_ok, _pre_msg = _preflight()
+    if not _pre_ok:
+        QMessageBox.critical(None, "AWE — Cannot Start", _pre_msg)
+        sys.exit(1)
+    logging.info("Pre-flight passed: %s", _pre_msg)
 
     # Load custom stylesheet
     stylesheet_path = os.path.join(RUNDIR, "src/styles/awe_dark.qss")

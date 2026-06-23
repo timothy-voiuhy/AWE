@@ -10,6 +10,7 @@ from PySide6.QtWidgets import (
     QStackedWidget, QFrame, QVBoxLayout, QHBoxLayout, QFormLayout,
     QPushButton, QLabel, QWidget, QLineEdit, QScrollArea, QTextEdit,
     QSizePolicy, QMenu, QComboBox, QSpinBox, QApplication,
+    QCheckBox, QTableWidget, QTableWidgetItem, QHeaderView,
 )
 
 from awe_net.wappy import find_techs
@@ -24,7 +25,10 @@ from gui.leftDock import LeftDock
 from gui.networkWindow import NetworkWindow
 from gui.networkGraph import NetworkPage
 from gui.httpHistory import HttpHistoryPage
+from gui.interceptPage import InterceptPage
+from gui.intruder import IntruderPage
 from gui.repeater import RepeaterPage
+from gui.wsPage import WebSocketPage
 from gui.scopeEditor import ScopeEditorWidget
 from gui.siteMapWindow import SiteMapPage
 from proxy.traffic_extractor import _ExtractWorker
@@ -187,10 +191,13 @@ _NAV = [
     ("⊗",  "Network",   "#94E2D5"),  # 5
     ("◎",  "Scope",     "#A6E3A1"),  # 6
     ("◫",  "SiteMap",   "#89DCEB"),  # 7
-    ("⊟",  "History",   "#F9E2AF"),  # 8
-    ("↻",  "Repeater",  "#F5C2E7"),  # 9
-    ("✎",  "Notes",     "#F38BA8"),  # 10
-    ("⚙",  "Settings",  "#9399B2"),  # 11
+    ("⊟",  "History",     "#F9E2AF"),  # 8
+    ("⊕",  "Intercept",  "#F9E2AF"),  # 9
+    ("↻",  "Repeater",   "#F5C2E7"),  # 10
+    ("⊛",  "Intruder",   "#EE99A0"),  # 11
+    ("⇄",  "WebSockets", "#94E2D5"),  # 12
+    ("✎",  "Notes",      "#F38BA8"),  # 13
+    ("⚙",  "Settings",   "#9399B2"),  # 14
 ]
 
 _NAV_W = 58
@@ -369,10 +376,13 @@ class TargetWindow(QtWidgets.QMainWindow):
         self._stack.addWidget(self._build_network_page())   # 5 Network
         self._stack.addWidget(self._build_scope_page())     # 6 Scope
         self._stack.addWidget(self._build_sitemap_page())   # 7 SiteMap
-        self._stack.addWidget(self._build_history_page())   # 8 History
-        self._stack.addWidget(self._build_repeater_page())  # 9 Repeater
-        self._stack.addWidget(self._build_notes_page())     # 10 Notes
-        self._stack.addWidget(self._build_settings_page())  # 11 Settings
+        self._stack.addWidget(self._build_history_page())    # 8  History
+        self._stack.addWidget(self._build_intercept_page()) # 9  Intercept
+        self._stack.addWidget(self._build_repeater_page())  # 10 Repeater
+        self._stack.addWidget(self._build_intruder_page())  # 11 Intruder
+        self._stack.addWidget(self._build_ws_page())        # 12 WebSockets
+        self._stack.addWidget(self._build_notes_page())     # 13 Notes
+        self._stack.addWidget(self._build_settings_page())  # 14 Settings
 
         # Wire scope_changed → all consumer pages now that every page exists.
         # Also push the already-loaded scope into pages so their first render
@@ -579,6 +589,7 @@ class TargetWindow(QtWidgets.QMainWindow):
             parent=self,
         )
         self._siteMapPage.send_to_repeater.connect(self._send_to_repeater)
+        self._siteMapPage.send_to_intruder.connect(self._send_to_intruder)
         self._siteMapPage.sync_requested.connect(self._sync_proxy_traffic)
         self._siteMapPage.traffic_changed.connect(self._debounce_timer.start)
         return self._siteMapPage
@@ -590,6 +601,8 @@ class TargetWindow(QtWidgets.QMainWindow):
             parent=self,
         )
         self._historyPage.send_to_repeater.connect(self._send_to_repeater)
+        self._historyPage.send_to_intruder.connect(self._send_to_intruder)
+        self._historyPage.send_to_websocket.connect(self._send_to_websocket)
         self._historyPage.traffic_changed.connect(self._debounce_timer.start)
         return self._historyPage
 
@@ -598,11 +611,52 @@ class TargetWindow(QtWidgets.QMainWindow):
             proxy_port=self.proxy_port,
             parent=self,
         )
+        self._repeaterPage.send_to_intruder.connect(self._send_to_intruder)
         return self._repeaterPage
+
+    def _build_intruder_page(self) -> QWidget:
+        self._intruderPage = IntruderPage(
+            proxy_port=self.proxy_port,
+            project_dir=self.projectDirPath,
+            parent=self,
+        )
+        self._intruderPage.send_to_repeater.connect(self._send_to_repeater)
+        return self._intruderPage
+
+    def _build_intercept_page(self) -> QWidget:
+        self._interceptPage = InterceptPage(
+            proxy_port=self.proxy_port,
+            parent=self,
+        )
+        return self._interceptPage
+
+    def _build_ws_page(self) -> QWidget:
+        self._wsPage = WebSocketPage(
+            proxy_port=self.proxy_port,
+            parent=self,
+        )
+        return self._wsPage
 
     def _send_to_repeater(self, request_text: str) -> None:
         self._repeaterPage.add_tab(request_text)
-        self._switch_page(9)   # Repeater is at index 9 in _NAV
+        self._switch_page(10)  # Repeater is at index 10 in _NAV
+
+    def _send_to_intruder(self, request_text: str) -> None:
+        self._intruderPage.load_request(request_text)
+        self._switch_page(11)  # Intruder is at index 11 in _NAV
+
+    def _send_to_websocket(self, host: str, path: str) -> None:
+        self._wsPage.load_connection(host, path)
+        self._switch_page(12)  # WebSockets is at index 12 in _NAV
+
+    def OpenIntruderWindow(self):
+        self._switch_page(11)
+
+    def OpenWebSocketWindow(self):
+        self._switch_page(12)
+
+    def OpenInterceptWindow(self):
+        self._switch_page(9)
 
     def _sync_proxy_traffic(self) -> None:
         """Extract data from proxy traffic DB and upsert into project results."""
@@ -885,6 +939,100 @@ class TargetWindow(QtWidgets.QMainWindow):
         vb.addWidget(cert_card)
         self._refresh_cert_status()
 
+        # ── Upstream Proxy card ───────────────────────────────────────────────
+        up_card, up_vb = _card("Upstream Proxy", "#CBA6F7")
+
+        up_note = QLabel(
+            "Route all proxy traffic through an upstream proxy (e.g. Tor, Burp, ZAP). "
+            "Changes take effect after restarting the proxy."
+        )
+        up_note.setWordWrap(True)
+        up_note.setStyleSheet("color:#6C7086; font-size:10px; background:transparent; border:none;")
+        up_vb.addWidget(up_note)
+
+        self._upstreamEnable = QCheckBox("Enable upstream proxy")
+        self._upstreamEnable.setStyleSheet("color:#CDD6F4; font-size:10px; background:transparent;")
+        up_vb.addWidget(self._upstreamEnable)
+
+        up_url_row = QHBoxLayout()
+        self._upstreamUrlEdit = QLineEdit()
+        self._upstreamUrlEdit.setPlaceholderText("http://127.0.0.1:9050")
+        up_url_row.addWidget(self._upstreamUrlEdit, stretch=1)
+        up_apply_btn = QPushButton("Apply")
+        up_apply_btn.setFixedHeight(28)
+        up_apply_btn.clicked.connect(self._apply_upstream_proxy)
+        up_url_row.addWidget(up_apply_btn)
+        up_vb.addLayout(up_url_row)
+
+        # Load persisted value
+        _ups_data = _load_ui_settings()
+        _ups_url  = _ups_data.get("upstream_proxy", "")
+        self._upstreamEnable.setChecked(bool(_ups_url))
+        self._upstreamUrlEdit.setText(_ups_url or "")
+
+        vb.addWidget(up_card)
+
+        # ── Match & Replace card ──────────────────────────────────────────────
+        mr_card, mr_vb = _card("Match & Replace", "#FAB387")
+
+        mr_note = QLabel(
+            "Rules are applied to every proxied request and response in order. "
+            "Pattern is a Python regex; replacement supports \\1 back-references. "
+            "Changes apply immediately — no restart needed."
+        )
+        mr_note.setWordWrap(True)
+        mr_note.setStyleSheet("color:#6C7086; font-size:10px; background:transparent; border:none;")
+        mr_vb.addWidget(mr_note)
+
+        self._rulesTable = QTableWidget(0, 5)
+        self._rulesTable.setHorizontalHeaderLabels(["✓", "Applies To", "Pattern", "Replacement", "Comment"])
+        self._rulesTable.verticalHeader().setVisible(False)
+        self._rulesTable.setColumnWidth(0, 28)
+        self._rulesTable.setColumnWidth(1, 130)
+        self._rulesTable.setColumnWidth(2, 180)
+        self._rulesTable.setColumnWidth(3, 180)
+        self._rulesTable.horizontalHeader().setStretchLastSection(True)
+        self._rulesTable.setMinimumHeight(160)
+        self._rulesTable.setEditTriggers(QTableWidget.NoEditTriggers)
+        self._rulesTable.setContextMenuPolicy(Qt.CustomContextMenu)
+        self._rulesTable.customContextMenuRequested.connect(self._rules_context_menu)
+        mr_vb.addWidget(self._rulesTable)
+
+        # Add-rule row
+        add_row = QHBoxLayout()
+        add_row.setSpacing(6)
+        self._ruleMatchIn   = QComboBox()
+        self._ruleMatchIn.addItems([
+            "request_headers", "request_body",
+            "response_headers", "response_body", "url",
+        ])
+        self._ruleMatchIn.setFixedHeight(26)
+        add_row.addWidget(self._ruleMatchIn)
+
+        self._rulePattern  = QLineEdit()
+        self._rulePattern.setPlaceholderText("Pattern (regex)")
+        self._rulePattern.setFixedHeight(26)
+        add_row.addWidget(self._rulePattern, stretch=2)
+
+        self._ruleReplace  = QLineEdit()
+        self._ruleReplace.setPlaceholderText("Replacement")
+        self._ruleReplace.setFixedHeight(26)
+        add_row.addWidget(self._ruleReplace, stretch=2)
+
+        self._ruleComment  = QLineEdit()
+        self._ruleComment.setPlaceholderText("Comment (optional)")
+        self._ruleComment.setFixedHeight(26)
+        add_row.addWidget(self._ruleComment, stretch=1)
+
+        add_btn = QPushButton("+ Add")
+        add_btn.setFixedHeight(26)
+        add_btn.clicked.connect(self._add_rule)
+        add_row.addWidget(add_btn)
+        mr_vb.addLayout(add_row)
+
+        vb.addWidget(mr_card)
+        self._load_rules()
+
         vb.addStretch()
         scroll.setWidget(body)
         return scroll
@@ -995,6 +1143,106 @@ class TargetWindow(QtWidgets.QMainWindow):
             return
         self.HandleProxy()
         self._refresh_proxy_status()
+
+    def _apply_upstream_proxy(self) -> None:
+        enabled = self._upstreamEnable.isChecked()
+        url     = self._upstreamUrlEdit.text().strip() if enabled else ""
+        data    = _load_ui_settings()
+        data["upstream_proxy"] = url
+        _save_ui_settings(data)
+        # Restart proxy to pick up the new upstream setting
+        try:
+            self.topParent.startproxy()
+        except Exception:
+            pass
+
+    # ── Rules (Match & Replace) ───────────────────────────────────────────────
+
+    def _rules_file(self):
+        from pathlib import Path
+        return Path.home() / ".config" / "awe" / "proxy_rules.json"
+
+    def _load_rules(self) -> None:
+        import json
+        try:
+            rules = json.loads(self._rules_file().read_text())
+        except Exception:
+            rules = []
+        self._rulesTable.setRowCount(0)
+        for rule in rules:
+            self._append_rule_row(rule)
+
+    def _save_and_push_rules(self) -> None:
+        import json, uuid
+        rules = []
+        for r in range(self._rulesTable.rowCount()):
+            cb = self._rulesTable.cellWidget(r, 0)
+            rules.append({
+                "id":          self._rulesTable.item(r, 1).data(Qt.UserRole) or str(uuid.uuid4())[:8],
+                "enabled":     cb.isChecked() if cb else True,
+                "match_in":    self._rulesTable.item(r, 1).text(),
+                "pattern":     self._rulesTable.item(r, 2).text(),
+                "replacement": self._rulesTable.item(r, 3).text(),
+                "comment":     self._rulesTable.item(r, 4).text() if self._rulesTable.item(r, 4) else "",
+            })
+        self._rules_file().parent.mkdir(parents=True, exist_ok=True)
+        self._rules_file().write_text(json.dumps(rules, indent=2))
+        # Push to running proxy via control protocol
+        try:
+            from proxy._control import ControlClient
+            from config.config import RUNDIR
+            from pathlib import Path
+            port_file = Path(RUNDIR) / "tmp" / "proxy_control.txt"
+            port = int(port_file.read_text().strip())
+            ControlClient(port).set_rules(rules)
+        except Exception:
+            pass
+
+    def _append_rule_row(self, rule: dict) -> None:
+        r = self._rulesTable.rowCount()
+        self._rulesTable.insertRow(r)
+
+        cb = QCheckBox()
+        cb.setChecked(rule.get("enabled", True))
+        cb.stateChanged.connect(lambda: self._save_and_push_rules())
+        self._rulesTable.setCellWidget(r, 0, cb)
+
+        for col, key in enumerate(["match_in", "pattern", "replacement", "comment"], start=1):
+            item = QTableWidgetItem(rule.get(key, ""))
+            if col == 1:
+                item.setData(Qt.UserRole, rule.get("id", ""))
+            self._rulesTable.setItem(r, col, item)
+
+        self._rulesTable.setRowHeight(r, 24)
+
+    def _add_rule(self) -> None:
+        import uuid
+        pattern = self._rulePattern.text().strip()
+        if not pattern:
+            return
+        rule = {
+            "id":          str(uuid.uuid4())[:8],
+            "enabled":     True,
+            "match_in":    self._ruleMatchIn.currentText(),
+            "pattern":     pattern,
+            "replacement": self._ruleReplace.text(),
+            "comment":     self._ruleComment.text().strip(),
+        }
+        self._append_rule_row(rule)
+        self._rulePattern.clear()
+        self._ruleReplace.clear()
+        self._ruleComment.clear()
+        self._save_and_push_rules()
+
+    def _rules_context_menu(self, pos) -> None:
+        row = self._rulesTable.rowAt(pos.y())
+        if row < 0:
+            return
+        menu = QMenu(self)
+        rm = menu.addAction("Remove Rule")
+        if menu.exec(self._rulesTable.mapToGlobal(pos)) is rm:
+            self._rulesTable.removeRow(row)
+            self._save_and_push_rules()
 
     # ── Public API ────────────────────────────────────────────────────────────
 
@@ -1130,4 +1378,4 @@ class TargetWindow(QtWidgets.QMainWindow):
     def AddTopMenu(self):   pass
     def ViewTarget(self):   self._switch_page(1)
     def ViewTerminal(self): pass
-    def ViewNotepad(self):  self._switch_page(6)  # Notes
+    def ViewNotepad(self):  self._switch_page(13)  # Notes at 13 (Intercept→9, WS→12)

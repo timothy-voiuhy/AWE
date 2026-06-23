@@ -47,9 +47,11 @@ class UpstreamClient:
         verify: bool = False,
         connect_timeout: float = 10.0,
         read_timeout: float = 30.0,
+        upstream_proxy: str | None = None,
     ) -> None:
         self._client = httpx.AsyncClient(
             verify=verify,
+            proxy=upstream_proxy or None,
             follow_redirects=False,
             timeout=httpx.Timeout(
                 connect=connect_timeout,

@@ -3,7 +3,7 @@ import logging
 from PySide6.QtCore import Qt, QRectF, QTimer, Signal
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QSplitter, QLabel,
-    QPushButton, QMessageBox, QDialog,
+    QPushButton, QMessageBox, QDialog, QMenu,
 )
 
 from .networkGraphScene import NetworkGraphScene
@@ -12,12 +12,12 @@ from .detailPanel import DetailPanel
 from .graphDataLoader import GraphDataLoader
 from .manualDataRepository import ManualDataRepository
 from ._models import GraphData, GraphNode
-from ._constants import _NS, _LANE_COLUMNS, _LANE_HEADER_H, _LANE_PAD_TOP
+from ._constants import _NS, _KIND_ICON, _MENU_SS, _LANE_COLUMNS, _LANE_HEADER_H, _LANE_PAD_TOP
 from ._dialogs import (
     _AddSubdomainDlg, _AddPortDlg, _AddTechDlg, _AddVulnDlg, _AddEndpointDlg,
     _AddOSINTDlg, _AddCdnDlg, _InfoNoteDlg, _AddCustomNodeDlg, _AddOriginServerDlg,
 )
-from ._helpers import _legend_chip, _SearchEdit
+from ._helpers import _SearchEdit
 
 logger = logging.getLogger(__name__)
 
@@ -89,11 +89,6 @@ class NetworkPage(QWidget):
         hl.addWidget(title)
         hl.addStretch()
 
-        for kind in _NS:
-            hl.addWidget(_legend_chip(kind))
-
-        hl.addStretch()
-
         # ── Search bar ────────────────────────────────────────────────────────
         search_lbl = QLabel("⌕")
         search_lbl.setStyleSheet("color:#6C7086; font-size:14px; background:transparent;")
@@ -126,36 +121,6 @@ class NetworkPage(QWidget):
                             "border:1px solid #FE640B;border-radius:4px;"
                             "padding:2px 10px;font-size:10px;min-height:26px;}"
                             "QPushButton:hover{background:#4D3B2F;}")
-        _lane_ss_on = ("QPushButton{background:#1A2E1A;color:#A6E3A1;"
-                       "border:1px solid #A6E3A1;border-radius:4px;"
-                       "padding:2px 10px;font-size:10px;min-height:26px;}"
-                       "QPushButton:hover{background:#2A3E2A;}")
-
-        # ── Lane mode toggle ──────────────────────────────────────────────────
-        self._lane_btn = QPushButton("⊟ Lane")
-        self._lane_btn.setFixedHeight(26)
-        self._lane_btn.setStyleSheet(_btn_ss)
-        self._lane_btn.setToolTip(
-            "Toggle tabular lane layout\n"
-            "Columns: Domain → Subdomain → IP → Port → Tech/CDN → Findings"
-        )
-        self._lane_btn.clicked.connect(self._toggle_lane_mode)
-        hl.addWidget(self._lane_btn)
-        self._lane_btn._ss_off = _btn_ss
-        self._lane_btn._ss_on  = _lane_ss_on
-        # Reflect the default-active state immediately
-        if self._lane_mode:
-            self._lane_btn.setStyleSheet(_lane_ss_on)
-            self._lane_btn.setText("⊟ Lane ✓")
-
-        for lbl, fn in [("↺ Refresh",      self._load_data),
-                        ("⊡ Fit",          self._view.fit_all),
-                        ("⊞ Reset Layout", self._on_reset_layout)]:
-            btn = QPushButton(lbl)
-            btn.setFixedHeight(26)
-            btn.setStyleSheet(_btn_ss)
-            btn.clicked.connect(fn)
-            hl.addWidget(btn)
 
         # ── Zoom controls ─────────────────────────────────────────────────────
         _icon_btn_ss = ("QPushButton{background:#313244;color:#CDD6F4;"
@@ -221,6 +186,39 @@ class NetworkPage(QWidget):
         zoom_in_btn.setToolTip("Zoom in  (+)")
         zoom_in_btn.clicked.connect(self._view.zoom_in)
         hl.addWidget(zoom_in_btn)
+
+        # ── Options menu button ───────────────────────────────────────────────
+        opts_btn = QPushButton("⚙")
+        opts_btn.setFixedSize(26, 26)
+        opts_btn.setStyleSheet(_icon_btn_ss)
+        opts_btn.setToolTip("Options")
+        hl.addWidget(opts_btn)
+
+        def _show_options_menu():
+            menu = QMenu(opts_btn)
+            menu.setStyleSheet(_MENU_SS)
+
+            lane_action = menu.addAction("⊟  Lane Layout")
+            lane_action.setCheckable(True)
+            lane_action.setChecked(self._lane_mode)
+            lane_action.triggered.connect(self._toggle_lane_mode)
+
+            menu.addSeparator()
+            menu.addAction("↺  Refresh",       self._load_data)
+            menu.addAction("⊡  Fit to View",   self._view.fit_all)
+            menu.addAction("⊞  Reset Layout",  self._on_reset_layout)
+
+            menu.addSeparator()
+            legend_menu = menu.addMenu("◉  Legend")
+            legend_menu.setStyleSheet(_MENU_SS)
+            for kind, s in _NS.items():
+                icon = _KIND_ICON.get(kind, "○")
+                act = legend_menu.addAction(f"{icon}  {kind}")
+                act.setEnabled(False)
+
+            menu.exec(opts_btn.mapToGlobal(opts_btn.rect().bottomLeft()))
+
+        opts_btn.clicked.connect(_show_options_menu)
 
         self._show_all_btn = QPushButton("⊗ Show All")
         self._show_all_btn.setFixedHeight(26)
@@ -330,20 +328,13 @@ class NetworkPage(QWidget):
 
     def _toggle_lane_mode(self) -> None:
         self._lane_mode = not self._lane_mode
-        btn = self._lane_btn
         if self._lane_mode:
-            btn.setStyleSheet(btn._ss_on)
-            btn.setText("⊟ Lane ✓")
             if self._data:
                 self._scene.lane_layout(self._data)
                 QTimer.singleShot(120, self._view.fit_all)
         else:
-            btn.setStyleSheet(btn._ss_off)
-            btn.setText("⊟ Lane")
             self._scene._clear_lane_decorations()
             if self._data:
-                # Restore hierarchy layout (positions from cache win over
-                # the lane positions we just applied)
                 self._scene.build(self._data)
                 QTimer.singleShot(120, self._view.fit_all)
 

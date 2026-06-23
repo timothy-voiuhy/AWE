@@ -16,6 +16,7 @@ asyncio event loop.
 """
 from __future__ import annotations
 
+import base64
 import logging
 import queue
 import re
@@ -86,17 +87,19 @@ class TrafficStore:
             "status_code": response.status_code,
             "timestamp":   datetime.now(timezone.utc).isoformat(),
             "request": {
-                "method":  method,
-                "url":     url,
-                "headers": _headers_to_dict(req_headers),
-                "body":    req_body.decode("utf-8", errors="replace"),
+                "method":        method,
+                "url":           url,
+                "headers":       _headers_to_dict(req_headers),
+                "body":          _body_str(req_body),
+                "body_encoding": _body_enc(req_body),
             },
             "response": {
-                "status_code":  response.status_code,
-                "reason":       response.reason,
-                "http_version": response.http_version,
-                "headers":      _headers_to_dict(response.headers),
-                "body":         response.body.decode("utf-8", errors="replace"),
+                "status_code":   response.status_code,
+                "reason":        response.reason,
+                "http_version":  response.http_version,
+                "headers":       _headers_to_dict(response.headers),
+                "body":          _body_str(response.body),
+                "body_encoding": _body_enc(response.body),
             },
         }
 
@@ -127,6 +130,21 @@ class TrafficStore:
 
 
 # ── helpers ───────────────────────────────────────────────────────────────────
+
+def _body_enc(raw: bytes) -> str:
+    try:
+        raw.decode("utf-8")
+        return "utf-8"
+    except UnicodeDecodeError:
+        return "base64"
+
+
+def _body_str(raw: bytes) -> str:
+    try:
+        return raw.decode("utf-8")
+    except UnicodeDecodeError:
+        return base64.b64encode(raw).decode()
+
 
 def _headers_to_dict(headers: list[tuple[str, str]]) -> dict[str, str | list[str]]:
     out: dict[str, list[str]] = {}
