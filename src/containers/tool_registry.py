@@ -784,6 +784,31 @@ class _JwtTool(ToolConfig):
         ]
 
 
+# ── GraphQL Analysis ─────────────────────────────────────────────────────────
+
+@dataclass
+class _GraphQLTools(ToolConfig):
+    key: str = "graphql_tools"
+    display_name: str = "GraphQL Tools"
+    image: str = "awe/graphql_tools"
+    description: str = "GraphQL engine fingerprinting (graphw00f) + hidden field discovery (clairvoyance)"
+    category: str = "vuln"
+    dockerfile: str = _DF + "Dockerfile.graphql_tools"
+
+    def build_command(self, endpoint: str = "", **_) -> str:
+        safe = endpoint.strip().replace("'", "").replace('"', "")
+        return (
+            f"graphw00f -d -t '{safe}' 2>&1 | tee /output/fingerprint.txt && "
+            f"python3 /app/clairvoyance/clairvoyance/main.py '{safe}' "
+            f"-o /output/schema.json 2>&1 | tee -a /output/fingerprint.txt"
+        )
+
+    def param_spec(self):
+        return [
+            {"key": "endpoint", "label": "GraphQL Endpoint URL", "type": "text", "default": ""},
+        ]
+
+
 # ── Registry ──────────────────────────────────────────────────────────────────
 
 TOOL_REGISTRY: dict[str, ToolConfig] = {
@@ -821,6 +846,7 @@ TOOL_REGISTRY: dict[str, ToolConfig] = {
         # vulnerability scanning
         _Nuclei(),
         _JwtTool(),
+        _GraphQLTools(),
         # osint
         _GithubRecon(),
         _CloudEnum(),

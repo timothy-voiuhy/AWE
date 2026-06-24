@@ -150,6 +150,7 @@ class _TabPane(QWidget):
     send_to_comparer_left_req     = Signal(str)
     send_to_comparer_right_req    = Signal(str)
     send_to_jwt_requested         = Signal(str)
+    send_to_graphql_requested     = Signal(str)
 
     def __init__(
         self,
@@ -281,10 +282,12 @@ class _TabPane(QWidget):
         self._req_edit.send_to_comparer_left.connect(self.send_to_comparer_left_req)
         self._req_edit.send_to_comparer_right.connect(self.send_to_comparer_right_req)
         self._req_edit.send_to_jwt.connect(self.send_to_jwt_requested)
+        self._req_edit.send_to_graphql.connect(self.send_to_graphql_requested)
         self._resp_edit.send_to_decoder.connect(self.send_to_decoder_requested)
         self._resp_edit.send_to_comparer_left.connect(self.send_to_comparer_left_req)
         self._resp_edit.send_to_comparer_right.connect(self.send_to_comparer_right_req)
         self._resp_edit.send_to_jwt.connect(self.send_to_jwt_requested)
+        self._resp_edit.send_to_graphql.connect(self.send_to_graphql_requested)
 
         self._req_edit.installEventFilter(self)
         self._resp_edit.installEventFilter(self)
@@ -407,6 +410,7 @@ class RepeaterPage(QWidget):
     send_to_comparer_left  = Signal(str)
     send_to_comparer_right = Signal(str)
     send_to_jwt            = Signal(str)
+    send_to_graphql        = Signal(str)
 
     def __init__(self, proxy_port: int = 8080, repository=None, parent=None) -> None:
         super().__init__(parent)
@@ -438,6 +442,7 @@ class RepeaterPage(QWidget):
         pane.send_to_comparer_left_req.connect(self.send_to_comparer_left)
         pane.send_to_comparer_right_req.connect(self.send_to_comparer_right)
         pane.send_to_jwt_requested.connect(self.send_to_jwt)
+        pane.send_to_graphql_requested.connect(self.send_to_graphql)
         # schedule a save whenever the request text changes
         pane._req_edit.textChanged.connect(self._save_timer.start)
         idx = self._tabs.addTab(pane, title[:32])
@@ -588,6 +593,7 @@ class _CodeEdit(QTextEdit):
     send_to_comparer_left  = Signal(str)
     send_to_comparer_right = Signal(str)
     send_to_jwt            = Signal(str)
+    send_to_graphql        = Signal(str)
 
     def __init__(self, read_only: bool = False, parent=None) -> None:
         super().__init__(parent)
@@ -620,6 +626,11 @@ class _CodeEdit(QTextEdit):
 
         jwt_act = menu.addAction("Analyze JWT")
         jwt_act.setEnabled(has_sel and selected.count('.') == 2)
+
+        gql_act = menu.addAction("Send to GraphQL")
+        _is_gql = ('"query"' in txt or '"mutation"' in txt
+                   or txt.lstrip().startswith(('query ', 'mutation ', 'subscription ', '{')))
+        gql_act.setEnabled(has_text and _is_gql)
 
         menu.addSeparator()
         fmt_menu = menu.addMenu("Format Body")
@@ -675,6 +686,8 @@ class _CodeEdit(QTextEdit):
             self.send_to_comparer_right.emit(selected if has_sel else txt)
         elif chosen is jwt_act and has_sel:
             self.send_to_jwt.emit(selected)
+        elif chosen is gql_act:
+            self.send_to_graphql.emit(txt)
         elif chosen in fmt_map and editable:
             result = format_http_body(txt, fmt_map[chosen])
             if result is not None:

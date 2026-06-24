@@ -100,6 +100,7 @@ class SiteMapPage(QWidget):
     send_to_comparer_left  = Signal(str)
     send_to_comparer_right = Signal(str)
     send_to_jwt            = Signal(str)
+    send_to_graphql        = Signal(str)
     sync_requested         = Signal()
     traffic_changed        = Signal()
 
@@ -263,6 +264,7 @@ class SiteMapPage(QWidget):
         self._req_view.send_to_comparer_left.connect(self.send_to_comparer_left)
         self._req_view.send_to_comparer_right.connect(self.send_to_comparer_right)
         self._req_view.send_to_jwt.connect(self.send_to_jwt)
+        self._req_view.send_to_graphql.connect(self.send_to_graphql)
         self._resp_view.send_to_repeater.connect(
             lambda _: self.send_to_repeater.emit(self._req_view.toPlainText()))
         self._resp_view.send_to_intruder.connect(
@@ -271,6 +273,7 @@ class SiteMapPage(QWidget):
         self._resp_view.send_to_comparer_left.connect(self.send_to_comparer_left)
         self._resp_view.send_to_comparer_right.connect(self.send_to_comparer_right)
         self._resp_view.send_to_jwt.connect(self.send_to_jwt)
+        self._resp_view.send_to_graphql.connect(self.send_to_graphql)
         rr_vb.addWidget(self._tabs)
 
         self._search_bar = SearchBar(rr)
@@ -730,6 +733,7 @@ class _CodeView(QTextEdit):
     send_to_comparer_left  = Signal(str)
     send_to_comparer_right = Signal(str)
     send_to_jwt            = Signal(str)
+    send_to_graphql        = Signal(str)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -765,6 +769,11 @@ class _CodeView(QTextEdit):
 
         jwt_act = menu.addAction("Analyze JWT")
         jwt_act.setEnabled(has_sel and selected.count('.') == 2)
+
+        gql_act = menu.addAction("Send to GraphQL")
+        _is_gql = ('"query"' in txt or '"mutation"' in txt
+                   or txt.lstrip().startswith(('query ', 'mutation ', 'subscription ', '{')))
+        gql_act.setEnabled(has_text and _is_gql)
 
         menu.addSeparator()
         fmt_menu = menu.addMenu("Format Body")
@@ -811,6 +820,8 @@ class _CodeView(QTextEdit):
             self.send_to_comparer_right.emit(selected if has_sel else txt)
         elif chosen is jwt_act and has_sel:
             self.send_to_jwt.emit(selected)
+        elif chosen is gql_act:
+            self.send_to_graphql.emit(txt)
         elif chosen in fmt_map:
             result = format_http_body(txt, fmt_map[chosen])
             if result is not None:

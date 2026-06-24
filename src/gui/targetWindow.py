@@ -32,6 +32,7 @@ from gui.siteMapWindow import SiteMapPage
 from gui.decoder_page import DecoderPage
 from gui.comparer import ComparerPage
 from gui.jwt_page import JwtPage
+from gui.graphql_page import GraphqlPage
 from gui.session_manager import SessionManagerWidget
 from proxy.traffic_extractor import _ExtractWorker
 from gui.appearance import load_ui_settings, apply_appearance
@@ -89,8 +90,9 @@ _NAV = [
     ("⊞",  "Decoder",   "#94E2D5", f"{_ICONS}/encoding.png"),     # 12
     ("⇌",  "Comparer",  "#F5C2E7", f"{_ICONS}/comparer.png"),     # 13
     ("⚿",  "JWT",       "#FAB387", f"{_ICONS}/jwt.png"),          # 14
-    ("✎",  "Notes",     "#F38BA8", f"{_ICONS}/notes.png"),        # 15
-    ("⚙",  "Settings",  "#9399B2", f"{_ICONS}/settings-512.png"), # 16
+    ("⬡",  "GraphQL",  "#94E2D5", f"{_ICONS}/graphql.png"),      # 15
+    ("✎",  "Notes",     "#F38BA8", f"{_ICONS}/notes.png"),        # 16
+    ("⚙",  "Settings",  "#9399B2", f"{_ICONS}/settings-512.png"), # 17
 ]
 
 _NAV_W = 58
@@ -251,8 +253,9 @@ class TargetWindow(QtWidgets.QMainWindow):
         self._stack.addWidget(self._build_decoder_page())    # 12 Decoder
         self._stack.addWidget(self._build_comparer_page())   # 13 Comparer
         self._stack.addWidget(self._build_jwt_page())        # 14 JWT
-        self._stack.addWidget(self._build_notes_page())      # 15 Notes
-        self._stack.addWidget(self._build_settings_page())   # 16 Settings
+        self._stack.addWidget(self._build_graphql_page())    # 15 GraphQL
+        self._stack.addWidget(self._build_notes_page())      # 16 Notes
+        self._stack.addWidget(self._build_settings_page())   # 17 Settings
 
         # Wire scope_changed → all consumer pages now that every page exists.
         # Also push the already-loaded scope into pages so their first render
@@ -485,6 +488,7 @@ class TargetWindow(QtWidgets.QMainWindow):
         self._siteMapPage.send_to_comparer_left.connect(self._send_to_comparer_left)
         self._siteMapPage.send_to_comparer_right.connect(self._send_to_comparer_right)
         self._siteMapPage.send_to_jwt.connect(self._send_to_jwt)
+        self._siteMapPage.send_to_graphql.connect(self._send_to_graphql)
         self._siteMapPage.sync_requested.connect(self._sync_proxy_traffic)
         self._siteMapPage.traffic_changed.connect(self._debounce_timer.start)
         return self._siteMapPage
@@ -502,6 +506,7 @@ class TargetWindow(QtWidgets.QMainWindow):
         self._historyPage.send_to_comparer_left.connect(self._send_to_comparer_left)
         self._historyPage.send_to_comparer_right.connect(self._send_to_comparer_right)
         self._historyPage.send_to_jwt.connect(self._send_to_jwt)
+        self._historyPage.send_to_graphql.connect(self._send_to_graphql)
         self._historyPage.traffic_changed.connect(self._debounce_timer.start)
         return self._historyPage
 
@@ -516,6 +521,7 @@ class TargetWindow(QtWidgets.QMainWindow):
         self._repeaterPage.send_to_comparer_left.connect(self._send_to_comparer_left)
         self._repeaterPage.send_to_comparer_right.connect(self._send_to_comparer_right)
         self._repeaterPage.send_to_jwt.connect(self._send_to_jwt)
+        self._repeaterPage.send_to_graphql.connect(self._send_to_graphql)
         return self._repeaterPage
 
     def _build_intruder_page(self) -> QWidget:
@@ -553,6 +559,15 @@ class TargetWindow(QtWidgets.QMainWindow):
         self._jwtPage = JwtPage(repository=self._repo, parent=self)
         return self._jwtPage
 
+    def _build_graphql_page(self) -> QWidget:
+        self._graphqlPage = GraphqlPage(
+            repository=self._repo,
+            proxy_port=self.proxy_port,
+            parent=self,
+        )
+        self._graphqlPage.send_to_repeater.connect(self._send_to_repeater)
+        return self._graphqlPage
+
     def _send_to_repeater(self, request_text: str) -> None:
         self._repeaterPage.add_tab(request_text)
         self._switch_page(9)   # Repeater is at index 9 in _NAV
@@ -580,6 +595,10 @@ class TargetWindow(QtWidgets.QMainWindow):
     def _send_to_jwt(self, token: str) -> None:
         self._jwtPage.load_token(token)
         self._switch_page(14)  # JWT is at index 14 in _NAV
+
+    def _send_to_graphql(self, raw: str) -> None:
+        self._graphqlPage.load_request(raw)
+        self._switch_page(15)  # GraphQL is at index 15 in _NAV
 
     def _on_sessions_changed(self) -> None:
         if hasattr(self, '_repeaterPage'):
@@ -833,4 +852,4 @@ class TargetWindow(QtWidgets.QMainWindow):
     def AddTopMenu(self):   pass
     def ViewTarget(self):   self._switch_page(1)
     def ViewTerminal(self): pass
-    def ViewNotepad(self):  self._switch_page(15)  # Notes at 15
+    def ViewNotepad(self):  self._switch_page(16)  # Notes at 16
