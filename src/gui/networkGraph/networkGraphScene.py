@@ -464,10 +464,14 @@ class NetworkGraphScene(QGraphicsScene):
     def lane_layout(self, data: GraphData) -> None:
         """Tabular lane layout with strict per-row node isolation.
 
-        Structural nodes (target / subdomain / ip / port) may be shared
+        Structural nodes (target / subdomain / cname / ip / port) may be shared
         across rows (positioned at the centroid of all their rows).
         Tech/CDN and findings nodes are CLONED per row — every row gets its
         own independent NodeItem so no fan-of-edges ever appears.
+
+        Column indices (col_cxs):
+          0 target  1 subdomain  2 cname  3 ip  4 port
+          5 tech/cdn  6 origin  7 endpoint  8 param  9 findings
         """
         self._clear_lane_decorations()
 
@@ -506,6 +510,20 @@ class NetworkGraphScene(QGraphicsScene):
             """Like _kids but includes hidden-by-default node kinds (endpoint/param)."""
             return [c for c, k in all_children.get(nid, []) if k in kinds]
 
+        def _cname_chain(start_id: str) -> list[str]:
+            """Follow has_cname edges and return all CNAME node IDs in chain order."""
+            chain, cur, seen = [], start_id, set()
+            while True:
+                nexts = [c for c, k in children.get(cur, [])
+                         if k == "has_cname" and c not in seen]
+                if not nexts:
+                    break
+                cn = nexts[0]
+                seen.add(cn)
+                chain.append(cn)
+                cur = cn
+            return chain
+
         # ── Build chain rows ──────────────────────────────────────────────────
         chain_rows: list[dict] = []
 
@@ -517,6 +535,7 @@ class NetworkGraphScene(QGraphicsScene):
             note_ids  = _kids(sub_id, "linked_to", "annotates")
             extra_ids = vuln_ids + note_ids
             sub_osint = osint_ids if sub_idx == 0 else []
+            cname_ids = _cname_chain(sub_id)
             ip_ids    = _kids(sub_id, "resolves_to")
             dir_ports = _kids(sub_id, "has_port")
             # Endpoints and params: only shown when user has explicitly expanded this sub
@@ -534,6 +553,7 @@ class NetworkGraphScene(QGraphicsScene):
                     origins.extend(_kids(tid, "origin_of"))
                 chain_rows.append({
                     "sub":       sub_id,
+                    "cnames":    cname_ids,   # structural — same list for every row of this sub
                     "ip":        ip_id,
                     "port":      port_id,
                     "techs":     full_techs,
@@ -559,7 +579,7 @@ class NetworkGraphScene(QGraphicsScene):
                 _row(None, None, [], True)
 
         if not chain_rows and osint_ids:
-            chain_rows.append({"sub": None, "ip": None, "port": None,
+            chain_rows.append({"sub": None, "cnames": [], "ip": None, "port": None,
                                "techs": [], "origins": [], "endpoints": [],
                                "params": [], "finds": osint_ids})
         if not chain_rows:
@@ -585,18 +605,23 @@ class NetworkGraphScene(QGraphicsScene):
         row_ys: list[float] = []
         row_hs: list[float] = []
         for row in chain_rows:
-            max_nodes = max(1, len(row["techs"]), len(row["origins"]),
+            max_nodes = max(1, len(row["cnames"]), len(row["techs"]), len(row["origins"]),
                             len(row["endpoints"]), len(row["params"]), len(row["finds"]))
             h = float(max(max_nodes * _LANE_NODE_GAP, _LANE_ROW_MIN_H))
             row_ys.append(y); row_hs.append(h)
             y += h + _LANE_ROW_GAP
         row_cys = [row_ys[i] + row_hs[i] / 2.0 for i in range(len(chain_rows))]
 
-        sub_rows: dict[str, list[int]] = {}
-        ip_rows:  dict[str, list[int]] = {}
+        sub_rows:   dict[str, list[int]] = {}
+        cname_rows: dict[str, list[int]] = {}
+        ip_rows:    dict[str, list[int]] = {}
         for i, row in enumerate(chain_rows):
-            if row["sub"]: sub_rows.setdefault(row["sub"], []).append(i)
-            if row["ip"]:  ip_rows.setdefault(row["ip"],  []).append(i)
+            if row["sub"]:
+                sub_rows.setdefault(row["sub"], []).append(i)
+            for cn in row["cnames"]:
+                cname_rows.setdefault(cn, []).append(i)
+            if row["ip"]:
+                ip_rows.setdefault(row["ip"], []).append(i)
 
         # ── Position structural nodes (shared across rows) ────────────────────
         placed: set[str] = set()
@@ -621,10 +646,16 @@ class NetworkGraphScene(QGraphicsScene):
             cy = row_cys[i]
             if row["sub"] and row["sub"] not in placed:
                 _place(row["sub"], col_cxs[1], _mean_cy(sub_rows[row["sub"]]))
+            # CNAME chain — col 2, stacked, placed once per node at centroid of sub's rows
+            n_cn = len(row["cnames"])
+            for j, cn in enumerate(row["cnames"]):
+                if cn not in placed:
+                    off = (j - (n_cn - 1) / 2.0) * _LANE_NODE_GAP
+                    _place(cn, col_cxs[2], _mean_cy(cname_rows[cn]) + off)
             if row["ip"] and row["ip"] not in placed:
-                _place(row["ip"], col_cxs[2], _mean_cy(ip_rows[row["ip"]]))
+                _place(row["ip"], col_cxs[3], _mean_cy(ip_rows[row["ip"]]))
             if row["port"] and row["port"] not in placed:
-                _place(row["port"], col_cxs[3], cy)
+                _place(row["port"], col_cxs[4], cy)
 
         # ── Per-row virtual clones for tech/CDN and findings columns ──────────
         # Every row gets its own independent NodeItem so nodes are NEVER shared.
@@ -671,6 +702,8 @@ class NetworkGraphScene(QGraphicsScene):
             for sid in (row["sub"], row["ip"], row["port"]):
                 if sid:
                     row_node_set.add(sid)
+            for cn in row["cnames"]:
+                row_node_set.add(cn)
 
             def _clone_tracked(real_id, px, py, par, ek):
                 vi = _clone(real_id, px, py, par, ek)
@@ -679,7 +712,7 @@ class NetworkGraphScene(QGraphicsScene):
                     row_node_set.add(real_id)         # real ID (for focus lookups)
                 return vi
 
-            # ── Tech / CDN column (index 4) ───────────────────────────────────
+            # ── Tech / CDN column (index 5) ───────────────────────────────────
             cdn_virt_map: dict[str, object] = {}
             n_t = len(row["techs"])
             for j, tid in enumerate(row["techs"]):
@@ -688,11 +721,11 @@ class NetworkGraphScene(QGraphicsScene):
                 ek = ("routes_through" if real_n and real_n.kind == "reverse_proxy"
                       else "proxied_by" if real_n and real_n.kind == "cdn"
                       else "uses_tech")
-                vi = _clone_tracked(tid, col_cxs[4], cy + off, parent_item, ek)
+                vi = _clone_tracked(tid, col_cxs[5], cy + off, parent_item, ek)
                 if vi and real_n and real_n.kind in ("cdn", "reverse_proxy"):
                     cdn_virt_map[tid] = vi
 
-            # ── Origin Server column (index 5) ────────────────────────────────
+            # ── Origin Server column (index 6) ────────────────────────────────
             n_o = len(row["origins"])
             for j, oid in enumerate(row["origins"]):
                 off = (j - (n_o - 1) / 2.0) * _LANE_NODE_GAP
@@ -703,19 +736,19 @@ class NetworkGraphScene(QGraphicsScene):
                         break
                 if cdn_parent is None and cdn_virt_map:
                     cdn_parent = next(iter(cdn_virt_map.values()))
-                _clone_tracked(oid, col_cxs[5], cy + off, cdn_parent, "origin_of")
+                _clone_tracked(oid, col_cxs[6], cy + off, cdn_parent, "origin_of")
 
-            # ── Endpoints column (index 6) ─────────────────────────────────────
+            # ── Endpoints column (index 7) ─────────────────────────────────────
             # Only populated when the parent subdomain is in _expanded_nodes.
             ep_virt_map: dict[str, object] = {}   # real_ep_id → virt_item
             n_e = len(row["endpoints"])
             for j, ep_id in enumerate(row["endpoints"]):
                 off = (j - (n_e - 1) / 2.0) * _LANE_NODE_GAP
-                vi = _clone_tracked(ep_id, col_cxs[6], cy + off, parent_item, "has_endpoint")
+                vi = _clone_tracked(ep_id, col_cxs[7], cy + off, parent_item, "has_endpoint")
                 if vi:
                     ep_virt_map[ep_id] = vi
 
-            # ── Parameters column (index 7) ────────────────────────────────────
+            # ── Parameters column (index 8) ────────────────────────────────────
             n_p = len(row["params"])
             for j, param_id in enumerate(row["params"]):
                 off = (j - (n_p - 1) / 2.0) * _LANE_NODE_GAP
@@ -727,9 +760,9 @@ class NetworkGraphScene(QGraphicsScene):
                         break
                 if ep_parent is None and ep_virt_map:
                     ep_parent = next(iter(ep_virt_map.values()))
-                _clone_tracked(param_id, col_cxs[7], cy + off, ep_parent, "has_param")
+                _clone_tracked(param_id, col_cxs[8], cy + off, ep_parent, "has_param")
 
-            # ── Findings column (index 8) ─────────────────────────────────────
+            # ── Findings column (index 9) ─────────────────────────────────────
             n_f = len(row["finds"])
             for j, fid in enumerate(row["finds"]):
                 off = (j - (n_f - 1) / 2.0) * _LANE_NODE_GAP
@@ -737,7 +770,7 @@ class NetworkGraphScene(QGraphicsScene):
                 ek = ("has_vuln"  if real_n and real_n.kind == "vuln"
                       else "is_osint" if real_n and real_n.kind == "osint"
                       else "linked_to")
-                _clone_tracked(fid, col_cxs[8], cy + off, parent_item, ek)
+                _clone_tracked(fid, col_cxs[9], cy + off, parent_item, ek)
 
             self._lane_row_nodes.append(row_node_set)
 

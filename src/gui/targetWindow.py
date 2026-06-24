@@ -13,7 +13,7 @@ from PySide6.QtWidgets import (
 )
 
 from awe_net.tech_detector import find_techs
-from config.config import ROOT_CERT_FILE
+from config.config import ROOT_CERT_FILE, RUNDIR
 from database.repository import AweRepository
 from gui.browserWindow import BrowserWindow
 from gui.certSetupDialog import CertSetupDialog
@@ -67,7 +67,7 @@ def _card(title: str, accent: str = "#9399B2") -> tuple:
 # Each entry: (glyph_or_None, label, accent, icon_path_or_None)
 # If icon_path is set it takes priority over the glyph.
 
-_ICONS = "/home/mak-unipod/Documents/AWE/resources/icons"
+_ICONS = os.path.join(RUNDIR, "resources", "icons")
 
 _NAV = [
     ("◉",  "Browser",    "#89B4FA", f"{_ICONS}/browser.png"),     # 0

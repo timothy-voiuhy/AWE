@@ -248,6 +248,11 @@ def parse_httpx(output_dir: str) -> list[LiveHost]:
     for line in _read_lines(os.path.join(output_dir, "httpx_results.txt")):
         try:
             obj = json.loads(line)
+            raw_cpe = obj.get("cpe", []) or []
+            cpe_list = [
+                c["cpe"] if isinstance(c, dict) else c
+                for c in raw_cpe if c
+            ]
             r = LiveHost(
                 url=obj.get("url", ""),
                 status_code=obj.get("status_code", 0),
@@ -255,6 +260,20 @@ def parse_httpx(output_dir: str) -> list[LiveHost]:
                 technologies=obj.get("tech", []) or [],
                 content_length=obj.get("content_length", 0),
                 redirect_url=obj.get("location", ""),
+                host=obj.get("host", ""),
+                host_ip=obj.get("host_ip", ""),
+                ip_addresses=obj.get("a", []) or [],
+                ipv6_addresses=obj.get("aaaa", []) or [],
+                cname=obj.get("cname", []) or [],
+                webserver=obj.get("webserver", ""),
+                scheme=obj.get("scheme", ""),
+                port=str(obj.get("port", "")),
+                words=obj.get("words", 0),
+                lines=obj.get("lines", 0),
+                cdn=bool(obj.get("cdn", False)),
+                cdn_name=obj.get("cdn_name", ""),
+                cdn_type=obj.get("cdn_type", ""),
+                cpe=cpe_list,
             )
         except json.JSONDecodeError:
             # plain text: "https://example.com [200] [Title]"

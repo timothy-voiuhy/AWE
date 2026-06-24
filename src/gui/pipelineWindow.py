@@ -74,8 +74,9 @@ _ROW_BTN_SS = (
 
 
 class _StepRow(QWidget):
-    selected         = Signal(str)   # tool_key — emitted on click
-    rerun_requested  = Signal(str)   # tool_key — emitted on rerun button / context menu
+    selected                 = Signal(str)   # tool_key — emitted on click
+    rerun_requested          = Signal(str)   # tool_key — emitted on rerun button / context menu
+    rerun_parser_requested   = Signal(str)   # tool_key — emitted from context menu
 
     def __init__(self, tool_key: str, display_name: str, stage: int, parent=None):
         super().__init__(parent)
@@ -163,10 +164,13 @@ class _StepRow(QWidget):
     def contextMenuEvent(self, ev):
         from PySide6.QtWidgets import QMenu
         menu = QMenu(self)
-        a_rerun = menu.addAction("↺  Rerun this tool")
+        a_rerun        = menu.addAction("↺  Rerun this tool")
+        a_rerun_parser = menu.addAction("⟳  Rerun parser only")
         chosen = menu.exec(ev.globalPos())
         if chosen == a_rerun:
             self.rerun_requested.emit(self.tool_key)
+        elif chosen == a_rerun_parser:
+            self.rerun_parser_requested.emit(self.tool_key)
 
     # ── status/log ────────────────────────────────────────────────────────────
 
@@ -189,8 +193,9 @@ class _MonitorPanel(QWidget):
       Left  — stage-grouped list of _StepRow widgets with per-stage rerun buttons
       Right — full buffered log for the selected tool
     """
-    rerun_stage = Signal(int)   # stage_num
-    rerun_tool  = Signal(str)   # tool_key
+    rerun_stage        = Signal(int)   # stage_num
+    rerun_tool         = Signal(str)   # tool_key
+    rerun_tool_parser  = Signal(str)   # tool_key
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -213,6 +218,7 @@ class _MonitorPanel(QWidget):
         self._vbox.setContentsMargins(2, 2, 2, 2)
         self._vbox.addStretch()
         step_scroll.setWidget(self._container)
+        self._step_scroll = step_scroll
         splitter.addWidget(step_scroll)
 
         # ── right: per-tool log ───────────────────────────────────────────────
@@ -263,7 +269,7 @@ class _MonitorPanel(QWidget):
         while self._vbox.count():
             item = self._vbox.takeAt(0)
             if item.widget():
-                item.widget().setParent(None)
+                item.widget().deleteLater()
         self._rows.clear()
         self._log_buffer.clear()
         self._stage_rerun_btns.clear()
@@ -312,6 +318,7 @@ class _MonitorPanel(QWidget):
                 r = _StepRow(step.tool_key, name, step.stage)
                 r.selected.connect(self._on_row_selected)
                 r.rerun_requested.connect(self.rerun_tool)
+                r.rerun_parser_requested.connect(self.rerun_tool_parser)
                 self._vbox.addWidget(r)
                 self._rows[step.tool_key] = r
                 self._log_buffer[step.tool_key] = []
@@ -352,6 +359,32 @@ class _MonitorPanel(QWidget):
         if key == self._selected_key:
             self._tool_log.setPlainText("\n".join(lines))
             self._scroll_log_to_end()
+
+    def reset_rows(self, keys: set[str]) -> None:
+        """Reset status and log for specific tool keys, leaving all other rows intact."""
+        for key in keys:
+            r = self._rows.get(key)
+            if r:
+                r.set_status("pending")
+            if key in self._log_buffer:
+                self._log_buffer[key].clear()
+        if self._selected_key in keys:
+            self._tool_log.clear()
+
+    def show_tool_logs(self, key: str, lines: list[str]) -> None:
+        """Select a row, fill the log panel with lines, and scroll to the row."""
+        if key in self._rows:
+            if self._selected_key and self._selected_key in self._rows:
+                self._rows[self._selected_key].set_selected(False)
+            self._selected_key = key
+            self._rows[key].set_selected(True)
+            tool = TOOL_REGISTRY.get(key)
+            self._log_title.setText(f"Log — {tool.display_name if tool else key}")
+            self._clear_tool_log_btn.setEnabled(True)
+            self._step_scroll.ensureWidgetVisible(self._rows[key])
+        self._log_buffer[key] = lines
+        self._tool_log.setPlainText("\n".join(lines))
+        self._scroll_log_to_end()
 
     # ── internal ──────────────────────────────────────────────────────────────
 
@@ -587,6 +620,7 @@ class PipelineWindow(QMainWindow):
         self._monitor = _MonitorPanel()
         self._monitor.rerun_stage.connect(self._rerun_stage)
         self._monitor.rerun_tool.connect(self._rerun_tool)
+        self._monitor.rerun_tool_parser.connect(self._rerun_parser)
         vbox.addWidget(self._monitor, stretch=1)
         return w
 
@@ -636,8 +670,13 @@ class PipelineWindow(QMainWindow):
         steps_to_run = (tmpl.steps if not retry_keys else
                         [s for s in tmpl.steps if s.tool_key in retry_keys])
 
-        self._logView.clear()
-        self._monitor.populate(steps_to_run)
+        if retry_keys and self._monitor._rows:
+            # Partial rerun — reset only the targeted rows, keep everything else
+            self._monitor.reset_rows(retry_keys)
+        else:
+            # Fresh run — rebuild the monitor from scratch
+            self._logView.clear()
+            self._monitor.populate(steps_to_run)
         self._monitor.set_running(True)
         self._mainTabs.setCurrentIndex(1)
 
@@ -764,6 +803,7 @@ class PipelineWindow(QMainWindow):
                 self._custom_templates.get(session_doc["pipeline_key"]))
         if not tmpl:
             return
+        self._last_rerun_key = tool_key
         self._start_pipeline(
             retry_keys={tool_key},
             session_id=sid,
@@ -771,6 +811,50 @@ class PipelineWindow(QMainWindow):
             in_scope=session_doc.get("in_scope"),
             out_scope=session_doc.get("out_of_scope"),
         )
+
+    def _rerun_parser(self, tool_key: str):
+        """Re-run the output parser for a tool without re-running its container."""
+        sid = self._current_session_id
+        if not sid:
+            self._log("[!] Select a session first")
+            return
+        session_doc = self._repo.get_session(sid)
+        if not session_doc:
+            return
+
+        from containers.results.parsers import PARSERS
+        parser = PARSERS.get(tool_key)
+        if not parser:
+            self._log(f"  [{tool_key}] No parser registered for this tool")
+            return
+
+        output_dir = session_doc.get("output_dir", "")
+        if not output_dir:
+            self._log(f"  [{tool_key}] Session has no output_dir")
+            return
+
+        # Find the most recent tool run for this key in the session
+        tool_runs = self._repo.get_tool_runs(sid)
+        run = next((r for r in reversed(tool_runs) if r.get("tool_key") == tool_key), None)
+        if not run:
+            self._log(f"  [{tool_key}] No previous run found in this session")
+            return
+
+        run_id = run.get("id", "")
+        tool = TOOL_REGISTRY.get(tool_key)
+        category = tool.category if tool else "misc"
+
+        self._log(f"  [{tool_key}] ⟳ Re-running parser…")
+        try:
+            results = parser(output_dir)
+            count = 0
+            if results:
+                count = self._repo.upsert_results(sid, run_id, category, results)
+            self._log(f"  [{tool_key}] ✓ {len(results)} raw  →  {count} new unique")
+            self._monitor.on_done(tool_key, "completed", len(results))
+        except Exception as exc:
+            self._log(f"  [{tool_key}] ✗ Parser error: {exc}")
+            self._monitor.on_done(tool_key, "failed", 0)
 
     def _session_context_menu(self, pos):
         item = self._sessionList.itemAt(pos)
@@ -950,18 +1034,33 @@ class PipelineWindow(QMainWindow):
         self._retryBtn.setEnabled(True)
         self._resumeBtn.setEnabled(was_stopped or not success)
         self._monitor.set_running(False)
+
+        rerun_key   = getattr(self, "_last_rerun_key", None)
+        self._last_rerun_key = None
+        rerun_lines = list(self._monitor._log_buffer.get(rerun_key, [])) if rerun_key else []
+
         self._refresh_sessions()
+
+        if rerun_key and rerun_lines:
+            self._monitor.show_tool_logs(rerun_key, rerun_lines)
+
         _notify(f"AWE — Pipeline {label.lower()}", message)
 
     # ── Session history ───────────────────────────────────────────────────────
 
     def _refresh_sessions(self):
+        prev_sid = self._current_session_id
         self._sessionList.clear()
         self._stale_session_ids: set[str] = set()
         try:
             sessions = self._repo.list_sessions(100)
         except Exception:
             return
+        # Block signals while repopulating so that addItem on an empty list
+        # does not fire currentItemChanged for the first item added, which
+        # would trigger _load_session_into_ui prematurely and clear
+        # _last_rerun_key before the intended setCurrentRow call below.
+        self._sessionList.blockSignals(True)
         for s in sessions:
             status = s.get("status", "")
             # A session that is still "running" but the app is not executing it
@@ -988,6 +1087,23 @@ class PipelineWindow(QMainWindow):
             item.setData(Qt.UserRole, s["id"])
             item.setForeground(QColor(color))
             self._sessionList.addItem(item)
+        self._sessionList.blockSignals(False)
+
+        # Restore the previously selected session.
+        # Keep signals blocked for setCurrentRow too: if the session is at
+        # index 0 Qt may have already set it as current (from the first addItem
+        # while signals were blocked), so setCurrentRow(0) would be a no-op and
+        # currentItemChanged would never fire.  Call _load_session_into_ui
+        # directly instead so the monitor always refreshes.
+        if prev_sid:
+            for i in range(self._sessionList.count()):
+                if self._sessionList.item(i).data(Qt.UserRole) == prev_sid:
+                    self._sessionList.blockSignals(True)
+                    self._sessionList.setCurrentRow(i)
+                    self._sessionList.blockSignals(False)
+                    self._current_session_id = prev_sid
+                    self._load_session_into_ui(prev_sid)
+                    break
 
     def _on_session_selected(self, current, _prev):
         if current is None:
@@ -1009,7 +1125,7 @@ class PipelineWindow(QMainWindow):
         session_doc = self._repo.get_session(session_id)
         if not session_doc:
             return
-        running = self._executor is not None and self._executor.isRunning()
+        running = self._monitor._is_running
 
         # ── Config tab — always update ────────────────────────────────────────
         self._targetEdit.setText(session_doc.get("target", ""))
@@ -1041,7 +1157,6 @@ class PipelineWindow(QMainWindow):
                 count  = run.get("result_count", 0)
                 if key:
                     self._monitor.on_done(key, status, count)
-            # Restore persisted per-tool logs so clicking a row shows output
             try:
                 tool_logs = self._repo.get_tool_run_logs(session_id)
                 for key, lines in tool_logs.items():
@@ -1050,6 +1165,7 @@ class PipelineWindow(QMainWindow):
             except Exception:
                 pass
             self._monitor.set_running(False)
+
 
         # ── Log tab ───────────────────────────────────────────────────────────
         self._logView.clear()

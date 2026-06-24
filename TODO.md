@@ -126,3 +126,10 @@ Required for blind SSRF, blind XSS, blind SQLi, DNS exfiltration.
 - Pipeline: subdomain enum, DNS, live probe, crawl, param discovery, ffuf, nuclei, OSINT
 - Docker manager, Network graph
 - Notes, Settings, Browser (embedded Chromium)
+
+i want this architecture built into awe. a session factory controlled by the user. a session is
+  make up of headers and may be url parameters. a user is able to control the sessions from the
+  targetInfoPanel. we are going to a new ui widget. that shall be added as a tab to the
+    targetInfoPanel. After this we intergrate it in repeater, intruder. yeah those sofar. in the two
+    we need functionality to select a session which then results into replacing or adding the headers
+    or url parameters(if existant) @src/gui/targetInfoPanel.py @src/gui/repeater.py @src/gui/intruder.py @src/database/ i already have copy headers fucntionality on the reqresp

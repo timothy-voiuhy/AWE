@@ -11,6 +11,7 @@ scapy
 pyopenssl
 certauth
 httpx
+aiohttp
 brotli
 zstandard
 wappalyzer

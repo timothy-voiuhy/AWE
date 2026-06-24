@@ -7,13 +7,10 @@ RUN apk add --no-cache make && \
     cd /tmp/massdns && make && mv bin/massdns /usr/local/bin/massdns
 
 FROM alpine:3.19
-RUN apk add --no-cache ca-certificates curl
+RUN apk add --no-cache ca-certificates
 COPY --from=builder /go/bin/shuffledns /usr/local/bin/shuffledns
 COPY --from=builder /usr/local/bin/massdns /usr/local/bin/massdns
 RUN mkdir -p /wordlists /output
-# Bundle a curated public resolver list so -r /wordlists/resolvers.txt always works.
-# Source: trickest/resolvers — actively maintained, validated public resolvers.
-RUN curl -fsSL \
-    https://raw.githubusercontent.com/trickest/resolvers/main/resolvers.txt \
-    -o /wordlists/resolvers.txt
+# /wordlists is mounted from the host (resources/wordlists/) at runtime —
+# resolvers.txt and dns-common.txt are provided there.
 ENTRYPOINT ["shuffledns"]

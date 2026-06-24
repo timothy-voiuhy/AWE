@@ -201,13 +201,20 @@ class _ShuffleDNS(ToolConfig):
     category: str = "subdomain"
     dockerfile: str = _DF + "Dockerfile.shuffledns"
 
-    def build_command(self, domain: str = "", wordlist: str = "/wordlists/all.txt",
+    def get_volumes(self, output_dir: str, input_dir: str | None = None) -> dict:
+        os.makedirs(output_dir, exist_ok=True)
+        wordlists_dir = os.path.join(RUNDIR, "resources", "wordlists")
+        vols = {
+            output_dir:   {"bind": "/output",    "mode": "rw"},
+            wordlists_dir: {"bind": "/wordlists", "mode": "ro"},
+        }
+        if input_dir:
+            vols[input_dir] = {"bind": "/input", "mode": "ro"}
+        return vols
+
+    def build_command(self, domain: str = "", wordlist: str = "/wordlists/dns-common.txt",
                       resolvers: str = "/wordlists/resolvers.txt",
                       threads: str = "10000", **_) -> str:
-        # massdns binary is at /usr/local/bin/massdns — shuffledns auto-detects it.
-        # -r  resolver list  (bundled in image at /wordlists/resolvers.txt)
-        # -w  wordlist for bruteforce
-        # -t  concurrent massdns resolves (default 10000)
         return (
             f"shuffledns -d {domain} -w {wordlist} -r {resolvers}"
             f" -t {threads} -mode bruteforce -o /output/shuffledns_results.txt -silent"
@@ -218,7 +225,7 @@ class _ShuffleDNS(ToolConfig):
             {"key": "domain",    "label": "Target domain",              "type": "text",
              "default": ""},
             {"key": "wordlist",  "label": "Wordlist (container path)",  "type": "text",
-             "default": "/wordlists/all.txt"},
+             "default": "/wordlists/dns-common.txt"},
             {"key": "resolvers", "label": "Resolvers (container path)", "type": "text",
              "default": "/wordlists/resolvers.txt"},
             {"key": "threads",   "label": "Concurrent resolves",        "type": "text",

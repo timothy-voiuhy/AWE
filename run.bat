@@ -43,5 +43,4 @@ if "%DO_INSTALL%"=="1" (
 
 :: ── Launch ────────────────────────────────────────────────────────────────────
 echo [AWE] Starting...
-cd /d "%SCRIPT_DIR%src"
-python awe.py %*
+python "%SCRIPT_DIR%main.py" %*

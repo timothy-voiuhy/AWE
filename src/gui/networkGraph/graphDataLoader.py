@@ -141,16 +141,66 @@ class GraphDataLoader(QThread):
                 })
                 _edge(root_id, sub_id, "has_subdomain")
 
-                port_num = 443 if url.startswith("https") else 80
-                port_id  = f"port:{host}:{port_num}"
+                # Resolved IPs from httpx A records
+                host_ip = d.get("host_ip", "")
+                all_ips = list(d.get("ip_addresses", []) or [])
+                if host_ip and host_ip not in all_ips:
+                    all_ips.insert(0, host_ip)
+                for ip in all_ips:
+                    if not ip:
+                        continue
+                    ip_id = f"ip:{ip}"
+                    _node(ip_id, "ip", ip, {"ip": ip})
+                    _edge(sub_id, ip_id, "resolves_to")
+
+                # Use actual port from httpx; fall back to scheme-based guess
+                try:
+                    port_num = int(d.get("port") or 0) or (443 if url.startswith("https") else 80)
+                except (ValueError, TypeError):
+                    port_num = 443 if url.startswith("https") else 80
+                port_id = f"port:{host}:{port_num}"
                 _node(port_id, "port", f"{port_num}/tcp", {
-                    "host": host, "port": port_num, "url": url,
-                    "status": d.get("status_code", ""),
-                    "title":  d.get("title", ""),
+                    "host":      host,
+                    "port":      port_num,
+                    "url":       url,
+                    "status":    d.get("status_code", ""),
+                    "title":     d.get("title", ""),
+                    "webserver": d.get("webserver", ""),
+                    "cpe":       d.get("cpe", []),
                 })
-                ip_id = f"ip:{host}"
-                parent_id = ip_id if ip_id in nodes else sub_id
-                _edge(parent_id, port_id, "has_port")
+                primary_ip_id = f"ip:{host_ip}" if host_ip else (f"ip:{all_ips[0]}" if all_ips else None)
+                port_parent = primary_ip_id if (primary_ip_id and primary_ip_id in nodes) else sub_id
+                _edge(port_parent, port_id, "has_port")
+
+                # CNAME resolution chain
+                for i, cn in enumerate(d.get("cname", []) or []):
+                    if not cn:
+                        continue
+                    cn_id  = f"cname:{cn}"
+                    prev   = sub_id if i == 0 else f"cname:{(d['cname'] or [])[i - 1]}"
+                    _node(cn_id, "cname", cn[:32], {"cname": cn})
+                    _edge(prev, cn_id, "has_cname")
+
+                # CDN: prefer explicit httpx fields over tech-string matching
+                cdn_handled = False
+                if d.get("cdn") and d.get("cdn_name"):
+                    raw_name   = d["cdn_name"]
+                    raw_type   = (d.get("cdn_type") or "cdn").lower()
+                    _TYPE_MAP  = {"waf": "WAF/CDN", "cdn": "CDN", "cloud": "CDN"}
+                    proxy_type = _TYPE_MAP.get(raw_type, raw_type.upper())
+                    kind       = _cdn_node_kind(proxy_type)
+                    cdn_id     = f"cdn:{raw_name.lower()}:{host}"
+                    _node(cdn_id, kind, raw_name, {
+                        "provider":      raw_name,
+                        "proxy_type":    proxy_type,
+                        "proxied_host":  host,
+                        "origin_masked": True,
+                        "origin_ips":    [],
+                        "bypass_hints":  [],
+                    })
+                    edge_kind = "routes_through" if kind == "reverse_proxy" else "proxied_by"
+                    _edge(sub_id, cdn_id, edge_kind)
+                    cdn_handled = True
 
                 for tech in d.get("technologies", []):
                     tech_lower = tech.lower()
@@ -159,7 +209,7 @@ class GraphDataLoader(QThread):
                          if key in tech_lower),
                         None,
                     )
-                    if cdn_match:
+                    if cdn_match and not cdn_handled:
                         provider, proxy_type = cdn_match
                         kind   = _cdn_node_kind(proxy_type)
                         cdn_id = f"cdn:{provider.lower()}:{host}"
@@ -173,7 +223,7 @@ class GraphDataLoader(QThread):
                         })
                         edge_kind = "routes_through" if kind == "reverse_proxy" else "proxied_by"
                         _edge(sub_id, cdn_id, edge_kind)
-                    else:
+                    elif not cdn_match:
                         tech_id = f"tech:{tech}"
                         _node(tech_id, "tech", tech, {"tech": tech})
                         _edge(port_id, tech_id, "uses_tech")

@@ -24,5 +24,4 @@ fi
 
 # ── Launch ─────────────────────────────────────────────────────────────────────
 echo "[AWE] Starting..."
-cd "$SCRIPT_DIR/src"
-exec python awe.py "$@"
+exec python "$SCRIPT_DIR/main.py" "$@"
