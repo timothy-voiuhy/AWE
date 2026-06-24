@@ -16,7 +16,8 @@ from PySide6.QtCore import QThread
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import QPushButton, QMainWindow, QWidget, QVBoxLayout, QFormLayout, \
     QCheckBox, QFrame, QLabel, QHBoxLayout, QToolTip, QTabWidget, \
-    QLineEdit, QSplitter, QScrollArea, QListView, QApplication, QMessageBox
+    QLineEdit, QSplitter, QScrollArea, QListView, QApplication, QMessageBox, \
+    QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView, QMenu
 
 from config.config import DEFAULT_WORKSPACE_DIR, HOME_DIR, RUNDIR
 from gui import targetWindow
@@ -355,218 +356,290 @@ class MainWin(QMainWindow, QtCore.QObject):
             self.tabManager.addTab(self.threadMonitor, "Thread Monitor")
         self.tabManager.setCurrentWidget(self.threadMonitor)
 
+    # ── styling constants ─────────────────────────────────────────────────────
+    _DASH_BG       = "#11111B"
+    _DASH_SURFACE  = "#1E1E2E"
+    _DASH_SURFACE2 = "#181825"
+    _DASH_OVERLAY  = "#313244"
+    _DASH_TEXT     = "#CDD6F4"
+    _DASH_SUBTEXT  = "#6C7086"
+    _DASH_BLUE     = "#89B4FA"
+    _DASH_GREEN    = "#A6E3A1"
+    _DASH_RED      = "#F38BA8"
+    _DASH_PEACH    = "#FAB387"
+    _DASH_BORDER   = "#45475A"
+
     def addProjectsTab(self):
-        # maintab widget
         if not self.isProjectsTabOpen:
-            # Create main container widget
             self.mainTabWidget = QWidget()
             self.mainTabWidget.setObjectName("projectsTab")
-            self.mainTabLayout = QVBoxLayout()
-            self.mainTabLayout.setSpacing(20)
-            self.mainTabLayout.setContentsMargins(30, 30, 30, 30)
-            
-            # Header section
-            headerWidget = QWidget()
-            headerLayout = QHBoxLayout()
-            headerLayout.setContentsMargins(0, 0, 0, 20)
-            
-            # Add title and icons
-            self.projectsHeaderLabel = QLabel()
-            self.projectsHeaderLabel.setText("<h1>Projects Dashboard</h1>")
-            self.projectsHeaderLabel.setObjectName("projectsHeaderLabel")
-            
-            # Add the header elements
-            headerLayout.addWidget(self.projectsHeaderLabel)
-            headerLayout.addStretch()
-            
-            # Create a search box
+            self.mainTabWidget.setStyleSheet(f"background:{self._DASH_BG};")
+
+            root = QVBoxLayout(self.mainTabWidget)
+            root.setSpacing(0)
+            root.setContentsMargins(0, 0, 0, 0)
+
+            # ── top bar ───────────────────────────────────────────────────────
+            topBar = QWidget()
+            topBar.setFixedHeight(64)
+            topBar.setStyleSheet(
+                f"background:{self._DASH_SURFACE2};"
+                f"border-bottom:1px solid {self._DASH_BORDER};"
+            )
+            tbRow = QHBoxLayout(topBar)
+            tbRow.setContentsMargins(24, 0, 24, 0)
+            tbRow.setSpacing(12)
+
+            titleLbl = QLabel("Projects")
+            titleLbl.setStyleSheet(
+                f"color:{self._DASH_TEXT}; font-size:18px; font-weight:700;"
+                "background:transparent; border:none;"
+            )
+            tbRow.addWidget(titleLbl)
+
+            countLbl = QLabel("")
+            countLbl.setStyleSheet(
+                f"color:{self._DASH_SUBTEXT}; font-size:11px;"
+                "background:transparent; border:none; padding-top:4px;"
+            )
+            self._proj_count_lbl = countLbl
+            tbRow.addWidget(countLbl)
+
+            tbRow.addStretch()
+
             self.projectSearchBox = QLineEdit()
-            self.projectSearchBox.setPlaceholderText("Search projects...")
-            self.projectSearchBox.setFixedWidth(250)
-            self.projectSearchBox.setObjectName("projectSearchBox")
+            self.projectSearchBox.setPlaceholderText("  Search projects…")
+            self.projectSearchBox.setFixedSize(240, 32)
+            self.projectSearchBox.setStyleSheet(
+                f"QLineEdit{{background:{self._DASH_OVERLAY};color:{self._DASH_TEXT};"
+                f"border:1px solid {self._DASH_BORDER};border-radius:6px;"
+                f"padding:0 10px;font-size:11px;}}"
+                f"QLineEdit:focus{{border-color:{self._DASH_BLUE};}}"
+            )
             self.projectSearchBox.textChanged.connect(self.filterProjects)
-            headerLayout.addWidget(self.projectSearchBox)
-            
-            # Add new project button
-            self.newProjectButton = QPushButton("New Project")
-            self.newProjectButton.setObjectName("newProjectButton")
+            tbRow.addWidget(self.projectSearchBox)
+
+            self.newProjectButton = QPushButton("+ New Project")
+            self.newProjectButton.setFixedSize(120, 32)
+            self.newProjectButton.setStyleSheet(
+                f"QPushButton{{background:{self._DASH_BLUE};color:#11111B;"
+                f"border:none;border-radius:6px;font-size:11px;font-weight:700;}}"
+                f"QPushButton:hover{{background:#B4CEFA;}}"
+            )
             self.newProjectButton.clicked.connect(self.AddTargetWindow)
-            headerLayout.addWidget(self.newProjectButton)
-            
-            headerWidget.setLayout(headerLayout)
-            self.mainTabLayout.addWidget(headerWidget)
-            
-            # Create a container for the projects area
-            projectsContainer = QWidget()
-            projectsContainerLayout = QHBoxLayout()
-            projectsContainerLayout.setContentsMargins(0, 0, 0, 0)
-            
-            # Left side - projects list
-            projectsListContainer = QWidget()
-            projectsListContainer.setObjectName("projectsListContainer")
-            projectsListLayout = QVBoxLayout()
-            
-            # Add Recent Projects label with icon
-            recentHeaderWidget = QWidget()
-            recentHeaderLayout = QHBoxLayout()
-            recentHeaderLayout.setContentsMargins(0, 0, 0, 10)
-            
-            self.recentProjectsLabel = QLabel("<h2>Recent Projects</h2>")
-            self.recentProjectsLabel.setObjectName("recentProjectsLabel")
-            recentHeaderLayout.addWidget(self.recentProjectsLabel)
-            recentHeaderLayout.addStretch()
-            
-            recentHeaderWidget.setLayout(recentHeaderLayout)
-            projectsListLayout.addWidget(recentHeaderWidget)
-            
-            # Add the projects list
-            self.addProjects(projectsListLayout)
-            
-            projectsListContainer.setLayout(projectsListLayout)
-            projectsContainerLayout.addWidget(projectsListContainer, 2)
-            
-            # Right side - project details/stats
-            projectDetailsContainer = QWidget()
-            projectDetailsContainer.setObjectName("projectDetailsContainer")
-            projectDetailsLayout = QVBoxLayout()
-            
-            # Project details header
-            detailsHeaderLabel = QLabel("<h2>Project Details</h2>")
-            detailsHeaderLabel.setObjectName("detailsHeaderLabel")
-            projectDetailsLayout.addWidget(detailsHeaderLabel)
-            
-            # Project info form
-            self.projectInfoWidget = QWidget()
-            self.projectInfoLayout = QFormLayout()
-            self.projectInfoLayout.setSpacing(15)
-            
-            self.selectedProjectLabel = QLabel("Select a project to view details")
-            self.selectedProjectLabel.setObjectName("selectedProjectLabel")
-            self.projectInfoLayout.addRow(QLabel("<b>Name:</b>"), self.selectedProjectLabel)
+            tbRow.addWidget(self.newProjectButton)
 
-            self.projectTargetLabel = QLabel("")
-            self.projectInfoLayout.addRow(QLabel("<b>Target:</b>"), self.projectTargetLabel)
+            root.addWidget(topBar)
 
-            self.projectPathLabel = QLabel("")
-            self.projectInfoLayout.addRow(QLabel("<b>Path:</b>"), self.projectPathLabel)
+            # ── table ─────────────────────────────────────────────────────────
+            self.projectsTable = QTableWidget()
+            self.projectsTable.setColumnCount(4)
+            self.projectsTable.setHorizontalHeaderLabels(
+                ["Project Name", "Target", "Created", "Path"]
+            )
+            self.projectsTable.setSelectionBehavior(QAbstractItemView.SelectRows)
+            self.projectsTable.setSelectionMode(QAbstractItemView.SingleSelection)
+            self.projectsTable.setEditTriggers(QAbstractItemView.NoEditTriggers)
+            self.projectsTable.setSortingEnabled(True)
+            self.projectsTable.setShowGrid(False)
+            self.projectsTable.setAlternatingRowColors(True)
+            self.projectsTable.verticalHeader().setVisible(False)
+            self.projectsTable.setFocusPolicy(Qt.StrongFocus)
+            self.projectsTable.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
+            self.projectsTable.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
+            self.projectsTable.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
+            self.projectsTable.horizontalHeader().setSectionResizeMode(3, QHeaderView.Stretch)
+            self.projectsTable.verticalHeader().setDefaultSectionSize(42)
+            self.projectsTable.setStyleSheet(
+                f"QTableWidget{{background:{self._DASH_SURFACE};alternate-background-color:{self._DASH_SURFACE2};"
+                f"color:{self._DASH_TEXT};border:none;font-size:12px;outline:none;}}"
+                f"QTableWidget::item{{padding:0 14px;border:none;}}"
+                f"QTableWidget::item:selected{{background:{self._DASH_OVERLAY};"
+                f"color:{self._DASH_TEXT};}}"
+                f"QHeaderView::section{{background:{self._DASH_SURFACE2};color:{self._DASH_SUBTEXT};"
+                f"border:none;border-bottom:1px solid {self._DASH_BORDER};"
+                f"padding:0 14px;height:36px;font-size:10px;font-weight:600;"
+                f"letter-spacing:1px;text-transform:uppercase;}}"
+                f"QScrollBar:vertical{{background:{self._DASH_SURFACE2};width:8px;margin:0;}}"
+                f"QScrollBar::handle:vertical{{background:{self._DASH_OVERLAY};border-radius:4px;min-height:30px;}}"
+                f"QScrollBar::add-line:vertical,QScrollBar::sub-line:vertical{{height:0;}}"
+            )
+            self.projectsTable.itemSelectionChanged.connect(self._on_project_row_selected)
+            self.projectsTable.cellDoubleClicked.connect(lambda r, c: self.openSelectedProject())
+            self.projectsTable.setContextMenuPolicy(Qt.CustomContextMenu)
+            self.projectsTable.customContextMenuRequested.connect(self._projects_context_menu)
+            self.projectsTable.keyPressEvent = self._projects_key_press
 
-            self.projectCreatedLabel = QLabel("")
-            self.projectInfoLayout.addRow(QLabel("<b>Created:</b>"), self.projectCreatedLabel)
-            
-            self.projectInfoWidget.setLayout(self.projectInfoLayout)
-            projectDetailsLayout.addWidget(self.projectInfoWidget)
-            
-            # Project actions
-            self.projectActionsWidget = QWidget()
-            self.projectActionsLayout = QVBoxLayout()
-            self.projectActionsLayout.setSpacing(10)
-            
+            self._populate_projects_table()
+            root.addWidget(self.projectsTable, stretch=1)
+
+            # ── action bar ────────────────────────────────────────────────────
+            actionBar = QWidget()
+            actionBar.setFixedHeight(56)
+            actionBar.setStyleSheet(
+                f"background:{self._DASH_SURFACE2};"
+                f"border-top:1px solid {self._DASH_BORDER};"
+            )
+            abRow = QHBoxLayout(actionBar)
+            abRow.setContentsMargins(24, 0, 24, 0)
+            abRow.setSpacing(10)
+
+            self._sel_name_lbl = QLabel("No project selected")
+            self._sel_name_lbl.setStyleSheet(
+                f"color:{self._DASH_SUBTEXT};font-size:11px;"
+                "background:transparent;border:none;"
+            )
+            abRow.addWidget(self._sel_name_lbl)
+            abRow.addStretch()
+
             self.openProjectButton = QPushButton("Open Project")
-            self.openProjectButton.setObjectName("actionButton")
-            self.openProjectButton.clicked.connect(self.openSelectedProject)
+            self.openProjectButton.setFixedSize(120, 32)
             self.openProjectButton.setEnabled(False)
-            self.projectActionsLayout.addWidget(self.openProjectButton)
-            
-            self.deleteProjectButton = QPushButton("Delete Project")
-            self.deleteProjectButton.setObjectName("deleteButton")
-            self.deleteProjectButton.clicked.connect(self.deleteSelectedProject)
+            self.openProjectButton.setStyleSheet(
+                f"QPushButton{{background:{self._DASH_GREEN};color:#11111B;"
+                f"border:none;border-radius:6px;font-size:11px;font-weight:700;}}"
+                f"QPushButton:hover{{background:#C0F0C0;}}"
+                f"QPushButton:disabled{{background:{self._DASH_OVERLAY};color:{self._DASH_SUBTEXT};}}"
+            )
+            self.openProjectButton.clicked.connect(self.openSelectedProject)
+            abRow.addWidget(self.openProjectButton)
+
+            self.deleteProjectButton = QPushButton("Delete")
+            self.deleteProjectButton.setFixedSize(80, 32)
             self.deleteProjectButton.setEnabled(False)
-            self.projectActionsLayout.addWidget(self.deleteProjectButton)
-            
-            self.projectActionsWidget.setLayout(self.projectActionsLayout)
-            projectDetailsLayout.addWidget(self.projectActionsWidget)
-            projectDetailsLayout.addStretch()
-            
-            projectDetailsContainer.setLayout(projectDetailsLayout)
-            projectsContainerLayout.addWidget(projectDetailsContainer, 1)
-            
-            projectsContainer.setLayout(projectsContainerLayout)
-            self.mainTabLayout.addWidget(projectsContainer)
-            
-            self.mainTabWidget.setLayout(self.mainTabLayout)
+            self.deleteProjectButton.setStyleSheet(
+                f"QPushButton{{background:transparent;color:{self._DASH_RED};"
+                f"border:1px solid {self._DASH_RED};border-radius:6px;"
+                f"font-size:11px;font-weight:600;}}"
+                f"QPushButton:hover{{background:#2E1A1A;}}"
+                f"QPushButton:disabled{{color:{self._DASH_SUBTEXT};border-color:{self._DASH_BORDER};}}"
+            )
+            self.deleteProjectButton.clicked.connect(self.deleteSelectedProject)
+            abRow.addWidget(self.deleteProjectButton)
+
+            root.addWidget(actionBar)
+
             self.tabManager.addTab(self.mainTabWidget, "Projects")
             self.isProjectsTabOpen = True
+
         self.tabManager.setCurrentWidget(self.mainTabWidget)
 
-    def addProjects(self, parentLayout):
+    def _populate_projects_table(self):
+        """Scan workspace dir and fill self.projectsTable."""
+        import json as _json
         available_dirs = []
-        with os.scandir(self.defaultWorkspaceDir) as entries:
-            for entry in entries:
-                if entry.is_dir():
-                    if not entry.name == "Proxy":
-                        info = {
-                            'name': entry.name,
-                            'path': entry.path,
-                            'created': datetime.fromtimestamp(entry.stat().st_ctime).strftime('%Y-%m-%d %H:%M:%S')
-                        }
-                        available_dirs.append(info)
-        
-        # Sort projects by creation date (newest first)
-        available_dirs.sort(key=lambda x: x['created'], reverse=True)
-        
-        # Store the full project info
+        try:
+            with os.scandir(self.defaultWorkspaceDir) as entries:
+                for entry in entries:
+                    if entry.is_dir() and entry.name != "Proxy":
+                        meta_path = os.path.join(entry.path, "project.json")
+                        target = ""
+                        try:
+                            if os.path.exists(meta_path):
+                                with open(meta_path) as fh:
+                                    m = _json.load(fh)
+                                target = m.get("target") or m.get("target_url") or ""
+                        except Exception:
+                            pass
+                        available_dirs.append({
+                            "name":    entry.name,
+                            "path":    entry.path,
+                            "target":  target,
+                            "created": datetime.fromtimestamp(
+                                entry.stat().st_ctime
+                            ).strftime("%Y-%m-%d  %H:%M"),
+                        })
+        except Exception:
+            pass
+
+        available_dirs.sort(key=lambda x: x["created"], reverse=True)
         self.projects_info = available_dirs
-        
-        # Create a model with just the names for the list view
-        project_names = [project['name'] for project in available_dirs]
-        self.dirsModel = QtCore.QStringListModel(project_names)
-        
-        self.dirListView = QListView()
-        self.dirListView.setObjectName("projectsListView")
-        self.dirListView.setFont(QtGui.QFont("Segoe UI", 11))
-        self.dirListView.setEditTriggers(QListView.NoEditTriggers)
-        self.dirListView.setModel(self.dirsModel)
-        self.dirListView.clicked.connect(self.projectSelected)
-        self.dirListView.doubleClicked.connect(self.openProject)
-        
-        self.dirsProjectsScrollArea = QScrollArea()
-        self.dirsProjectsScrollArea.setObjectName("projectsScrollArea")
-        self.dirsProjectsScrollArea.setWidget(self.dirListView)
-        self.dirsProjectsScrollArea.setWidgetResizable(True)
-        
-        parentLayout.addWidget(self.dirsProjectsScrollArea)
-    
+
+        self.projectsTable.setSortingEnabled(False)
+        self.projectsTable.setRowCount(0)
+        for info in available_dirs:
+            row = self.projectsTable.rowCount()
+            self.projectsTable.insertRow(row)
+
+            name_item = QTableWidgetItem(info["name"])
+            name_item.setForeground(QtGui.QColor(self._DASH_BLUE))
+            name_item.setFont(QtGui.QFont("Cascadia Code", 11, QtGui.QFont.Bold))
+            self.projectsTable.setItem(row, 0, name_item)
+
+            target_item = QTableWidgetItem(info["target"] or "—")
+            target_item.setForeground(QtGui.QColor(
+                self._DASH_TEXT if info["target"] else self._DASH_SUBTEXT
+            ))
+            self.projectsTable.setItem(row, 1, target_item)
+
+            created_item = QTableWidgetItem(info["created"])
+            created_item.setForeground(QtGui.QColor(self._DASH_SUBTEXT))
+            self.projectsTable.setItem(row, 2, created_item)
+
+            path_item = QTableWidgetItem(info["path"])
+            path_item.setForeground(QtGui.QColor(self._DASH_SUBTEXT))
+            path_item.setToolTip(info["path"])
+            self.projectsTable.setItem(row, 3, path_item)
+
+        self.projectsTable.setSortingEnabled(True)
+        n = len(available_dirs)
+        self._proj_count_lbl.setText(f"{n} project{'s' if n != 1 else ''}")
+
     def filterProjects(self, text):
-        """Filter projects based on search text"""
-        if not text:
-            # If search is empty, show all projects
-            project_names = [project['name'] for project in self.projects_info]
+        """Show/hide rows whose name or target contain the search text."""
+        q = text.strip().lower()
+        for row in range(self.projectsTable.rowCount()):
+            name = (self.projectsTable.item(row, 0) or QTableWidgetItem()).text().lower()
+            tgt  = (self.projectsTable.item(row, 1) or QTableWidgetItem()).text().lower()
+            self.projectsTable.setRowHidden(row, bool(q) and q not in name and q not in tgt)
+
+    def _on_project_row_selected(self):
+        rows = self.projectsTable.selectionModel().selectedRows()
+        if not rows:
+            self._sel_name_lbl.setText("No project selected")
+            self.openProjectButton.setEnabled(False)
+            self.deleteProjectButton.setEnabled(False)
+            self.choosenProjectDir = ""
+            return
+        row = rows[0].row()
+        name = self.projectsTable.item(row, 0).text()
+        self.choosenProjectDir = name
+        self._sel_name_lbl.setText(f"Selected: {name}")
+        self.openProjectButton.setEnabled(True)
+        self.deleteProjectButton.setEnabled(True)
+
+    def _projects_context_menu(self, pos):
+        if not self.choosenProjectDir:
+            return
+        menu = QMenu(self.projectsTable)
+        menu.setStyleSheet(
+            f"QMenu{{background:{self._DASH_SURFACE};color:{self._DASH_TEXT};"
+            f"border:1px solid {self._DASH_BORDER};border-radius:6px;padding:4px;}}"
+            f"QMenu::item{{padding:6px 20px;border-radius:4px;}}"
+            f"QMenu::item:selected{{background:{self._DASH_OVERLAY};}}"
+        )
+        open_act = menu.addAction("Open Project")
+        open_act.setIcon(QtGui.QIcon())  # placeholder — no icon needed
+        menu.addSeparator()
+        del_act = menu.addAction("Delete Project")
+        chosen = menu.exec(self.projectsTable.viewport().mapToGlobal(pos))
+        if chosen is open_act:
+            self.openSelectedProject()
+        elif chosen is del_act:
+            self.deleteSelectedProject()
+
+    def _projects_key_press(self, event):
+        if event.key() in (Qt.Key_Return, Qt.Key_Enter) and self.choosenProjectDir:
+            self.openSelectedProject()
         else:
-            # Filter projects that contain the search text
-            project_names = [project['name'] for project in self.projects_info 
-                           if text.lower() in project['name'].lower()]
-        
-        self.dirsModel.setStringList(project_names)
-    
+            QTableWidget.keyPressEvent(self.projectsTable, event)
+
+    # kept for backward-compat (openProject calls projectSelected then openSelectedProject)
     def projectSelected(self, index):
-        """Update project details when a project is selected"""
-        selected_name = self.dirsModel.data(index, QtCore.Qt.DisplayRole)
-        
-        # Find the selected project in our full info list
-        selected_project = next((p for p in self.projects_info if p['name'] == selected_name), None)
-        
-        if selected_project:
-            self.selectedProjectLabel.setText(selected_project['name'])
-            self.projectPathLabel.setText(selected_project['path'])
-            self.projectCreatedLabel.setText(selected_project['created'])
-            self.choosenProjectDir = selected_project['name']
+        self._on_project_row_selected()
 
-            # Read target from project.json if available
-            import json as _json
-            _meta_path = os.path.join(selected_project['path'], "project.json")
-            _target = ""
-            try:
-                if os.path.exists(_meta_path):
-                    with open(_meta_path) as _fh:
-                        _m = _json.load(_fh)
-                    _target = _m.get("target") or _m.get("target_url") or ""
-            except Exception:
-                pass
-            self.projectTargetLabel.setText(_target)
-
-            # Enable action buttons
-            self.openProjectButton.setEnabled(True)
-            self.deleteProjectButton.setEnabled(True)
+    def addProjects(self, parentLayout):
+        pass  # replaced by _populate_projects_table
     
     def openSelectedProject(self):
         """Open the currently selected project"""
@@ -646,18 +719,9 @@ class MainWin(QMainWindow, QtCore.QObject):
                     "Could not drop MongoDB database for %s: %s", dir_name, db_err
                 )
 
-            self.projects_info = [
-                p for p in self.projects_info
-                if p["name"] != self.choosenProjectDir
-            ]
-            self.dirsModel.setStringList(
-                [p["name"] for p in self.projects_info]
-            )
             self.choosenProjectDir = ""
-            self.selectedProjectLabel.setText("Select a project to view details")
-            self.projectTargetLabel.setText("")
-            self.projectPathLabel.setText("")
-            self.projectCreatedLabel.setText("")
+            self._populate_projects_table()
+            self._sel_name_lbl.setText("No project selected")
             self.openProjectButton.setEnabled(False)
             self.deleteProjectButton.setEnabled(False)
 
@@ -898,8 +962,8 @@ class MainWin(QMainWindow, QtCore.QObject):
         except Exception:
             pass
 
-    def openProject(self, index):
-        self.projectSelected(index)
+    def openProject(self, index=None):
+        self._on_project_row_selected()
         self.openSelectedProject()
 
 
@@ -924,7 +988,8 @@ if __name__ == "__main__":
                         format='%(asctime)s - %(levelname)s - %(filename)s:%(lineno)d - %(message)s')
     # Suppress noisy third-party loggers
     for _noisy in ("pymongo", "pymongo.serverMonitor", "pymongo.connection",
-                   "pymongo.topology", "urllib3", "charset_normalizer"):
+                   "pymongo.topology", "urllib3", "charset_normalizer",
+                   "httpx", "httpcore", "hpack"):
         logging.getLogger(_noisy).setLevel(logging.WARNING)
                         
     # Disable hardware acceleration for WebEngine; route all WebEngine traffic

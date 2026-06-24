@@ -47,6 +47,7 @@ from PySide6.QtWidgets import (
 from config.config import RUNDIR
 from gui.guiUtilities import SyntaxHighlighter, ResponseRenderView
 from gui.repeater import _CodeEdit, _PaneWrapper, _parse_raw_request, _parse_resp_for_render
+from gui.utilities.session_utils import apply_session_to_request
 
 log = logging.getLogger(__name__)
 
@@ -630,7 +631,20 @@ class IntruderPage(QWidget):
             log.warning("IntruderRepository unavailable: %s", exc)
             self._repo = None  # type: ignore[assignment]
 
+        # Separate repo for auth sessions (shares same MongoDB project)
+        try:
+            from database.repository import AweRepository
+            self._sess_repo = AweRepository(project_dir) if project_dir else None
+        except Exception:
+            self._sess_repo = None
+
+        self._save_timer = QTimer(self)
+        self._save_timer.setSingleShot(True)
+        self._save_timer.setInterval(2000)
+        self._save_timer.timeout.connect(self._save_state)
+
         self._build_ui()
+        self._restore_state()
 
     # ── public API ────────────────────────────────────────────────────────────
 
@@ -672,6 +686,23 @@ class IntruderPage(QWidget):
         title.setStyleSheet("color:#EE99A0; font-size:11px; font-weight:bold;")
         tb.addWidget(title)
         tb.addStretch()
+
+        # Session selector
+        sess_lbl = QLabel("Session:")
+        sess_lbl.setStyleSheet("color:#6C7086; font-size:9px;")
+        tb.addWidget(sess_lbl)
+        self._session_combo = QComboBox()
+        self._session_combo.setFixedHeight(26)
+        self._session_combo.setMinimumWidth(120)
+        self._session_combo.setStyleSheet(
+            "QComboBox{background:#11111B;color:#CDD6F4;border:1px solid #45475A;"
+            "border-radius:4px;padding:0 6px;font-size:9px;}"
+            "QComboBox::drop-down{border:none;}"
+            "QComboBox QAbstractItemView{background:#1E1E2E;color:#CDD6F4;"
+            "selection-background-color:#313244;border:1px solid #45475A;}"
+        )
+        tb.addWidget(self._session_combo)
+        self._load_intruder_sessions()
 
         self._start_btn = QPushButton("▶  Start Attack")
         self._start_btn.setFixedHeight(26)
@@ -730,6 +761,7 @@ class IntruderPage(QWidget):
         self._mode_combo = QComboBox()
         self._mode_combo.addItems(_ATTACK_MODES)
         self._mode_combo.currentIndexChanged.connect(self._on_mode_changed)
+        self._mode_combo.currentIndexChanged.connect(self._save_timer.start)
         mode_row.addWidget(self._mode_combo, stretch=1)
         vb.addLayout(mode_row)
 
@@ -739,6 +771,7 @@ class IntruderPage(QWidget):
 
         self._pos_editor = _PositionEditor()
         self._pos_editor.textChanged.connect(self._debounce.start)
+        self._pos_editor.textChanged.connect(self._save_timer.start)
         vb.addWidget(self._pos_editor, stretch=1)
         return w
 
@@ -778,15 +811,18 @@ class IntruderPage(QWidget):
         self._threads_spin = QSpinBox()
         self._threads_spin.setRange(1, 50)
         self._threads_spin.setValue(10)
+        self._threads_spin.valueChanged.connect(self._save_timer.start)
         form.addRow("Threads:", self._threads_spin)
 
         self._timeout_spin = QSpinBox()
         self._timeout_spin.setRange(5, 120)
         self._timeout_spin.setValue(30)
         self._timeout_spin.setSuffix(" s")
+        self._timeout_spin.valueChanged.connect(self._save_timer.start)
         form.addRow("Timeout:", self._timeout_spin)
 
         self._follow_chk = QCheckBox("Follow redirects")
+        self._follow_chk.stateChanged.connect(self._save_timer.start)
         form.addRow("", self._follow_chk)
 
         vb.addLayout(form)
@@ -939,13 +975,104 @@ class IntruderPage(QWidget):
         if 0 <= idx < self._editor_stack.count():
             self._editor_stack.setCurrentIndex(idx)
 
+    # ── persistence ───────────────────────────────────────────────────────────
+
+    def _save_state(self) -> None:
+        if not self._sess_repo:
+            return
+        payload_sets = []
+        for ed in self._payload_editors:
+            src = ed._src_combo.currentIndex()
+            payload_sets.append({
+                "source":  src,
+                "paste":   ed._paste_edit.toPlainText() if src == 0 else "",
+                "builtin": ed._builtin_combo.currentText() if src == 2 else "",
+            })
+        try:
+            self._sess_repo.save_page_state("intruder", {
+                "template":     self._pos_editor.toPlainText(),
+                "mode":         self._mode_combo.currentText(),
+                "payload_sets": payload_sets,
+                "threads":      self._threads_spin.value(),
+                "timeout":      self._timeout_spin.value(),
+                "follow":       self._follow_chk.isChecked(),
+            })
+        except Exception:
+            pass
+
+    def _restore_state(self) -> None:
+        if not self._sess_repo:
+            return
+        try:
+            state = self._sess_repo.load_page_state("intruder")
+        except Exception:
+            return
+        if not state:
+            return
+        if state.get("template"):
+            self._pos_editor.setPlainText(state["template"])
+        mode = state.get("mode", "")
+        if mode:
+            idx = self._mode_combo.findText(mode)
+            if idx >= 0:
+                self._mode_combo.setCurrentIndex(idx)
+        if state.get("threads"):
+            self._threads_spin.setValue(state["threads"])
+        if state.get("timeout"):
+            self._timeout_spin.setValue(state["timeout"])
+        self._follow_chk.setChecked(bool(state.get("follow", False)))
+        for i, ps in enumerate(state.get("payload_sets", [])):
+            if i >= len(self._payload_editors):
+                break
+            ed = self._payload_editors[i]
+            src = ps.get("source", 0)
+            ed._src_combo.setCurrentIndex(src)
+            if src == 0 and ps.get("paste"):
+                ed._paste_edit.setPlainText(ps["paste"])
+            elif src == 2 and ps.get("builtin"):
+                idx = ed._builtin_combo.findText(ps["builtin"])
+                if idx >= 0:
+                    ed._builtin_combo.setCurrentIndex(idx)
+
     # ── attack control ────────────────────────────────────────────────────────
+
+    def _load_intruder_sessions(self) -> None:
+        self._session_combo.blockSignals(True)
+        self._session_combo.clear()
+        self._session_combo.addItem("No Session", None)
+        if self._sess_repo:
+            try:
+                for sess in self._sess_repo.list_auth_sessions():
+                    self._session_combo.addItem(sess.get("name", ""), sess.get("id"))
+            except Exception:
+                pass
+        self._session_combo.blockSignals(False)
+
+    def refresh_sessions(self) -> None:
+        self._load_intruder_sessions()
+
+    def _get_selected_session(self) -> dict | None:
+        idx = self._session_combo.currentIndex()
+        if idx <= 0 or not self._sess_repo:
+            return None
+        session_id = self._session_combo.itemData(idx)
+        if not session_id:
+            return None
+        try:
+            return self._sess_repo.get_auth_session(session_id)
+        except Exception:
+            return None
 
     def _start_attack(self):
         template = self._pos_editor.toPlainText().strip()
         if not template:
             QMessageBox.warning(self, "No Request", "Paste an HTTP request in the Positions tab.")
             return
+
+        # Apply session before counting positions (session may add headers)
+        sess = self._get_selected_session()
+        if sess:
+            template = apply_session_to_request(template, sess)
 
         n_pos = len(POSITION_RE.findall(template))
         if n_pos == 0:

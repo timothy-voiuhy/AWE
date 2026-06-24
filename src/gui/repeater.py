@@ -13,11 +13,12 @@ from __future__ import annotations
 import logging
 
 import httpx
-from PySide6.QtCore import Qt, QThread, Signal, QEvent
+from PySide6.QtCore import Qt, QThread, Signal, QEvent, QTimer
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QSplitter, QTabWidget,
     QPushButton, QLabel, QTextEdit, QFrame, QMenu, QToolTip, QDialog, QApplication,
+    QComboBox,
 )
 
 from gui.guiUtilities import (
@@ -27,6 +28,7 @@ from gui.guiUtilities import (
     paste_headers, has_copied_headers,
     ResponseRenderView,
 )
+from gui.utilities.session_utils import apply_session_to_request
 
 log = logging.getLogger(__name__)
 
@@ -143,18 +145,33 @@ class _SendWorker(QThread):
 class _TabPane(QWidget):
     """Content of one repeater tab: request editor + response viewer."""
 
-    send_to_intruder_requested = Signal(str)
+    send_to_intruder_requested    = Signal(str)
+    send_to_decoder_requested     = Signal(str)
+    send_to_comparer_left_req     = Signal(str)
+    send_to_comparer_right_req    = Signal(str)
+    send_to_jwt_requested         = Signal(str)
 
     def __init__(
         self,
         request_text: str = "",
         proxy_port: int   = 8080,
+        repository        = None,
         parent            = None,
     ) -> None:
         super().__init__(parent)
         self._proxy_port = proxy_port
+        self._repo       = repository
         self._worker: _SendWorker | None = None
         self._build_ui(request_text)
+
+    def get_state(self) -> dict:
+        """Return serialisable snapshot of this tab's content."""
+        return {"request": self._req_edit.toPlainText()}
+
+    def set_state(self, state: dict) -> None:
+        """Restore content from a previously saved snapshot."""
+        if state.get("request"):
+            self._req_edit.setPlainText(state["request"])
 
     def _build_ui(self, request_text: str) -> None:
         root = QVBoxLayout(self)
@@ -195,6 +212,25 @@ class _TabPane(QWidget):
         self._status_lbl.setStyleSheet("color:#6C7086; font-size:9px;")
         tb.addWidget(self._status_lbl)
         tb.addStretch()
+
+        # Session selector
+        sess_lbl = QLabel("Session:")
+        sess_lbl.setStyleSheet("color:#6C7086; font-size:9px;")
+        tb.addWidget(sess_lbl)
+        self._session_combo = QComboBox()
+        self._session_combo.setFixedHeight(26)
+        self._session_combo.setMinimumWidth(120)
+        self._session_combo.setStyleSheet(
+            "QComboBox{background:#11111B;color:#CDD6F4;border:1px solid #45475A;"
+            "border-radius:4px;padding:0 6px;font-size:9px;}"
+            "QComboBox::drop-down{border:none;}"
+            "QComboBox QAbstractItemView{background:#1E1E2E;color:#CDD6F4;"
+            "selection-background-color:#313244;border:1px solid #45475A;}"
+        )
+        self._session_combo.currentIndexChanged.connect(self._apply_session)
+        tb.addWidget(self._session_combo)
+        self._load_sessions()
+
         root.addLayout(tb)
 
         sep = QFrame()
@@ -240,6 +276,15 @@ class _TabPane(QWidget):
         root.addWidget(self._search_bar)
 
         self._last_resp_text: str = ""
+
+        self._req_edit.send_to_decoder.connect(self.send_to_decoder_requested)
+        self._req_edit.send_to_comparer_left.connect(self.send_to_comparer_left_req)
+        self._req_edit.send_to_comparer_right.connect(self.send_to_comparer_right_req)
+        self._req_edit.send_to_jwt.connect(self.send_to_jwt_requested)
+        self._resp_edit.send_to_decoder.connect(self.send_to_decoder_requested)
+        self._resp_edit.send_to_comparer_left.connect(self.send_to_comparer_left_req)
+        self._resp_edit.send_to_comparer_right.connect(self.send_to_comparer_right_req)
+        self._resp_edit.send_to_jwt.connect(self.send_to_jwt_requested)
 
         self._req_edit.installEventFilter(self)
         self._resp_edit.installEventFilter(self)
@@ -317,19 +362,63 @@ class _TabPane(QWidget):
             if self._resp_inner.currentWidget() is self._resp_render:
                 self._do_render()
 
+    # ── session helpers ───────────────────────────────────────────────────────
+
+    def _load_sessions(self) -> None:
+        self._session_combo.blockSignals(True)
+        self._session_combo.clear()
+        self._session_combo.addItem("No Session", None)
+        if self._repo:
+            try:
+                for sess in self._repo.list_auth_sessions():
+                    self._session_combo.addItem(sess.get("name", ""), sess.get("id"))
+            except Exception:
+                pass
+        self._session_combo.blockSignals(False)
+
+    def refresh_sessions(self) -> None:
+        self._load_sessions()
+
+    def _apply_session(self, index: int) -> None:
+        if index <= 0 or not self._repo:
+            return
+        session_id = self._session_combo.itemData(index)
+        if not session_id:
+            return
+        try:
+            sess = self._repo.get_auth_session(session_id)
+        except Exception:
+            return
+        if not sess:
+            return
+        current = self._req_edit.toPlainText()
+        modified = apply_session_to_request(current, sess)
+        if modified != current:
+            self._req_edit.setPlainText(modified)
+
 
 # ── repeater page (embeddable) ────────────────────────────────────────────────
 
 class RepeaterPage(QWidget):
     """Per-target HTTP repeater.  Add to a QStackedWidget via targetWindow."""
 
-    send_to_intruder = Signal(str)
+    send_to_intruder       = Signal(str)
+    send_to_decoder        = Signal(str)
+    send_to_comparer_left  = Signal(str)
+    send_to_comparer_right = Signal(str)
+    send_to_jwt            = Signal(str)
 
-    def __init__(self, proxy_port: int = 8080, parent=None) -> None:
+    def __init__(self, proxy_port: int = 8080, repository=None, parent=None) -> None:
         super().__init__(parent)
         self._proxy_port  = proxy_port
+        self._repo        = repository
         self._tab_counter = 0
+        self._save_timer  = QTimer(self)
+        self._save_timer.setSingleShot(True)
+        self._save_timer.setInterval(2000)
+        self._save_timer.timeout.connect(self._save_state)
         self._build_ui()
+        self._restore_state()
 
     # ── public API ────────────────────────────────────────────────────────────
 
@@ -341,11 +430,73 @@ class RepeaterPage(QWidget):
         pane = _TabPane(
             request_text=request_text,
             proxy_port=self._proxy_port,
+            repository=self._repo,
             parent=self,
         )
         pane.send_to_intruder_requested.connect(self.send_to_intruder)
+        pane.send_to_decoder_requested.connect(self.send_to_decoder)
+        pane.send_to_comparer_left_req.connect(self.send_to_comparer_left)
+        pane.send_to_comparer_right_req.connect(self.send_to_comparer_right)
+        pane.send_to_jwt_requested.connect(self.send_to_jwt)
+        # schedule a save whenever the request text changes
+        pane._req_edit.textChanged.connect(self._save_timer.start)
         idx = self._tabs.addTab(pane, title[:32])
         self._tabs.setCurrentIndex(idx)
+        self._save_timer.start()
+
+    # ── persistence ───────────────────────────────────────────────────────────
+
+    def _save_state(self) -> None:
+        if not self._repo:
+            return
+        tabs = []
+        for i in range(self._tabs.count()):
+            pane = self._tabs.widget(i)
+            if isinstance(pane, _TabPane):
+                tabs.append({
+                    "title":   self._tabs.tabText(i),
+                    "content": pane.get_state(),
+                })
+        try:
+            self._repo.save_page_state("repeater", {
+                "tabs":        tabs,
+                "active_tab":  self._tabs.currentIndex(),
+            })
+        except Exception:
+            pass
+
+    def _restore_state(self) -> None:
+        if not self._repo:
+            return
+        try:
+            state = self._repo.load_page_state("repeater")
+        except Exception:
+            return
+        if not state or not state.get("tabs"):
+            return
+        # Remove the default blank tab added by _build_ui
+        while self._tabs.count() > 0:
+            w = self._tabs.widget(0)
+            self._tabs.removeTab(0)
+            if w:
+                w.deleteLater()
+        self._tab_counter = 0
+        for tab in state["tabs"]:
+            content = tab.get("content", {})
+            self.add_tab(
+                request_text=content.get("request", ""),
+                title=tab.get("title", ""),
+            )
+        active = state.get("active_tab", 0)
+        if 0 <= active < self._tabs.count():
+            self._tabs.setCurrentIndex(active)
+
+    def refresh_sessions(self) -> None:
+        """Reload session combos in all open tabs."""
+        for i in range(self._tabs.count()):
+            pane = self._tabs.widget(i)
+            if isinstance(pane, _TabPane):
+                pane.refresh_sessions()
 
     # ── UI ────────────────────────────────────────────────────────────────────
 
@@ -390,6 +541,7 @@ class RepeaterPage(QWidget):
         self._tabs.removeTab(index)
         if widget:
             widget.deleteLater()
+        self._save_timer.start()
 
 
 # ── small helpers ─────────────────────────────────────────────────────────────
@@ -432,6 +584,11 @@ class _PaneWrapper(QWidget):
 class _CodeEdit(QTextEdit):
     """Monospace editor / viewer with HTTP syntax highlighting."""
 
+    send_to_decoder        = Signal(str)
+    send_to_comparer_left  = Signal(str)
+    send_to_comparer_right = Signal(str)
+    send_to_jwt            = Signal(str)
+
     def __init__(self, read_only: bool = False, parent=None) -> None:
         super().__init__(parent)
         self.setReadOnly(read_only)
@@ -450,6 +607,19 @@ class _CodeEdit(QTextEdit):
         has_body = '\n\n' in txt and bool(txt.split('\n\n', 1)[-1].strip())
         has_sel  = bool(selected)
         editable = not self.isReadOnly()
+
+        menu.addSeparator()
+        dec_page_act = menu.addAction("Send to Decoder")
+        dec_page_act.setEnabled(has_text)
+
+        cmp_menu  = menu.addMenu("Send to Comparer")
+        cmp_left  = cmp_menu.addAction("Left Pane")
+        cmp_right = cmp_menu.addAction("Right Pane")
+        cmp_left.setEnabled(has_text)
+        cmp_right.setEnabled(has_text)
+
+        jwt_act = menu.addAction("Analyze JWT")
+        jwt_act.setEnabled(has_sel and selected.count('.') == 2)
 
         menu.addSeparator()
         fmt_menu = menu.addMenu("Format Body")
@@ -497,7 +667,15 @@ class _CodeEdit(QTextEdit):
         dec_map = {dec_auto: 'auto', dec_b64: 'base64', dec_url: 'url',
                    dec_html: 'html', dec_hex: 'hex', dec_jwt: 'jwt', dec_uni: 'unicode'}
 
-        if chosen in fmt_map and editable:
+        if chosen is dec_page_act:
+            self.send_to_decoder.emit(selected if has_sel else txt)
+        elif chosen is cmp_left:
+            self.send_to_comparer_left.emit(selected if has_sel else txt)
+        elif chosen is cmp_right:
+            self.send_to_comparer_right.emit(selected if has_sel else txt)
+        elif chosen is jwt_act and has_sel:
+            self.send_to_jwt.emit(selected)
+        elif chosen in fmt_map and editable:
             result = format_http_body(txt, fmt_map[chosen])
             if result is not None:
                 self.setPlainText(result)

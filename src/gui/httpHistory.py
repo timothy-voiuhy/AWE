@@ -55,10 +55,14 @@ _RSC_ROW = "#0F1F22"
 # ── Main page ─────────────────────────────────────────────────────────────────
 
 class HttpHistoryPage(QWidget):
-    send_to_repeater   = Signal(str)
-    send_to_intruder   = Signal(str)
-    send_to_websocket  = Signal(str, str)
-    traffic_changed    = Signal()
+    send_to_repeater        = Signal(str)
+    send_to_intruder        = Signal(str)
+    send_to_websocket       = Signal(str, str)
+    send_to_decoder         = Signal(str)
+    send_to_comparer_left   = Signal(str)
+    send_to_comparer_right  = Signal(str)
+    send_to_jwt             = Signal(str)
+    traffic_changed         = Signal()
 
     def __init__(self, proxy_col, repository=None, parent=None):
         super().__init__(parent)
@@ -215,10 +219,18 @@ class HttpHistoryPage(QWidget):
         self._tabs.addTab(self._render_view, "Render")
         self._req_view.send_to_repeater.connect(self.send_to_repeater)
         self._req_view.send_to_intruder.connect(self.send_to_intruder)
+        self._req_view.send_to_decoder.connect(self.send_to_decoder)
+        self._req_view.send_to_comparer_left.connect(self.send_to_comparer_left)
+        self._req_view.send_to_comparer_right.connect(self.send_to_comparer_right)
+        self._req_view.send_to_jwt.connect(self.send_to_jwt)
         self._resp_view.send_to_repeater.connect(
             lambda _: self.send_to_repeater.emit(self._req_view.toPlainText()))
         self._resp_view.send_to_intruder.connect(
             lambda _: self.send_to_intruder.emit(self._req_view.toPlainText()))
+        self._resp_view.send_to_decoder.connect(self.send_to_decoder)
+        self._resp_view.send_to_comparer_left.connect(self.send_to_comparer_left)
+        self._resp_view.send_to_comparer_right.connect(self.send_to_comparer_right)
+        self._resp_view.send_to_jwt.connect(self.send_to_jwt)
         rr_vb.addWidget(self._tabs)
 
         self._search_bar = SearchBar(rr)
@@ -616,8 +628,12 @@ _BTN_SS = (
 # ── Code view ─────────────────────────────────────────────────────────────────
 
 class _CodeView(QTextEdit):
-    send_to_repeater = Signal(str)
-    send_to_intruder = Signal(str)
+    send_to_repeater       = Signal(str)
+    send_to_intruder       = Signal(str)
+    send_to_decoder        = Signal(str)
+    send_to_comparer_left  = Signal(str)
+    send_to_comparer_right = Signal(str)
+    send_to_jwt            = Signal(str)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -641,6 +657,18 @@ class _CodeView(QTextEdit):
         rep_act.setEnabled(has_text)
         int_act = menu.addAction("Send to Intruder")
         int_act.setEnabled(has_text)
+
+        dec_page_act = menu.addAction("Send to Decoder")
+        dec_page_act.setEnabled(has_text)
+
+        cmp_menu  = menu.addMenu("Send to Comparer")
+        cmp_left  = cmp_menu.addAction("Left Pane")
+        cmp_right = cmp_menu.addAction("Right Pane")
+        cmp_left.setEnabled(has_text)
+        cmp_right.setEnabled(has_text)
+
+        jwt_act = menu.addAction("Analyze JWT")
+        jwt_act.setEnabled(has_sel and selected.count('.') == 2)
 
         menu.addSeparator()
         fmt_menu = menu.addMenu("Format Body")
@@ -679,6 +707,14 @@ class _CodeView(QTextEdit):
             self.send_to_repeater.emit(txt)
         elif chosen is int_act:
             self.send_to_intruder.emit(txt)
+        elif chosen is dec_page_act:
+            self.send_to_decoder.emit(selected if has_sel else txt)
+        elif chosen is cmp_left:
+            self.send_to_comparer_left.emit(selected if has_sel else txt)
+        elif chosen is cmp_right:
+            self.send_to_comparer_right.emit(selected if has_sel else txt)
+        elif chosen is jwt_act and has_sel:
+            self.send_to_jwt.emit(selected)
         elif chosen in fmt_map:
             result = format_http_body(txt, fmt_map[chosen])
             if result is not None:

@@ -758,6 +758,32 @@ class _CloudEnum(ToolConfig):
         ]
 
 
+# ── JWT Analysis ─────────────────────────────────────────────────────────────
+
+@dataclass
+class _JwtTool(ToolConfig):
+    key: str = "jwt_tool"
+    display_name: str = "JWT Tool"
+    image: str = "awe/jwt_tool"
+    description: str = "JWT vulnerability scanner — algorithm confusion, alg:none, brute-force"
+    category: str = "vuln"
+    dockerfile: str = _DF + "Dockerfile.jwt_tool"
+
+    def build_command(self, token: str = "", mode: str = "pb", **_) -> str:
+        safe_token = token.strip().replace("'", "")
+        return (
+            f"python3 jwt_tool.py '{safe_token}' -M {mode} 2>&1"
+            f" | tee /output/jwt_tool_output.txt"
+        )
+
+    def param_spec(self):
+        return [
+            {"key": "token", "label": "JWT Token",       "type": "text",  "default": ""},
+            {"key": "mode",  "label": "Attack Mode (-M)", "type": "combo",
+             "options": ["pb", "at", "as", "rs", "ki"], "default": "pb"},
+        ]
+
+
 # ── Registry ──────────────────────────────────────────────────────────────────
 
 TOOL_REGISTRY: dict[str, ToolConfig] = {
@@ -794,6 +820,7 @@ TOOL_REGISTRY: dict[str, ToolConfig] = {
         _X8(),
         # vulnerability scanning
         _Nuclei(),
+        _JwtTool(),
         # osint
         _GithubRecon(),
         _CloudEnum(),

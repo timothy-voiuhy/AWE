@@ -338,6 +338,68 @@ class AweRepository:
             return ScopeConfig.from_dict(doc)
         return ScopeConfig()   # empty = open scope (matches everything)
 
+    # ── Auth Sessions (Session Factory) ──────────────────────────────────────
+
+    def create_auth_session(
+        self,
+        name: str,
+        headers: list,
+        params: list,
+    ) -> str:
+        doc = {
+            "project_dir": self._project_dir,
+            "name":        name,
+            "headers":     headers,
+            "params":      params,
+            "created_at":  _now(),
+        }
+        result = self._db.auth_sessions.insert_one(doc)
+        return _str(result.inserted_id)
+
+    def list_auth_sessions(self) -> list[dict]:
+        cursor = self._db.auth_sessions.find(
+            {"project_dir": self._project_dir},
+            sort=[("created_at", 1)],
+        )
+        return [_flatten(d) for d in cursor]
+
+    def get_auth_session(self, session_id: str) -> dict | None:
+        doc = self._db.auth_sessions.find_one({"_id": _oid(session_id)})
+        return _flatten(doc)
+
+    def update_auth_session(
+        self,
+        session_id: str,
+        name: str,
+        headers: list,
+        params: list,
+    ) -> None:
+        self._db.auth_sessions.update_one(
+            {"_id": _oid(session_id)},
+            {"$set": {"name": name, "headers": headers, "params": params}},
+        )
+
+    def delete_auth_session(self, session_id: str) -> None:
+        self._db.auth_sessions.delete_one({"_id": _oid(session_id)})
+
+    # ── UI Page State ─────────────────────────────────────────────────────────
+
+    def save_page_state(self, page: str, state: dict) -> None:
+        """Upsert workspace state for a named page (e.g. 'jwt', 'decoder', 'comparer')."""
+        self._db.ui_page_states.update_one(
+            {"project_dir": self._project_dir, "page": page},
+            {"$set": {"project_dir": self._project_dir, "page": page,
+                      "state": state, "updated_at": _now()}},
+            upsert=True,
+        )
+
+    def load_page_state(self, page: str) -> dict:
+        """Return saved workspace state for a page, or {} if none."""
+        doc = self._db.ui_page_states.find_one(
+            {"project_dir": self._project_dir, "page": page}
+        )
+        return doc.get("state", {}) if doc else {}
+
     # ── Proxy Traffic pseudo-session ──────────────────────────────────────────
 
     PROXY_SESSION_KEY = "proxy_traffic"

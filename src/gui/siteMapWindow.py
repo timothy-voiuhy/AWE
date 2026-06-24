@@ -41,9 +41,8 @@ log = logging.getLogger(__name__)
 _DOC_ID_ROLE = Qt.UserRole + 1   # MongoDB _id string on leaf items
 _KEY_ROLE    = Qt.UserRole + 2   # stable path key for expansion tracking
 
-# Sitemap filter panel shows search/method/status/hide_types only.
 # SSE-only and length filters are HTTP-History-specific.
-_SITEMAP_SECTIONS = frozenset({"search", "method", "status", "hide_types"})
+_SITEMAP_SECTIONS = frozenset({"search", "search_scopes", "method", "status", "hide_types"})
 
 # Default hidden types on first launch (no saved settings)
 _SITEMAP_DEFAULT_HIDDEN = ["images", "css", "fonts", "media"]
@@ -95,10 +94,14 @@ class _TreeStyle(QProxyStyle):
 # ── main widget ───────────────────────────────────────────────────────────────
 
 class SiteMapPage(QWidget):
-    send_to_repeater = Signal(str)
-    send_to_intruder = Signal(str)
-    sync_requested   = Signal()
-    traffic_changed  = Signal()
+    send_to_repeater       = Signal(str)
+    send_to_intruder       = Signal(str)
+    send_to_decoder        = Signal(str)
+    send_to_comparer_left  = Signal(str)
+    send_to_comparer_right = Signal(str)
+    send_to_jwt            = Signal(str)
+    sync_requested         = Signal()
+    traffic_changed        = Signal()
 
     def __init__(self, project_dir, target_host, proxy_col,
                  repository=None, parent=None):
@@ -256,10 +259,18 @@ class SiteMapPage(QWidget):
         self._tabs.addTab(self._render_view, "Render")
         self._req_view.send_to_repeater.connect(self.send_to_repeater)
         self._req_view.send_to_intruder.connect(self.send_to_intruder)
+        self._req_view.send_to_decoder.connect(self.send_to_decoder)
+        self._req_view.send_to_comparer_left.connect(self.send_to_comparer_left)
+        self._req_view.send_to_comparer_right.connect(self.send_to_comparer_right)
+        self._req_view.send_to_jwt.connect(self.send_to_jwt)
         self._resp_view.send_to_repeater.connect(
             lambda _: self.send_to_repeater.emit(self._req_view.toPlainText()))
         self._resp_view.send_to_intruder.connect(
             lambda _: self.send_to_intruder.emit(self._req_view.toPlainText()))
+        self._resp_view.send_to_decoder.connect(self.send_to_decoder)
+        self._resp_view.send_to_comparer_left.connect(self.send_to_comparer_left)
+        self._resp_view.send_to_comparer_right.connect(self.send_to_comparer_right)
+        self._resp_view.send_to_jwt.connect(self.send_to_jwt)
         rr_vb.addWidget(self._tabs)
 
         self._search_bar = SearchBar(rr)
@@ -319,9 +330,13 @@ class SiteMapPage(QWidget):
             {"$match": {"host": {"$in": in_scope}}},
             {"$sort": {"timestamp": -1}},
             {"$group": {
-                "_id":         {"host": "$host", "method": "$method", "path": "$path"},
-                "status_code": {"$first": "$status_code"},
-                "doc_id":      {"$first": "$_id"},
+                "_id":          {"host": "$host", "method": "$method", "path": "$path"},
+                "status_code":  {"$first": "$status_code"},
+                "doc_id":       {"$first": "$_id"},
+                "req_headers":  {"$first": "$request.headers"},
+                "req_body":     {"$first": "$request.body"},
+                "resp_headers": {"$first": "$response.headers"},
+                "resp_body":    {"$first": "$response.body"},
             }},
         ]
 
@@ -335,7 +350,11 @@ class SiteMapPage(QWidget):
                 status_code = doc["status_code"]
                 mini = {"host": host, "method": method,
                         "path": path, "status_code": status_code}
-                if not fp.passes(mini, {}, {}, "", False, False, 0):
+                req  = {"headers": doc.get("req_headers") or {},
+                        "body":    doc.get("req_body") or ""}
+                resp = {"headers": doc.get("resp_headers") or {}}
+                body = doc.get("resp_body") or ""
+                if not fp.passes(mini, req, resp, body, False, False, 0):
                     continue
                 by_host.setdefault(host, []).append(
                     (method, path, status_code, str(doc["doc_id"]))
@@ -705,8 +724,12 @@ _BTN_SS = (
 # ── code viewer ───────────────────────────────────────────────────────────────
 
 class _CodeView(QTextEdit):
-    send_to_repeater = Signal(str)
-    send_to_intruder = Signal(str)
+    send_to_repeater       = Signal(str)
+    send_to_intruder       = Signal(str)
+    send_to_decoder        = Signal(str)
+    send_to_comparer_left  = Signal(str)
+    send_to_comparer_right = Signal(str)
+    send_to_jwt            = Signal(str)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -730,6 +753,18 @@ class _CodeView(QTextEdit):
         rep_act.setEnabled(has_text)
         int_act = menu.addAction("Send to Intruder")
         int_act.setEnabled(has_text)
+
+        dec_page_act = menu.addAction("Send to Decoder")
+        dec_page_act.setEnabled(has_text)
+
+        cmp_menu  = menu.addMenu("Send to Comparer")
+        cmp_left  = cmp_menu.addAction("Left Pane")
+        cmp_right = cmp_menu.addAction("Right Pane")
+        cmp_left.setEnabled(has_text)
+        cmp_right.setEnabled(has_text)
+
+        jwt_act = menu.addAction("Analyze JWT")
+        jwt_act.setEnabled(has_sel and selected.count('.') == 2)
 
         menu.addSeparator()
         fmt_menu = menu.addMenu("Format Body")
@@ -768,6 +803,14 @@ class _CodeView(QTextEdit):
             self.send_to_repeater.emit(txt)
         elif chosen is int_act:
             self.send_to_intruder.emit(txt)
+        elif chosen is dec_page_act:
+            self.send_to_decoder.emit(selected if has_sel else txt)
+        elif chosen is cmp_left:
+            self.send_to_comparer_left.emit(selected if has_sel else txt)
+        elif chosen is cmp_right:
+            self.send_to_comparer_right.emit(selected if has_sel else txt)
+        elif chosen is jwt_act and has_sel:
+            self.send_to_jwt.emit(selected)
         elif chosen in fmt_map:
             result = format_http_body(txt, fmt_map[chosen])
             if result is not None:
