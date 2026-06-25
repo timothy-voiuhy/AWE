@@ -41,17 +41,6 @@ Intruder-style payload injection for WebSocket frames.
 - Filter results by response content / length
 - Attach to an existing live WebSocket connection OR open a fresh one
 
-## Priority 9 — GraphQL Tool
-Dedicated page for GraphQL API testing.
-
-- Introspection query builder: auto-fetch schema from /graphql endpoint
-- Schema browser: explore types, fields, queries, mutations
-- Query editor with schema-aware autocomplete
-- Batch query attack: send multiple operations in one request to bypass rate limiting
-- Field suggestion fuzzing: detect fields not exposed in schema but accepted by server
-- "Send to GraphQL" from History when Content-Type is application/json and body
-  contains `query` or `mutation`
-
 ## Priority 10 — OAST / Out-of-Band Interaction Server
 Required for blind SSRF, blind XSS, blind SQLi, DNS exfiltration.
 
