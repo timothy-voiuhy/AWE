@@ -799,7 +799,7 @@ class _GraphQLTools(ToolConfig):
         safe = endpoint.strip().replace("'", "").replace('"', "")
         return (
             f"graphw00f -d -t '{safe}' 2>&1 | tee /output/fingerprint.txt && "
-            f"python3 /app/clairvoyance/clairvoyance/main.py '{safe}' "
+            f"clairvoyance '{safe}' "
             f"-o /output/schema.json 2>&1 | tee -a /output/fingerprint.txt"
         )
 

@@ -268,10 +268,28 @@ class TargetWindow(QtWidgets.QMainWindow):
     # ── Nav bar ───────────────────────────────────────────────────────────────
 
     def _build_nav_bar(self) -> QWidget:
-        bar = QWidget()
-        bar.setFixedWidth(_NAV_W)
-        bar.setStyleSheet("background:#181825;")
-        vb = QVBoxLayout(bar)
+        outer = QWidget()
+        outer.setFixedWidth(_NAV_W)
+        outer.setStyleSheet("background:#181825;")
+        outer_vb = QVBoxLayout(outer)
+        outer_vb.setContentsMargins(0, 0, 0, 0)
+        outer_vb.setSpacing(0)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        scroll.setStyleSheet(
+            "QScrollArea { background:#181825; border:none; }"
+            "QScrollBar:vertical { background:#181825; width:4px; }"
+            "QScrollBar::handle:vertical { background:#45475A; border-radius:2px; min-height:20px; }"
+            "QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height:0; }"
+        )
+
+        inner = QWidget()
+        inner.setStyleSheet("background:#181825;")
+        vb = QVBoxLayout(inner)
         vb.setContentsMargins(0, 4, 0, 4)
         vb.setSpacing(0)
 
@@ -295,7 +313,9 @@ class TargetWindow(QtWidgets.QMainWindow):
             vb.addWidget(sep_wrap)
 
         vb.addStretch()
-        return bar
+        scroll.setWidget(inner)
+        outer_vb.addWidget(scroll)
+        return outer
 
     def _switch_page(self, index: int):
         self._stack.setCurrentIndex(index)
@@ -465,6 +485,16 @@ class TargetWindow(QtWidgets.QMainWindow):
         # WebSockets — push initial scope and connect for live updates.
         self._wsPage.on_scope_changed(initial)
         self._scopeEditor.scope_changed.connect(self._wsPage.on_scope_changed)
+
+        # Sitemap context-menu scope actions → reload editor UI + broadcast.
+        self._siteMapPage.scope_modified.connect(self._on_sitemap_scope_modified)
+
+    def _on_sitemap_scope_modified(self, cfg) -> None:
+        """Sitemap pushed a scope change; reload the editor and notify all consumers."""
+        self._scopeEditor.load()
+        self._networkPage.on_scope_changed(cfg)
+        self._historyPage.on_scope_changed(cfg)
+        self._wsPage.on_scope_changed(cfg)
 
     def _get_proxy_col(self):
         """Return the global proxy traffic MongoDB collection, or None on error."""

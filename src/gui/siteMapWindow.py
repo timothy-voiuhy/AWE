@@ -15,6 +15,7 @@ each pair is shown.  Data comes from MongoDB (awe_proxy_traffic.traffic).
 from __future__ import annotations
 
 import logging
+import re as _re
 from pathlib import Path
 
 from bson import ObjectId
@@ -26,7 +27,7 @@ from PySide6.QtWidgets import (
     QProxyStyle, QStyle, QMenu, QToolTip, QDialog, QApplication,
 )
 
-from database.scope import ScopeConfig
+from database.scope import ScopeConfig, ScopeEntry
 from gui.appearance import load_ui_settings, save_ui_settings
 from gui.filterPanel import FilterPanel, _status_color, _file_type
 from gui.guiUtilities import (
@@ -43,6 +44,11 @@ _KEY_ROLE    = Qt.UserRole + 2   # stable path key for expansion tracking
 
 # SSE-only and length filters are HTTP-History-specific.
 _SITEMAP_SECTIONS = frozenset({"search", "search_scopes", "method", "status", "hide_types"})
+
+_HTTP_METHODS = frozenset({
+    "GET", "POST", "PUT", "DELETE", "PATCH",
+    "HEAD", "OPTIONS", "CONNECT", "TRACE",
+})
 
 # Default hidden types on first launch (no saved settings)
 _SITEMAP_DEFAULT_HIDDEN = ["images", "css", "fonts", "media"]
@@ -103,6 +109,7 @@ class SiteMapPage(QWidget):
     send_to_graphql        = Signal(str)
     sync_requested         = Signal()
     traffic_changed        = Signal()
+    scope_modified         = Signal(object)   # emits ScopeConfig after a sitemap scope action
 
     def __init__(self, project_dir, target_host, proxy_col,
                  repository=None, parent=None):
@@ -504,14 +511,33 @@ class SiteMapPage(QWidget):
 
         menu = QMenu(self)
 
+        # ── expand / collapse ─────────────────────────────────────────────
         expand_act   = menu.addAction("Expand All")
         collapse_act = menu.addAction("Collapse All")
+        expand_sub_act = None
         if index.isValid() and item and item.hasChildren():
             menu.addSeparator()
             expand_sub_act = menu.addAction("Expand Subtree")
-        else:
-            expand_sub_act = None
 
+        # ── delete ────────────────────────────────────────────────────────
+        del_entry_act = del_sub_act = None
+        if item and index.isValid():
+            is_host = item.parent() is None
+            menu.addSeparator()
+            if doc_id:
+                del_entry_act = menu.addAction("Delete Entry")
+            del_sub_act = menu.addAction(
+                "Delete All for Host" if is_host else "Delete Subtree"
+            )
+
+        # ── scope ─────────────────────────────────────────────────────────
+        add_scope_act = excl_scope_act = None
+        if item and index.isValid() and self._repo is not None:
+            menu.addSeparator()
+            add_scope_act  = menu.addAction("Add to Scope")
+            excl_scope_act = menu.addAction("Exclude from Scope")
+
+        # ── send ──────────────────────────────────────────────────────────
         rep_act = int_act = None
         if doc_id:
             menu.addSeparator()
@@ -519,6 +545,8 @@ class SiteMapPage(QWidget):
             int_act = menu.addAction("Send to Intruder")
 
         chosen = menu.exec(self._tree.mapToGlobal(pos))
+        if chosen is None:
+            return
 
         if chosen is expand_act:
             self._tree.expandAll()
@@ -526,6 +554,14 @@ class SiteMapPage(QWidget):
             self._tree.collapseAll()
         elif expand_sub_act and chosen is expand_sub_act:
             self._tree.expandRecursively(index)
+        elif chosen is del_entry_act:
+            self._delete_entry(doc_id)
+        elif chosen is del_sub_act:
+            self._delete_subtree(item)
+        elif chosen is add_scope_act:
+            self._modify_scope(item, in_scope=True)
+        elif chosen is excl_scope_act:
+            self._modify_scope(item, in_scope=False)
         elif doc_id and chosen in (rep_act, int_act):
             doc = self._load_doc(doc_id)
             if doc:
@@ -534,6 +570,93 @@ class SiteMapPage(QWidget):
                     self.send_to_repeater.emit(raw)
                 else:
                     self.send_to_intruder.emit(raw)
+
+    # ── tree node helpers ─────────────────────────────────────────────────────
+
+    def _item_ancestry(self, item: QStandardItem) -> tuple[str, list[str]]:
+        """Return (host, [path_segments]) for any tree item.
+
+        Method-leaf keys (GET/POST/…) are excluded so the result always
+        represents a host + URL-path pair.  The "/" segment is normalised
+        to an empty string so path-joining works cleanly.
+        """
+        segments: list[str] = []
+        cur = item
+        while True:
+            par = cur.parent()
+            if par is None:
+                host = cur.data(_KEY_ROLE) or ""
+                segments.reverse()
+                return host, segments
+            key = cur.data(_KEY_ROLE) or ""
+            if key and key.upper() not in _HTTP_METHODS:
+                segments.append("" if key == "/" else key)
+            cur = par
+
+    def _delete_entry(self, doc_id: str) -> None:
+        """Delete a single traffic document by _id."""
+        if not doc_id or self._col is None:
+            return
+        try:
+            self._col.delete_one({"_id": ObjectId(doc_id)})
+        except Exception as exc:
+            log.warning("Delete entry failed: %s", exc)
+        self._refresh_tree()
+
+    def _delete_subtree(self, item: QStandardItem) -> None:
+        """Delete all traffic docs matching this node and its URL descendants."""
+        if self._col is None:
+            return
+        host, segs = self._item_ancestry(item)
+        if not host:
+            return
+        try:
+            if not segs:
+                self._col.delete_many({"host": host})
+            else:
+                prefix = "/" + "/".join(segs)
+                self._col.delete_many({
+                    "host": host,
+                    "path": {"$regex": "^" + _re.escape(prefix) + r"(/.*)?$"},
+                })
+        except Exception as exc:
+            log.warning("Delete subtree failed: %s", exc)
+        self._refresh_tree()
+
+    def _modify_scope(self, item: QStandardItem, in_scope: bool) -> None:
+        """Add a scope rule for the selected tree node and broadcast the change."""
+        if self._repo is None:
+            return
+        host, segs = self._item_ancestry(item)
+        if not host:
+            return
+        if segs:
+            value      = "https://{}/{}".format(host, "/".join(segs))
+            entry_type = "url"
+        else:
+            value      = host
+            entry_type = "domain"
+        try:
+            cfg = self._repo.get_scope()
+        except Exception:
+            cfg = ScopeConfig()
+        entry = ScopeEntry(value=value, entry_type=entry_type, in_scope=in_scope)
+        # avoid exact duplicates
+        for e in cfg.entries:
+            if (e.value == entry.value
+                    and e.entry_type == entry.entry_type
+                    and e.in_scope == entry.in_scope):
+                return
+        cfg.entries.append(entry)
+        try:
+            self._repo.save_scope(cfg)
+        except Exception as exc:
+            log.warning("Scope save failed: %s", exc)
+            return
+        self._scope = cfg
+        self.scope_modified.emit(cfg)
+        if self._filter_scope:
+            self._refresh_tree()
 
     def eventFilter(self, obj, event) -> bool:
         if (event.type() == QEvent.Type.KeyPress

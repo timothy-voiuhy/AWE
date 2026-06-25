@@ -1001,8 +1001,7 @@ class JwtPage(QWidget):
             elif header:
                 # e.g. "Authorization: Bearer"
                 args += ["-rh", f"{header} {token}"]
-            if mode != "decode only":
-                args += ["-M", mode.split(" ")[0]]
+            args += ["-M", mode]
 
         self._log(f"\n[jwt_tool]  {' '.join(args)}\n{'─'*40}")
         self._jt_run_btn.setEnabled(False)

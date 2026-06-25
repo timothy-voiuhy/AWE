@@ -780,7 +780,7 @@ class DockerManagerWindow(QMainWindow):
         vb.addWidget(split)
         return w
 
-    def _refresh_images(self):
+    def _refresh_images(self, scroll_to_key: str | None = None):
         try:
             local_imgs = self._mgr.list_images()
         except DockerUnavailableError:
@@ -802,6 +802,7 @@ class DockerManagerWindow(QMainWindow):
             return None
 
         self.imageTable.setRowCount(0)
+        scroll_to_row = -1
         for tool_key, cfg in TOOL_REGISTRY.items():
             row = self.imageTable.rowCount()
             self.imageTable.insertRow(row)
@@ -831,6 +832,15 @@ class DockerManagerWindow(QMainWindow):
 
             self.imageTable.setCellWidget(row, 4,
                 self._image_action_cell(tool_key, cfg, size, busy))
+
+            if tool_key == scroll_to_key:
+                scroll_to_row = row
+
+        if scroll_to_row >= 0:
+            item = self.imageTable.item(scroll_to_row, 0)
+            if item:
+                self.imageTable.scrollToItem(item, QTableWidget.PositionAtCenter)
+                self.imageTable.selectRow(scroll_to_row)
 
     def _image_action_cell(self, tool_key: str, cfg, size, busy: bool) -> QWidget:
         cell = QWidget()
@@ -886,12 +896,12 @@ class DockerManagerWindow(QMainWindow):
         self._image_workers[tool_key] = w
         self._workers.append(w)
         w.start()
-        self._refresh_images()   # immediately show ⟳
+        self._refresh_images(scroll_to_key=tool_key)   # immediately show ⟳
 
     def _on_image_op_done(self, ok: bool, msg: str, tool_key: str):
         self._img_log(("✓  " if ok else "✗  ") + msg)
         self._image_workers.pop(tool_key, None)
-        self._refresh_images()
+        self._refresh_images(scroll_to_key=tool_key)
 
     def _launch_batch(self, mode: str):
         """Open the batch-progress dialog for pull-all / build-all / setup-all."""

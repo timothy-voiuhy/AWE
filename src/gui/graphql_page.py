@@ -22,7 +22,8 @@ from PySide6.QtWidgets import (
     QVBoxLayout, QWidget,
 )
 
-from gui.guiUtilities import SyntaxHighlighter
+from gui.guiUtilities import SyntaxHighlighter, ResponseRenderView
+from gui.repeater import _CodeEdit
 
 log = logging.getLogger(__name__)
 
@@ -74,10 +75,7 @@ _BTN_PEACH = (
     "QPushButton:hover{background:#3D2A1A;}"
     "QPushButton:disabled{background:#181825;color:#45475A;border-color:#313244;}"
 )
-_EDIT = (
-    "QTextEdit{background:#11111B;color:#CDD6F4;border:none;padding:8px;"
-    "font-family:'Cascadia Code',monospace;font-size:9px;}"
-)
+_EDIT = "QTextEdit{background:#11111B;color:#CDD6F4;border:none;padding:8px;}"
 _LINE = (
     "QLineEdit{background:#11111B;color:#CDD6F4;border:1px solid #45475A;"
     "border-radius:4px;padding:0 6px;min-height:24px;font-size:9px;}"
@@ -198,7 +196,7 @@ def _injection_payload(field: str, arg: str, kind: str) -> str:
     arg   = arg.strip()   or "query"
     payloads = {
         "sql":      f"' OR 1=1--",
-        "nosql":    f'{"$regex": ".*", "$options": "i"}',
+        "nosql":    '{"$regex": ".*", "$options": "i"}',
         "ssrf":     f"http://169.254.169.254/latest/meta-data/",
         "cmd":      f"; id; cat /etc/passwd",
         "template": f"${{7*7}}",
@@ -517,6 +515,9 @@ class GraphqlPage(QWidget):
         self._wordlist_path = ""
         self._last_schema_json: dict = {}
 
+        self._last_resp_body: bytes = b""
+        self._last_resp_ct:   str   = ""
+
         self._build_ui()
 
         self._save_timer = QTimer(self)
@@ -524,9 +525,17 @@ class GraphqlPage(QWidget):
         self._save_timer.setInterval(1500)
         self._save_timer.timeout.connect(self._save_state)
 
+        self._preview_timer = QTimer(self)
+        self._preview_timer.setSingleShot(True)
+        self._preview_timer.setInterval(300)
+        self._preview_timer.timeout.connect(self._update_request_preview)
+
         self._endpoint_input.textChanged.connect(self._save_timer.start)
+        self._endpoint_input.textChanged.connect(self._preview_timer.start)
         self._query_edit.textChanged.connect(self._save_timer.start)
+        self._query_edit.textChanged.connect(self._preview_timer.start)
         self._vars_edit.textChanged.connect(self._save_timer.start)
+        self._vars_edit.textChanged.connect(self._preview_timer.start)
 
         self._restore_state()
 
@@ -572,6 +581,14 @@ class GraphqlPage(QWidget):
         if host:
             port_str = host.split(":")[-1] if ":" in host else ""
             scheme   = "http" if port_str in {"80", "8080", "8000", "8888"} else "https"
+            # Normalise absolute-form request targets before building the endpoint.
+            # Proxies sometimes forward the full URL or a //host/path target in
+            # the request line; taking that verbatim produces //host/path as the
+            # path component after urlsplit, causing a malformed request preview.
+            if path.startswith(("http://", "https://")):
+                path = urllib.parse.urlsplit(path).path or "/"
+            elif path.startswith("//"):
+                path = urllib.parse.urlsplit("https:" + path).path or "/"
             endpoint = f"{scheme}://{host}{path}"
             self._endpoint_input.setText(endpoint)
 
@@ -591,6 +608,9 @@ class GraphqlPage(QWidget):
                     self._vars_edit.setPlainText(json.dumps(v, indent=2))
             except Exception:
                 self._query_edit.setPlainText(body_text)
+
+        self._update_request_preview()
+        self._left_tabs.setCurrentIndex(3)   # switch to Request tab
 
     def load_query(self, query: str) -> None:
         """Directly set the query editor content."""
@@ -703,37 +723,16 @@ class GraphqlPage(QWidget):
         ql.setSpacing(0)
 
         self._query_edit = QTextEdit()
-        self._query_edit.setFont(QFont("Cascadia Code", 9))
         self._query_edit.setStyleSheet(_EDIT)
         self._query_edit.setPlaceholderText(
             "# Enter a GraphQL query here\nquery {\n  __typename\n}"
         )
         self._hl_query = SyntaxHighlighter(self._query_edit.document())
         ql.addWidget(self._query_edit, stretch=1)
-        ql.addWidget(_sep())
-
-        send_bar = QWidget()
-        send_bar.setStyleSheet(f"background:{_SURFACE2};")
-        sb = QHBoxLayout(send_bar)
-        sb.setContentsMargins(8, 4, 8, 4)
-        sb.setSpacing(8)
-        self._send_btn = _btn("▶  Send Query", _BTN_GREEN)
-        self._send_btn.clicked.connect(self._on_send_query)
-        sb.addWidget(self._send_btn)
-        self._send_status = QLabel("")
-        self._send_status.setStyleSheet(f"color:{_SUBTEXT}; font-size:9px;")
-        sb.addWidget(self._send_status)
-        sb.addStretch()
-        rep_btn = _btn("→ Repeater", _BTN)
-        rep_btn.setToolTip("Open query in Repeater as a raw HTTP POST")
-        rep_btn.clicked.connect(self._on_send_to_repeater)
-        sb.addWidget(rep_btn)
-        ql.addWidget(send_bar)
         tabs.addTab(query_w, "Query")
 
         # ── Tab 2: Variables ──────────────────────────────────────────────────
         self._vars_edit = QTextEdit()
-        self._vars_edit.setFont(QFont("Cascadia Code", 9))
         self._vars_edit.setStyleSheet(_EDIT)
         self._vars_edit.setPlaceholderText('{\n  "id": 1\n}')
         self._hl_vars = SyntaxHighlighter(self._vars_edit.document())
@@ -754,14 +753,59 @@ class GraphqlPage(QWidget):
         self._schema_tree.customContextMenuRequested.connect(self._schema_ctx_menu)
         tabs.addTab(self._schema_tree, "Schema")
 
-        # ── Tab 4: Response ───────────────────────────────────────────────────
-        self._resp_edit = QTextEdit()
-        self._resp_edit.setReadOnly(True)
-        self._resp_edit.setFont(QFont("Cascadia Code", 9))
-        self._resp_edit.setStyleSheet(_EDIT)
-        self._hl_resp = SyntaxHighlighter(self._resp_edit.document())
-        tabs.addTab(self._resp_edit, "Response")
+        # ── Tab 4: Request ────────────────────────────────────────────────────
+        req_w = QWidget()
+        req_w.setStyleSheet(f"background:{_BG};")
+        req_vb = QVBoxLayout(req_w)
+        req_vb.setContentsMargins(0, 0, 0, 0)
+        req_vb.setSpacing(0)
 
+        send_bar = QWidget()
+        send_bar.setStyleSheet(f"background:{_SURFACE2};")
+        sb = QHBoxLayout(send_bar)
+        sb.setContentsMargins(8, 4, 8, 4)
+        sb.setSpacing(8)
+        self._send_btn = _btn("▶  Send Query", _BTN_GREEN)
+        self._send_btn.clicked.connect(self._on_send_query)
+        sb.addWidget(self._send_btn)
+        self._send_status = QLabel("")
+        self._send_status.setStyleSheet(f"color:{_SUBTEXT}; font-size:9px;")
+        sb.addWidget(self._send_status)
+        sb.addStretch()
+        rep_btn = _btn("→ Repeater", _BTN)
+        rep_btn.setToolTip("Open query in Repeater as a raw HTTP POST")
+        rep_btn.clicked.connect(self._on_send_to_repeater)
+        sb.addWidget(rep_btn)
+        req_vb.addWidget(send_bar)
+        req_vb.addWidget(_sep())
+
+        self._req_edit = _CodeEdit(read_only=True)
+        req_vb.addWidget(self._req_edit, stretch=1)
+        tabs.addTab(req_w, "Request")
+
+        # ── Tab 5: Response ───────────────────────────────────────────────────
+        resp_w = QWidget()
+        resp_w.setStyleSheet(f"background:{_BG};")
+        resp_vb = QVBoxLayout(resp_w)
+        resp_vb.setContentsMargins(0, 0, 0, 0)
+        resp_vb.setSpacing(0)
+
+        self._resp_inner = QTabWidget()
+        self._resp_inner.setStyleSheet(
+            "QTabBar::tab{background:#181825;color:#6C7086;"
+            "padding:2px 10px;border:none;font-size:9px;}"
+            "QTabBar::tab:selected{background:#252540;color:#CDD6F4;}"
+            "QTabWidget::pane{border:none;}"
+        )
+        self._resp_raw_edit = _CodeEdit(read_only=True)
+        self._resp_render   = ResponseRenderView()
+        self._resp_inner.addTab(self._resp_raw_edit, "Raw")
+        self._resp_inner.addTab(self._resp_render,   "Render")
+        self._resp_inner.currentChanged.connect(self._on_resp_tab_changed)
+        resp_vb.addWidget(self._resp_inner)
+        tabs.addTab(resp_w, "Response")
+
+        self._left_tabs = tabs
         lay.addWidget(tabs, stretch=1)
         return w
 
@@ -1029,10 +1073,8 @@ class GraphqlPage(QWidget):
 
         self._output = QTextEdit()
         self._output.setReadOnly(True)
-        self._output.setFont(QFont("Cascadia Code", 8))
         self._output.setStyleSheet(
-            f"QTextEdit{{background:#0D1117;color:#A6E3A1;border:none;padding:6px;"
-            f"font-family:'Cascadia Code',monospace;font-size:8px;}}"
+            f"QTextEdit{{background:#0D1117;color:#A6E3A1;border:none;padding:6px;}}"
         )
         self._output.setFixedHeight(220)
         lay.addWidget(self._output)
@@ -1081,6 +1123,80 @@ class GraphqlPage(QWidget):
     def _log(self, msg: str) -> None:
         self._output.append(msg)
 
+    def _update_request_preview(self) -> None:
+        query = self._query_edit.toPlainText().strip()
+        preview = self._build_request_preview(query)
+        if preview:
+            self._req_edit.setPlainText(preview)
+
+    def _on_resp_tab_changed(self, idx: int) -> None:
+        w = self._resp_inner.widget(idx)
+        is_render = w is self._resp_render
+        self._resp_render.on_tab_visibility_changed(is_render)
+        if is_render:
+            self._do_render()
+
+    def _do_render(self) -> None:
+        if not self._last_resp_body:
+            self._resp_render.clear()
+            return
+        self._resp_render.render_response(
+            self._last_resp_body, self._last_resp_ct, self._endpoint()
+        )
+
+    def _build_request_preview(self, query: str, as_get: bool = False,
+                               form_post: bool = False, raw_body: str = "") -> str:
+        ep = self._endpoint()
+        if not ep:
+            return ""
+        parsed  = urllib.parse.urlsplit(ep)
+        host    = parsed.netloc
+        path    = parsed.path or "/"
+
+        hdrs: dict[str, str] = {}
+        for pair in (self._extra_headers or []):
+            if len(pair) == 2 and pair[0].strip():
+                hdrs[pair[0].strip()] = pair[1]
+
+        if as_get:
+            params: dict[str, str] = {"query": query}
+            v = self._vars_edit.toPlainText().strip()
+            if v:
+                params["variables"] = v
+            req_line = f"GET {path}?{urllib.parse.urlencode(params)} HTTP/1.1"
+            body = ""
+        elif form_post:
+            hdrs.setdefault("Content-Type", "application/x-www-form-urlencoded")
+            data: dict[str, str] = {"query": query}
+            v = self._vars_edit.toPlainText().strip()
+            if v:
+                data["variables"] = v
+            body     = urllib.parse.urlencode(data)
+            req_line = f"POST {path} HTTP/1.1"
+        elif raw_body:
+            hdrs.setdefault("Content-Type", "application/json")
+            body     = raw_body
+            req_line = f"POST {path} HTTP/1.1"
+        else:
+            hdrs.setdefault("Content-Type", "application/json")
+            payload: dict = {"query": query}
+            try:
+                v_raw = self._vars_edit.toPlainText().strip()
+                v = json.loads(v_raw) if v_raw else None
+                if v:
+                    payload["variables"] = v
+            except Exception:
+                pass
+            body     = json.dumps(payload, indent=2)
+            req_line = f"POST {path} HTTP/1.1"
+
+        hdrs["Host"] = host
+        if body:
+            hdrs["Content-Length"] = str(len(body.encode()))
+
+        hdr_block = "\n".join(f"{k}: {v}" for k, v in hdrs.items())
+        return f"{req_line}\n{hdr_block}\n\n{body}" if body else f"{req_line}\n{hdr_block}\n"
+
     def _send(self, query: str, label: str = "", as_get: bool = False,
               form_post: bool = False, raw_body: str = "") -> None:
         ep = self._endpoint()
@@ -1092,6 +1208,12 @@ class GraphqlPage(QWidget):
             return
         self._send_status.setText("Sending…")
         self._send_btn.setEnabled(False)
+
+        preview = self._build_request_preview(query, as_get=as_get,
+                                              form_post=form_post, raw_body=raw_body)
+        if preview:
+            self._req_edit.setPlainText(preview)
+
         self._log(f"\n{'─'*40}")
         if label:
             self._log(f"▶ {label}")
@@ -1110,10 +1232,14 @@ class GraphqlPage(QWidget):
         self._worker.start()
 
     def _on_worker_result(self, body: str) -> None:
-        self._resp_edit.setPlainText(body)
+        self._resp_raw_edit.setPlainText(body)
+        self._last_resp_body = body.encode("utf-8", errors="replace")
+        self._last_resp_ct   = "application/json"
+        self._left_tabs.setCurrentIndex(4)   # switch to Response tab
+        if self._resp_inner.currentWidget() is self._resp_render:
+            self._do_render()
         short = body[:200].replace("\n", " ")
         self._log(f"  ✓ Response: {short}{'…' if len(body) > 200 else ''}")
-        # Try to populate schema tree automatically on introspection response
         try:
             j = json.loads(body)
             if "__schema" in str(body):
@@ -1124,7 +1250,10 @@ class GraphqlPage(QWidget):
             pass
 
     def _on_worker_error(self, err: str) -> None:
-        self._resp_edit.setPlainText(f"Error:\n{err}")
+        self._resp_raw_edit.setPlainText(f"Error:\n{err}")
+        self._last_resp_body = b""
+        self._last_resp_ct   = ""
+        self._left_tabs.setCurrentIndex(4)
         self._log(f"  ✗ Error: {err}")
 
     def _on_worker_done(self) -> None:
@@ -1393,11 +1522,15 @@ class GraphqlPage(QWidget):
         self._endpoint_input.clear()
         self._query_edit.clear()
         self._vars_edit.clear()
-        self._resp_edit.clear()
+        self._req_edit.clear()
+        self._resp_raw_edit.clear()
+        self._resp_render.clear()
         self._schema_tree.clear()
         self._extra_headers = []
         self._output.clear()
         self._last_schema_json = {}
+        self._last_resp_body   = b""
+        self._last_resp_ct     = ""
 
     def _on_copy_output(self) -> None:
         QApplication.clipboard().setText(self._output.toPlainText())

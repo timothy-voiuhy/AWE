@@ -4,12 +4,14 @@ RUN apt-get update -qq && apt-get install -y --no-install-recommends \
         git ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-# graphw00f: fingerprints the GraphQL engine type
-RUN pip install --no-cache-dir graphw00f
+# graphw00f: not on PyPI — clone and wire up a PATH shim
+RUN git clone --depth 1 https://github.com/dolevf/graphw00f.git /app/graphw00f
+RUN pip install --no-cache-dir requests
+RUN printf '#!/bin/sh\nexec python3 /app/graphw00f/main.py "$@"\n' \
+        > /usr/local/bin/graphw00f && chmod +x /usr/local/bin/graphw00f
 
-# clairvoyance: automated hidden-field enumeration via field suggestions
-RUN git clone --depth 1 https://github.com/nikitastupin/clairvoyance.git /app/clairvoyance
-RUN pip install --no-cache-dir -r /app/clairvoyance/requirements.txt
+# clairvoyance: on PyPI, installs the `clairvoyance` CLI directly
+RUN pip install --no-cache-dir clairvoyance
 
 RUN mkdir /output
 WORKDIR /app
