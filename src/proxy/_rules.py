@@ -26,11 +26,17 @@ class Rule:
     comment:     str = ""
 
     def _compiled(self) -> re.Pattern | None:
+        # Cache the compiled pattern on the instance to avoid recompiling on every request.
+        cached = self.__dict__.get("_rx")
+        if cached is not None:
+            return cached
         try:
-            return re.compile(self.pattern)
+            rx = re.compile(self.pattern)
         except re.error as exc:
             log.warning("Rule %s has invalid pattern %r: %s", self.id, self.pattern, exc)
             return None
+        self.__dict__["_rx"] = rx
+        return rx
 
 
 class RulesEngine:

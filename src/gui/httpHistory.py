@@ -515,7 +515,7 @@ class HttpHistoryPage(QWidget):
             data["http_history_filters"] = self._filter_panel.to_dict()
             save_ui_settings(data)
         except Exception:
-            pass
+            log.warning("Failed to save HTTP history filters", exc_info=True)
 
     def _restore_saved_filters(self) -> None:
         try:
@@ -528,7 +528,7 @@ class HttpHistoryPage(QWidget):
                 self._filter_btn.setChecked(True)
                 self._reset_btn.setVisible(True)
         except Exception:
-            pass
+            log.warning("Failed to restore HTTP history filters", exc_info=True)
 
     def _update_filter_indicator(self) -> None:
         if self._filter_panel.is_active():

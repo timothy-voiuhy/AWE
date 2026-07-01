@@ -1,0 +1,301 @@
+{
+  "version": "1.0",
+  "categories": [
+    {
+      "id": "authentication",
+      "name": "Authentication",
+      "accent": "#89B4FA",
+      "icon": "🔑",
+      "vulnerabilities": [
+        {"id": "auth_default_creds",      "name": "Default Credentials",                              "description_file": "authentication/auth_default_creds.md"},
+        {"id": "auth_brute_force",        "name": "Brute Force / Rate Limiting",                      "description_file": "authentication/auth_brute_force.md"},
+        {"id": "auth_account_lockout",    "name": "Account Lockout Policy",                           "description_file": "authentication/auth_account_lockout.md"},
+        {"id": "auth_password_complexity","name": "Password Complexity Enforcement",                  "description_file": "authentication/auth_password_complexity.md"},
+        {"id": "auth_username_enum",      "name": "Username Enumeration",                             "description_file": "authentication/auth_username_enum.md"},
+        {"id": "auth_mfa_bypass",         "name": "Multi-Factor Authentication Bypass",               "description_file": "authentication/auth_mfa_bypass.md"},
+        {"id": "auth_pwd_reset_token",    "name": "Password Reset — Token Expiry / Predictability",   "description_file": "authentication/auth_pwd_reset_token.md"},
+        {"id": "auth_pwd_reset_hhi",      "name": "Password Reset — Host Header Injection",           "description_file": "authentication/auth_pwd_reset_hhi.md"},
+        {"id": "auth_oauth2",             "name": "OAuth2 / OIDC Misconfiguration",                   "description_file": "authentication/auth_oauth2.md"},
+        {"id": "auth_saml",               "name": "SAML Vulnerabilities (Signature Wrapping)",        "description_file": "authentication/auth_saml.md"},
+        {"id": "auth_jwt_algnone",        "name": "JWT — Algorithm None / RS→HS Confusion",           "description_file": "authentication/auth_jwt_algnone.md"},
+        {"id": "auth_jwt_weak_secret",    "name": "JWT — Weak Secret / Brute-forceable",              "description_file": "authentication/auth_jwt_weak_secret.md"},
+        {"id": "auth_jwt_kid",            "name": "JWT — Kid Injection / Path Traversal",             "description_file": "authentication/auth_jwt_kid.md"},
+        {"id": "auth_session_fixation",   "name": "Session Fixation",                                 "description_file": "authentication/auth_session_fixation.md"},
+        {"id": "auth_remember_me",        "name": "Remember-Me Token Weaknesses",                     "description_file": "authentication/auth_remember_me.md"},
+        {"id": "auth_login_csrf",         "name": "Login CSRF",                                       "description_file": "authentication/auth_login_csrf.md"}
+      ]
+    },
+    {
+      "id": "authorization",
+      "name": "Authorization",
+      "accent": "#CBA6F7",
+      "icon": "🛡",
+      "vulnerabilities": [
+        {"id": "authz_idor",               "name": "IDOR — Insecure Direct Object Reference",          "description_file": "authorization/authz_idor.md"},
+        {"id": "authz_func_level",         "name": "Broken Function-Level Access Control",             "description_file": "authorization/authz_func_level.md"},
+        {"id": "authz_priv_esc_vertical",  "name": "Privilege Escalation (Vertical)",                  "description_file": "authorization/authz_priv_esc_vertical.md"},
+        {"id": "authz_priv_esc_horiz",     "name": "Privilege Escalation (Horizontal)",                "description_file": "authorization/authz_priv_esc_horiz.md"},
+        {"id": "authz_mass_assignment",    "name": "Mass Assignment",                                  "description_file": "authorization/authz_mass_assignment.md"},
+        {"id": "authz_missing_api",        "name": "Missing Authorization on API Endpoints",           "description_file": "authorization/authz_missing_api.md"},
+        {"id": "authz_graphql",            "name": "GraphQL Authorization Issues",                     "description_file": "authorization/authz_graphql.md"},
+        {"id": "authz_path_traversal",     "name": "Path Traversal to Restricted Resources",          "description_file": "authorization/authz_path_traversal.md"},
+        {"id": "authz_jwt_role",           "name": "JWT Role / Claim Manipulation",                    "description_file": "authorization/authz_jwt_role.md"},
+        {"id": "authz_api_version_bypass", "name": "API Versioning Bypass (/v1 vs /v2)",              "description_file": "authorization/authz_api_version_bypass.md"},
+        {"id": "authz_method_override",    "name": "HTTP Method Override (X-HTTP-Method-Override)",   "description_file": "authorization/authz_method_override.md"}
+      ]
+    },
+    {
+      "id": "session",
+      "name": "Session Management",
+      "accent": "#94E2D5",
+      "icon": "🍪",
+      "vulnerabilities": [
+        {"id": "sess_entropy",        "name": "Session Token Entropy",                              "description_file": "session/sess_entropy.md"},
+        {"id": "sess_logout",         "name": "Session Not Invalidated on Logout",                  "description_file": "session/sess_logout.md"},
+        {"id": "sess_pwd_change",     "name": "Session Not Invalidated After Password Change",      "description_file": "session/sess_pwd_change.md"},
+        {"id": "sess_concurrent",     "name": "Concurrent Session Handling",                        "description_file": "session/sess_concurrent.md"},
+        {"id": "sess_cookie_secure",  "name": "Cookie — Secure Flag",                              "description_file": "session/sess_cookie_secure.md"},
+        {"id": "sess_cookie_httponly","name": "Cookie — HttpOnly Flag",                             "description_file": "session/sess_cookie_httponly.md"},
+        {"id": "sess_cookie_samesite","name": "Cookie — SameSite Attribute",                       "description_file": "session/sess_cookie_samesite.md"},
+        {"id": "sess_timeout",        "name": "Session Timeout / Inactivity Expiry",               "description_file": "session/sess_timeout.md"},
+        {"id": "sess_csrf_token",     "name": "CSRF Token Validation",                             "description_file": "session/sess_csrf_token.md"},
+        {"id": "sess_token_predict",  "name": "Token Predictability",                              "description_file": "session/sess_token_predict.md"}
+      ]
+    },
+    {
+      "id": "injection",
+      "name": "Injection",
+      "accent": "#F38BA8",
+      "icon": "💉",
+      "vulnerabilities": [
+        {"id": "inj_sqli_classic",    "name": "SQL Injection — Classic (Error-based)",              "description_file": "injection/inj_sqli_classic.md"},
+        {"id": "inj_sqli_bool",       "name": "SQL Injection — Blind Boolean",                      "description_file": "injection/inj_sqli_bool.md"},
+        {"id": "inj_sqli_time",       "name": "SQL Injection — Blind Time-based",                   "description_file": "injection/inj_sqli_time.md"},
+        {"id": "inj_sqli_oob",        "name": "SQL Injection — Out-of-band",                        "description_file": "injection/inj_sqli_oob.md"},
+        {"id": "inj_sqli_second_order","name": "SQL Injection — Second-Order",                      "description_file": "injection/inj_sqli_second_order.md"},
+        {"id": "inj_nosql",           "name": "NoSQL Injection (MongoDB, CouchDB)",                 "description_file": "injection/inj_nosql.md"},
+        {"id": "inj_ldap",            "name": "LDAP Injection",                                     "description_file": "injection/inj_ldap.md"},
+        {"id": "inj_xpath",           "name": "XPath Injection",                                    "description_file": "injection/inj_xpath.md"},
+        {"id": "inj_os_cmd",          "name": "OS Command Injection",                               "description_file": "injection/inj_os_cmd.md"},
+        {"id": "inj_code",            "name": "Code Injection (eval / exec)",                       "description_file": "injection/inj_code.md"},
+        {"id": "inj_ssti",            "name": "Server-Side Template Injection (SSTI)",              "description_file": "injection/inj_ssti.md"},
+        {"id": "inj_xxe",             "name": "XML External Entity (XXE)",                         "description_file": "injection/inj_xxe.md"},
+        {"id": "inj_csv",             "name": "CSV / Formula Injection",                            "description_file": "injection/inj_csv.md"},
+        {"id": "inj_header",          "name": "HTTP Header Injection",                              "description_file": "injection/inj_header.md"},
+        {"id": "inj_crlf",            "name": "CRLF Injection",                                    "description_file": "injection/inj_crlf.md"},
+        {"id": "inj_graphql",         "name": "GraphQL Injection",                                  "description_file": "injection/inj_graphql.md"}
+      ]
+    },
+    {
+      "id": "xss",
+      "name": "Cross-Site Scripting (XSS)",
+      "accent": "#FAB387",
+      "icon": "🔥",
+      "vulnerabilities": [
+        {"id": "xss_reflected",       "name": "Reflected XSS",                                     "description_file": "xss/xss_reflected.md"},
+        {"id": "xss_stored",          "name": "Stored / Persistent XSS",                           "description_file": "xss/xss_stored.md"},
+        {"id": "xss_dom",             "name": "DOM-Based XSS",                                     "description_file": "xss/xss_dom.md"},
+        {"id": "xss_blind",           "name": "Blind XSS (out-of-band)",                           "description_file": "xss/xss_blind.md"},
+        {"id": "xss_json_resp",       "name": "XSS in JSON Responses",                             "description_file": "xss/xss_json_resp.md"},
+        {"id": "xss_headers",         "name": "XSS via HTTP Response Headers",                     "description_file": "xss/xss_headers.md"},
+        {"id": "xss_svg_upload",      "name": "XSS via SVG / HTML File Upload",                    "description_file": "xss/xss_svg_upload.md"},
+        {"id": "xss_pdf",             "name": "XSS in PDF Generation",                             "description_file": "xss/xss_pdf.md"},
+        {"id": "xss_filter_bypass",   "name": "XSS Filter / WAF Bypass",                           "description_file": "xss/xss_filter_bypass.md"},
+        {"id": "xss_mxss",            "name": "Mutation XSS (mXSS)",                               "description_file": "xss/xss_mxss.md"}
+      ]
+    },
+    {
+      "id": "csrf",
+      "name": "Cross-Site Request Forgery (CSRF)",
+      "accent": "#EE99A0",
+      "icon": "↩",
+      "vulnerabilities": [
+        {"id": "csrf_state_change",       "name": "CSRF on State-Changing Actions",                 "description_file": "csrf/csrf_state_change.md"},
+        {"id": "csrf_token_removal",      "name": "CSRF Token Bypass — Token Removal",              "description_file": "csrf/csrf_token_removal.md"},
+        {"id": "csrf_token_predictable",  "name": "CSRF Token Bypass — Predictable Value",         "description_file": "csrf/csrf_token_predictable.md"},
+        {"id": "csrf_samesite",           "name": "SameSite Cookie Misconfiguration",               "description_file": "csrf/csrf_samesite.md"},
+        {"id": "csrf_cors",               "name": "CSRF via CORS Misconfiguration",                 "description_file": "csrf/csrf_cors.md"},
+        {"id": "csrf_json",               "name": "CSRF via JSON body / Content-Type bypass",       "description_file": "csrf/csrf_json.md"}
+      ]
+    },
+    {
+      "id": "file_upload",
+      "name": "File Upload",
+      "accent": "#F5C2E7",
+      "icon": "📁",
+      "vulnerabilities": [
+        {"id": "upload_webshell",      "name": "Unrestricted Upload (Webshell)",                   "description_file": "file_upload/upload_webshell.md"},
+        {"id": "upload_type_bypass",   "name": "File Type Bypass (MIME, extension, magic bytes)",  "description_file": "file_upload/upload_type_bypass.md"},
+        {"id": "upload_path_traversal","name": "Path Traversal in Filename",                       "description_file": "file_upload/upload_path_traversal.md"},
+        {"id": "upload_overwrite",     "name": "File Overwrite",                                   "description_file": "file_upload/upload_overwrite.md"},
+        {"id": "upload_zipslip",       "name": "Zip Slip",                                         "description_file": "file_upload/upload_zipslip.md"},
+        {"id": "upload_svg_xss",       "name": "SVG XSS via Upload",                              "description_file": "file_upload/upload_svg_xss.md"},
+        {"id": "upload_ssrf",          "name": "SSRF via File Content",                            "description_file": "file_upload/upload_ssrf.md"},
+        {"id": "upload_xxe",           "name": "XXE via File Upload (DOCX, SVG, etc.)",            "description_file": "file_upload/upload_xxe.md"}
+      ]
+    },
+    {
+      "id": "ssrf",
+      "name": "Server-Side Request Forgery (SSRF)",
+      "accent": "#89DCEB",
+      "icon": "🌐",
+      "vulnerabilities": [
+        {"id": "ssrf_basic",          "name": "Basic SSRF — Internal Network Access",              "description_file": "ssrf/ssrf_basic.md"},
+        {"id": "ssrf_blind",          "name": "Blind SSRF (out-of-band detection)",                "description_file": "ssrf/ssrf_blind.md"},
+        {"id": "ssrf_cloud_metadata", "name": "SSRF → Cloud Metadata (AWS/GCP/Azure)",             "description_file": "ssrf/ssrf_cloud_metadata.md"},
+        {"id": "ssrf_localhost",      "name": "SSRF → localhost / 127.0.0.1",                      "description_file": "ssrf/ssrf_localhost.md"},
+        {"id": "ssrf_filter_bypass",  "name": "SSRF Filter Bypass (IP obfuscation, redirects)",   "description_file": "ssrf/ssrf_filter_bypass.md"},
+        {"id": "ssrf_pdf",            "name": "SSRF via PDF / Image Processing",                   "description_file": "ssrf/ssrf_pdf.md"},
+        {"id": "ssrf_webhook",        "name": "SSRF via Webhook / URL parameter",                  "description_file": "ssrf/ssrf_webhook.md"}
+      ]
+    },
+    {
+      "id": "info_disclosure",
+      "name": "Information Disclosure",
+      "accent": "#F9E2AF",
+      "icon": "🔍",
+      "vulnerabilities": [
+        {"id": "info_stack_traces",    "name": "Stack Traces / Verbose Errors",                    "description_file": "info_disclosure/info_stack_traces.md"},
+        {"id": "info_debug_endpoints", "name": "Debug Endpoints Exposed (/debug, /actuator)",      "description_file": "info_disclosure/info_debug_endpoints.md"},
+        {"id": "info_source_code",     "name": "Source Code Disclosure",                           "description_file": "info_disclosure/info_source_code.md"},
+        {"id": "info_backup_files",    "name": "Backup Files (.bak, .swp, ~, .old)",               "description_file": "info_disclosure/info_backup_files.md"},
+        {"id": "info_dir_listing",     "name": "Directory Listing Enabled",                        "description_file": "info_disclosure/info_dir_listing.md"},
+        {"id": "info_api_keys",        "name": "API Keys / Credentials in Responses",              "description_file": "info_disclosure/info_api_keys.md"},
+        {"id": "info_internal_ips",    "name": "Internal IP Addresses in Responses",               "description_file": "info_disclosure/info_internal_ips.md"},
+        {"id": "info_version",         "name": "Version Disclosure (headers, meta)",               "description_file": "info_disclosure/info_version.md"},
+        {"id": "info_git_exposed",     "name": "Git Repository Exposed (/.git/)",                  "description_file": "info_disclosure/info_git_exposed.md"},
+        {"id": "info_env_file",        "name": ".env / Config File Exposure",                      "description_file": "info_disclosure/info_env_file.md"},
+        {"id": "info_openapi",         "name": "Swagger / OpenAPI Spec Exposure",                  "description_file": "info_disclosure/info_openapi.md"}
+      ]
+    },
+    {
+      "id": "security_misconfig",
+      "name": "Security Misconfiguration",
+      "accent": "#A6E3A1",
+      "icon": "⚙",
+      "vulnerabilities": [
+        {"id": "misconfig_default_creds",  "name": "Default Credentials on Admin Panels",           "description_file": "security_misconfig/misconfig_default_creds.md"},
+        {"id": "misconfig_csp",            "name": "Missing / Weak Content-Security-Policy",        "description_file": "security_misconfig/misconfig_csp.md"},
+        {"id": "misconfig_hsts",           "name": "Missing HTTP Strict-Transport-Security",        "description_file": "security_misconfig/misconfig_hsts.md"},
+        {"id": "misconfig_xframe",         "name": "Clickjacking — Missing X-Frame-Options / CSP", "description_file": "security_misconfig/misconfig_xframe.md"},
+        {"id": "misconfig_cors_wildcard",  "name": "CORS Wildcard or Null Origin",                 "description_file": "security_misconfig/misconfig_cors_wildcard.md"},
+        {"id": "misconfig_http_methods",   "name": "Dangerous HTTP Methods (TRACE, PUT, DELETE)",  "description_file": "security_misconfig/misconfig_http_methods.md"},
+        {"id": "misconfig_mixed_content",  "name": "Mixed Content (HTTP resources over HTTPS)",    "description_file": "security_misconfig/misconfig_mixed_content.md"},
+        {"id": "misconfig_subdomain_take", "name": "Subdomain Takeover",                           "description_file": "security_misconfig/misconfig_subdomain_take.md"},
+        {"id": "misconfig_referrer",       "name": "Referrer-Policy Misconfiguration",             "description_file": "security_misconfig/misconfig_referrer.md"},
+        {"id": "misconfig_feature_policy", "name": "Permissions-Policy Missing / Overly Permissive","description_file": "security_misconfig/misconfig_feature_policy.md"}
+      ]
+    },
+    {
+      "id": "cryptography",
+      "name": "Cryptography",
+      "accent": "#B4BEFE",
+      "icon": "🔐",
+      "vulnerabilities": [
+        {"id": "crypto_weak_tls",         "name": "Weak TLS/SSL Versions (SSLv3, TLS 1.0/1.1)",   "description_file": "cryptography/crypto_weak_tls.md"},
+        {"id": "crypto_weak_ciphers",     "name": "Weak Cipher Suites",                            "description_file": "cryptography/crypto_weak_ciphers.md"},
+        {"id": "crypto_cert_validation",  "name": "Certificate Validation Issues",                  "description_file": "cryptography/crypto_cert_validation.md"},
+        {"id": "crypto_hardcoded_secrets","name": "Hardcoded Secrets / Keys in JS/Source",         "description_file": "cryptography/crypto_hardcoded_secrets.md"},
+        {"id": "crypto_weak_hash",        "name": "Weak Hashing (MD5, SHA1 for passwords)",        "description_file": "cryptography/crypto_weak_hash.md"},
+        {"id": "crypto_padding_oracle",   "name": "Padding Oracle Attack",                         "description_file": "cryptography/crypto_padding_oracle.md"},
+        {"id": "crypto_ecb_mode",         "name": "ECB Mode Encryption Detection",                 "description_file": "cryptography/crypto_ecb_mode.md"},
+        {"id": "crypto_insecure_random",  "name": "Insecure Randomness",                           "description_file": "cryptography/crypto_insecure_random.md"}
+      ]
+    },
+    {
+      "id": "business_logic",
+      "name": "Business Logic",
+      "accent": "#CBA6F7",
+      "icon": "💡",
+      "vulnerabilities": [
+        {"id": "logic_price_manip",    "name": "Price / Value Manipulation",                       "description_file": "business_logic/logic_price_manip.md"},
+        {"id": "logic_quantity",       "name": "Quantity Manipulation (negative, zero, overflow)",  "description_file": "business_logic/logic_quantity.md"},
+        {"id": "logic_workflow_bypass","name": "Workflow Step Bypass",                              "description_file": "business_logic/logic_workflow_bypass.md"},
+        {"id": "logic_race_condition", "name": "Race Conditions (TOCTOU)",                         "description_file": "business_logic/logic_race_condition.md"},
+        {"id": "logic_coupon_abuse",   "name": "Coupon / Promo Code Abuse",                        "description_file": "business_logic/logic_coupon_abuse.md"},
+        {"id": "logic_referral_abuse", "name": "Referral / Bonus Abuse",                           "description_file": "business_logic/logic_referral_abuse.md"},
+        {"id": "logic_enum_via_diff",  "name": "Account Enumeration via Response Differences",     "description_file": "business_logic/logic_enum_via_diff.md"},
+        {"id": "logic_mass_reg",       "name": "Mass Registration / Resource Exhaustion",          "description_file": "business_logic/logic_mass_reg.md"},
+        {"id": "logic_integer_overflow","name": "Integer Overflow / Underflow",                    "description_file": "business_logic/logic_integer_overflow.md"}
+      ]
+    },
+    {
+      "id": "api_security",
+      "name": "API Security",
+      "accent": "#89B4FA",
+      "icon": "🔌",
+      "vulnerabilities": [
+        {"id": "api_excess_data",          "name": "Excessive Data Exposure in Responses",         "description_file": "api_security/api_excess_data.md"},
+        {"id": "api_rate_limiting",        "name": "Lack of Rate Limiting",                        "description_file": "api_security/api_rate_limiting.md"},
+        {"id": "api_mass_assign",          "name": "Mass Assignment via API",                      "description_file": "api_security/api_mass_assign.md"},
+        {"id": "api_key_exposure",         "name": "API Key Exposure",                             "description_file": "api_security/api_key_exposure.md"},
+        {"id": "api_shadow_endpoints",     "name": "Undocumented / Shadow API Endpoints",          "description_file": "api_security/api_shadow_endpoints.md"},
+        {"id": "api_graphql_introspect",   "name": "GraphQL Introspection Enabled",                "description_file": "api_security/api_graphql_introspect.md"},
+        {"id": "api_graphql_batching",     "name": "GraphQL Query Batching / DoS",                 "description_file": "api_security/api_graphql_batching.md"},
+        {"id": "api_broken_object",        "name": "Broken Object Level Authorization",            "description_file": "api_security/api_broken_object.md"},
+        {"id": "api_broken_func",          "name": "Broken Function Level Authorization",          "description_file": "api_security/api_broken_func.md"}
+      ]
+    },
+    {
+      "id": "client_side",
+      "name": "Client-Side",
+      "accent": "#F5C2E7",
+      "icon": "🖥",
+      "vulnerabilities": [
+        {"id": "client_html_inj",        "name": "HTML Injection",                                 "description_file": "client_side/client_html_inj.md"},
+        {"id": "client_css_inj",         "name": "CSS Injection",                                  "description_file": "client_side/client_css_inj.md"},
+        {"id": "client_proto_pollution", "name": "JavaScript Prototype Pollution",                 "description_file": "client_side/client_proto_pollution.md"},
+        {"id": "client_postmessage",     "name": "PostMessage Vulnerabilities",                    "description_file": "client_side/client_postmessage.md"},
+        {"id": "client_open_redirect",   "name": "Open Redirect",                                  "description_file": "client_side/client_open_redirect.md"},
+        {"id": "client_csp_bypass",      "name": "Content Security Policy Bypass",                 "description_file": "client_side/client_csp_bypass.md"},
+        {"id": "client_sri",             "name": "Subresource Integrity (SRI) Missing",            "description_file": "client_side/client_sri.md"},
+        {"id": "client_dom_clobbering",  "name": "DOM Clobbering",                                 "description_file": "client_side/client_dom_clobbering.md"},
+        {"id": "client_cache_deception", "name": "Web Cache Deception / Poisoning",               "description_file": "client_side/client_cache_deception.md"}
+      ]
+    },
+    {
+      "id": "websockets",
+      "name": "WebSockets",
+      "accent": "#94E2D5",
+      "icon": "⇄",
+      "vulnerabilities": [
+        {"id": "ws_origin",        "name": "Origin Not Validated",                                  "description_file": "websockets/ws_origin.md"},
+        {"id": "ws_auth",          "name": "Lack of Authentication on WebSocket",                   "description_file": "websockets/ws_auth.md"},
+        {"id": "ws_message_tamper","name": "Message Tampering",                                     "description_file": "websockets/ws_message_tamper.md"},
+        {"id": "ws_csrf",          "name": "Cross-Site WebSocket Hijacking",                        "description_file": "websockets/ws_csrf.md"},
+        {"id": "ws_dos",           "name": "WebSocket DoS (large messages)",                        "description_file": "websockets/ws_dos.md"}
+      ]
+    },
+    {
+      "id": "deserialization",
+      "name": "Insecure Deserialization",
+      "accent": "#EE99A0",
+      "icon": "📦",
+      "vulnerabilities": [
+        {"id": "deser_java",         "name": "Java Deserialization (ysoserial)",                   "description_file": "deserialization/deser_java.md"},
+        {"id": "deser_php",          "name": "PHP Object Injection",                               "description_file": "deserialization/deser_php.md"},
+        {"id": "deser_python_pickle","name": "Python Pickle Deserialization",                      "description_file": "deserialization/deser_python_pickle.md"},
+        {"id": "deser_nodejs",       "name": "Node.js Deserialization",                            "description_file": "deserialization/deser_nodejs.md"},
+        {"id": "deser_xml",          "name": "XML Deserialization",                                "description_file": "deserialization/deser_xml.md"},
+        {"id": "deser_yaml",         "name": "YAML Deserialization",                               "description_file": "deserialization/deser_yaml.md"}
+      ]
+    },
+    {
+      "id": "infrastructure",
+      "name": "Infrastructure / Server",
+      "accent": "#A6E3A1",
+      "icon": "🏗",
+      "vulnerabilities": [
+        {"id": "infra_http_smuggling", "name": "HTTP Request Smuggling",                           "description_file": "infrastructure/infra_http_smuggling.md"},
+        {"id": "infra_cache_poison",   "name": "HTTP Cache Poisoning",                             "description_file": "infrastructure/infra_cache_poison.md"},
+        {"id": "infra_host_header",    "name": "Host Header Injection",                            "description_file": "infrastructure/infra_host_header.md"},
+        {"id": "infra_http2_downgrade","name": "HTTP/2 Downgrade Attack",                          "description_file": "infrastructure/infra_http2_downgrade.md"},
+        {"id": "infra_dns_rebind",     "name": "DNS Rebinding",                                    "description_file": "infrastructure/infra_dns_rebind.md"},
+        {"id": "infra_path_traversal", "name": "Path / Directory Traversal",                       "description_file": "infrastructure/infra_path_traversal.md"},
+        {"id": "infra_symlink",        "name": "Symlink Attack",                                   "description_file": "infrastructure/infra_symlink.md"},
+        {"id": "infra_lfi",            "name": "Local File Inclusion (LFI)",                       "description_file": "infrastructure/infra_lfi.md"},
+        {"id": "infra_rfi",            "name": "Remote File Inclusion (RFI)",                      "description_file": "infrastructure/infra_rfi.md"}
+      ]
+    }
+  ]
+}

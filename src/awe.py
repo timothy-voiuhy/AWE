@@ -1,5 +1,4 @@
 #! /usr/bin/python
-import atexit
 import json
 import logging
 import os
@@ -275,14 +274,6 @@ class MainWin(QMainWindow, QtCore.QObject):
         self.threads = []
         self.openMainWindows = [self]
 
-        self.program_state_file = RUNDIR + "programState/programState.txt"
-        if not Path(self.program_state_file).exists():
-            if not Path(os.path.dirname(self.program_state_file)).is_dir():
-                os.makedirs(os.path.dirname(self.program_state_file))
-        if Path(self.program_state_file).exists():
-            with open(self.program_state_file, "rb") as file:
-                program_state_bytes = file.read()
-            # self.restoreState(program_state_bytes)
         self.isProxyRunning = False
         self.isProjectsTabOpen = False
         self.proxy_port = 0
@@ -343,7 +334,6 @@ class MainWin(QMainWindow, QtCore.QObject):
         
         self.threadMonitor = ThreadMonitor(top_parent=self)
 
-        atexit.register(self.saveProgramState)
         self.socketIpc.processFinishedExecution.connect(self.finishedProcess)
         self.newProjectCreated.emit(self)
         self.addProjectsTab()
@@ -909,12 +899,6 @@ class MainWin(QMainWindow, QtCore.QObject):
 
         return super().closeEvent(event)
 
-    def saveProgramState(self):
-        byte_array = self.saveState()
-        with open(self.program_state_file, "wb") as file:
-            file.write(bytes(byte_array))
-
-
     def startproxy(self):
         # Kill any stale proxy from a previous crash (reads proxy_control.txt)
         _stop_proxy_graceful()
@@ -1039,6 +1023,27 @@ if __name__ == "__main__":
         QMessageBox.critical(None, "AWE — Cannot Start", _pre_msg)
         sys.exit(1)
     logging.info("Pre-flight passed: %s", _pre_msg)
+
+    # Stop any leftover tool containers from a previous run
+    def _cleanup_tool_containers():
+        try:
+            import docker as _docker_sdk
+            from containers.tool_registry import TOOL_REGISTRY as _reg
+            client = _docker_sdk.from_env()
+            prefixes = tuple(f"awe_{key}_" for key in _reg)
+            for c in client.containers.list():
+                name = c.name
+                if any(name.startswith(p) for p in prefixes):
+                    logging.info("Stopping stale tool container: %s", name)
+                    try:
+                        c.stop(timeout=3)
+                        c.remove(force=True)
+                    except Exception as _e:
+                        logging.warning("Could not stop container %s: %s", name, _e)
+        except Exception as _e:
+            logging.warning("Container cleanup skipped: %s", _e)
+
+    _cleanup_tool_containers()
 
     # Load custom stylesheet
     stylesheet_path = os.path.join(RUNDIR, "src/styles/awe_dark.qss")

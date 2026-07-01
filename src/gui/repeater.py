@@ -376,7 +376,7 @@ class _TabPane(QWidget):
                 for sess in self._repo.list_auth_sessions():
                     self._session_combo.addItem(sess.get("name", ""), sess.get("id"))
             except Exception:
-                pass
+                log.warning("Failed to load auth sessions for repeater", exc_info=True)
         self._session_combo.blockSignals(False)
 
     def refresh_sessions(self) -> None:

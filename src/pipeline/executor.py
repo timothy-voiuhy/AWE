@@ -87,6 +87,16 @@ class PipelineExecutor(QThread):
             except Exception:
                 pass
 
+    def stop_tool(self, tool_key: str):
+        """Stop a single running tool container without halting the whole pipeline."""
+        with self._containers_lock:
+            container = self._active_containers.get(tool_key)
+        if container:
+            try:
+                container.stop(timeout=3)
+            except Exception:
+                pass
+
     # ── Main loop ─────────────────────────────────────────────────────────────
 
     def run(self):

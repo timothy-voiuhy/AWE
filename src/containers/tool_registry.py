@@ -411,10 +411,10 @@ class _Katana(ToolConfig):
     category: str = "crawl"
 
     def build_command(self, url: str = "", depth: str = "3",
-                      concurrency: str = "20", **_) -> str:
+                      concurrency: str = "25", **_) -> str:
         return (
             f"katana -u {url} -d {depth} -jc -j -silent"
-            f" -c {concurrency} -p 20 -retry 3 -rd 1 -rl 10"
+            f" -c {concurrency} -p {concurrency} -retry 3 -rd 1 -rl 10"
             f" -timeout 120 -o /output/katana_results.txt"
         )
 
@@ -422,7 +422,7 @@ class _Katana(ToolConfig):
         return [
             {"key": "url",         "label": "Target URL",  "type": "text", "default": ""},
             {"key": "depth",       "label": "Depth",       "type": "text", "default": "3"},
-            {"key": "concurrency", "label": "Concurrency", "type": "text", "default": "20"},
+            {"key": "concurrency", "label": "Concurrency", "type": "text", "default": "25"},
         ]
 
 
@@ -653,12 +653,14 @@ class _X8(ToolConfig):
 
     def build_command(self, url: str = "", method: str = "GET",
                       workers: str = "10", body_type: str = "urlencode", **_) -> str:
-        return (
+        cmd = (
             f"x8 -u {url} -o /output/x8_results.txt"
-            f" --workers {workers} --method {method}"
-            f" --body-type {body_type}"
-            f" --learn-requests-count 9 --verify-requests-count 3 --value-size 5"
+            f" -W {workers} -X {method}"
+            f" --learn-requests 9 --verify"
         )
+        if method.upper() != "GET":
+            cmd += f" -t {body_type}"
+        return cmd
 
     def param_spec(self):
         return [
@@ -667,7 +669,7 @@ class _X8(ToolConfig):
              "options": ["GET", "POST"],               "default": "GET"},
             {"key": "workers",   "label": "Workers",    "type": "text",  "default": "10"},
             {"key": "body_type", "label": "Body type",  "type": "combo",
-             "options": ["urlencode", "json", "multipart"], "default": "urlencode"},
+             "options": ["urlencode", "json"],          "default": "urlencode"},
         ]
 
 

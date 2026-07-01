@@ -77,6 +77,7 @@ class _StepRow(QWidget):
     selected                 = Signal(str)   # tool_key — emitted on click
     rerun_requested          = Signal(str)   # tool_key — emitted on rerun button / context menu
     rerun_parser_requested   = Signal(str)   # tool_key — emitted from context menu
+    stop_requested           = Signal(str)   # tool_key — emitted on stop button
 
     def __init__(self, tool_key: str, display_name: str, stage: int, parent=None):
         super().__init__(parent)
@@ -109,6 +110,14 @@ class _StepRow(QWidget):
         self._count.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
         self._count.setVisible(False)   # hidden until a non-zero count is set
         row.addWidget(self._count)
+
+        self._stop_btn = QPushButton("■")
+        self._stop_btn.setToolTip("Stop this tool")
+        self._stop_btn.setObjectName("stopBtn")
+        self._stop_btn.setStyleSheet(_ROW_BTN_SS)
+        self._stop_btn.clicked.connect(lambda: self.stop_requested.emit(self.tool_key))
+        self._stop_btn.setVisible(False)
+        row.addWidget(self._stop_btn)
 
         self._rerun_btn = QPushButton("↺")
         self._rerun_btn.setToolTip("Rerun this tool")
@@ -155,6 +164,8 @@ class _StepRow(QWidget):
             "font-size:11px;padding:0 3px;min-width:20px;max-width:20px;"
             "min-height:20px;max-height:20px;}"
             "QPushButton:hover{color:#CDD6F4;background:#313244;border-radius:3px;}"
+            "QPushButton#stopBtn{color:#F38BA8;}"
+            "QPushButton#stopBtn:hover{color:#F38BA8;background:#3D2130;}"
         )
 
     def mousePressEvent(self, ev):
@@ -178,6 +189,9 @@ class _StepRow(QWidget):
         icon, color = _STATUS_ICON.get(status, ("?", "#CDD6F4"))
         self._icon.setText(icon)
         self._icon.setStyleSheet(f"color:{color}; font-size:11px;")
+        is_running = status == "running"
+        self._stop_btn.setVisible(is_running)
+        self._rerun_btn.setVisible(not is_running)
         if count:
             self._count.setText(str(count))
             self._count.setVisible(True)
@@ -196,6 +210,8 @@ class _MonitorPanel(QWidget):
     rerun_stage        = Signal(int)   # stage_num
     rerun_tool         = Signal(str)   # tool_key
     rerun_tool_parser  = Signal(str)   # tool_key
+    stop_tool          = Signal(str)   # tool_key
+    stop_stage         = Signal(int)   # stage_num
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -254,15 +270,24 @@ class _MonitorPanel(QWidget):
         self._log_buffer: dict[str, list[str]] = {}   # tool_key → full log lines
         self._selected_key: str | None = None
         self._stage_rerun_btns: dict[int, QPushButton] = {}
+        self._stage_stop_btns: dict[int, QPushButton] = {}
+        self._stage_tools: dict[int, list[str]] = {}
+        self._tool_stage: dict[str, int] = {}          # tool_key → stage_num
+        self._running_tools: set[str] = set()
         self._is_running = False
 
     # ── public API ────────────────────────────────────────────────────────────
 
     def set_running(self, running: bool) -> None:
-        """Disable stage rerun buttons while a pipeline is active."""
+        """Toggle stage rerun buttons; stage stop buttons are driven by on_started/on_done."""
         self._is_running = running
         for btn in self._stage_rerun_btns.values():
             btn.setEnabled(not running)
+        if not running:
+            # Pipeline finished — disable all stage stop buttons and clear tracking
+            for btn in self._stage_stop_btns.values():
+                btn.setEnabled(False)
+            self._running_tools.clear()
 
     def populate(self, steps):
         # Clear all existing widgets (stage headers + step rows)
@@ -273,6 +298,10 @@ class _MonitorPanel(QWidget):
         self._rows.clear()
         self._log_buffer.clear()
         self._stage_rerun_btns.clear()
+        self._stage_stop_btns.clear()
+        self._stage_tools.clear()
+        self._tool_stage.clear()
+        self._running_tools.clear()
         self._selected_key = None
         self._tool_log.clear()
         self._log_title.setText("Select a tool to view its log")
@@ -293,6 +322,12 @@ class _MonitorPanel(QWidget):
             "QPushButton:hover{background:#252540;border-color:#89B4FA;}"
             "QPushButton:disabled{color:#45475A;border-color:#252540;}"
         )
+        _STOP_BTN_SS = (
+            "QPushButton{background:#1A1A2E;color:#F38BA8;border:1px solid #313244;"
+            "border-radius:3px;font-size:8px;padding:0 6px;min-height:18px;max-height:18px;}"
+            "QPushButton:hover{background:#2D1B2E;border-color:#F38BA8;}"
+            "QPushButton:disabled{color:#45475A;border-color:#252540;}"
+        )
 
         for stage_num in sorted(stages.keys()):
             # Stage header row
@@ -303,15 +338,22 @@ class _MonitorPanel(QWidget):
             hdr_hl.setSpacing(6)
             hdr_hl.addWidget(QLabel(f"Stage {stage_num}"))
             hdr_hl.addStretch()
+            _sn = stage_num   # capture for lambda
+            stop_btn = QPushButton(f"■ Stop S{stage_num}")
+            stop_btn.setStyleSheet(_STOP_BTN_SS)
+            stop_btn.setEnabled(self._is_running)
+            stop_btn.clicked.connect(lambda checked=False, sn=_sn: self.stop_stage.emit(sn))
+            hdr_hl.addWidget(stop_btn)
+            self._stage_stop_btns[stage_num] = stop_btn
             rerun_btn = QPushButton(f"↺ Rerun S{stage_num}")
             rerun_btn.setStyleSheet(_BTN_SS)
             rerun_btn.setEnabled(not self._is_running)
-            _sn = stage_num   # capture for lambda
             rerun_btn.clicked.connect(lambda checked=False, sn=_sn: self.rerun_stage.emit(sn))
             hdr_hl.addWidget(rerun_btn)
             self._stage_rerun_btns[stage_num] = rerun_btn
             self._vbox.addWidget(hdr_w)
 
+            self._stage_tools[stage_num] = []
             for step in stages[stage_num]:
                 tool = TOOL_REGISTRY.get(step.tool_key)
                 name = tool.display_name if tool else step.tool_key
@@ -319,9 +361,12 @@ class _MonitorPanel(QWidget):
                 r.selected.connect(self._on_row_selected)
                 r.rerun_requested.connect(self.rerun_tool)
                 r.rerun_parser_requested.connect(self.rerun_tool_parser)
+                r.stop_requested.connect(self.stop_tool)
                 self._vbox.addWidget(r)
                 self._rows[step.tool_key] = r
                 self._log_buffer[step.tool_key] = []
+                self._stage_tools[stage_num].append(step.tool_key)
+                self._tool_stage[step.tool_key] = stage_num
 
         self._vbox.addStretch()
 
@@ -334,6 +379,12 @@ class _MonitorPanel(QWidget):
         r = self._rows.get(key)
         if r:
             r.set_status("running")
+        self._running_tools.add(key)
+        stage = self._tool_stage.get(key)
+        if stage is not None:
+            btn = self._stage_stop_btns.get(stage)
+            if btn:
+                btn.setEnabled(True)
 
     def on_log(self, key: str, line: str):
         r = self._rows.get(key)
@@ -350,6 +401,14 @@ class _MonitorPanel(QWidget):
         r = self._rows.get(key)
         if r:
             r.set_status(status, count)
+        self._running_tools.discard(key)
+        stage = self._tool_stage.get(key)
+        if stage is not None:
+            still_running = any(k in self._running_tools for k in self._stage_tools.get(stage, []))
+            if not still_running:
+                btn = self._stage_stop_btns.get(stage)
+                if btn:
+                    btn.setEnabled(False)
 
     def set_tool_log(self, key: str, lines: list[str]) -> None:
         """Pre-populate a tool's log buffer with persisted lines from the DB."""
@@ -621,6 +680,8 @@ class PipelineWindow(QMainWindow):
         self._monitor.rerun_stage.connect(self._rerun_stage)
         self._monitor.rerun_tool.connect(self._rerun_tool)
         self._monitor.rerun_tool_parser.connect(self._rerun_parser)
+        self._monitor.stop_tool.connect(self._stop_tool)
+        self._monitor.stop_stage.connect(self._stop_stage)
         vbox.addWidget(self._monitor, stretch=1)
         return w
 
@@ -855,6 +916,20 @@ class PipelineWindow(QMainWindow):
         except Exception as exc:
             self._log(f"  [{tool_key}] ✗ Parser error: {exc}")
             self._monitor.on_done(tool_key, "failed", 0)
+
+    def _stop_tool(self, tool_key: str):
+        if self._executor and self._executor.isRunning():
+            self._executor.stop_tool(tool_key)
+
+    def _stop_stage(self, stage_num: int):
+        if not self._executor or not self._executor.isRunning():
+            return
+        tmpl = self._current_template()
+        if not tmpl:
+            return
+        for step in tmpl.steps:
+            if step.stage == stage_num:
+                self._executor.stop_tool(step.tool_key)
 
     def _session_context_menu(self, pos):
         item = self._sessionList.itemAt(pos)
@@ -1156,6 +1231,10 @@ class PipelineWindow(QMainWindow):
                 status = run.get("status", "pending")
                 count  = run.get("result_count", 0)
                 if key:
+                    # A tool still marked "running" means the app was closed mid-run;
+                    # the container is gone, so display it as stopped.
+                    if status == "running":
+                        status = "stopped"
                     self._monitor.on_done(key, status, count)
             try:
                 tool_logs = self._repo.get_tool_run_logs(session_id)

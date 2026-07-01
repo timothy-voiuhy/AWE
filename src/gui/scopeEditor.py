@@ -8,6 +8,8 @@ Emits scope_changed(ScopeConfig) after every save so subscribers
 """
 from __future__ import annotations
 
+import logging
+
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
@@ -16,6 +18,8 @@ from PySide6.QtWidgets import (
 )
 
 from database.scope import ScopeConfig, ScopeEntry
+
+log = logging.getLogger(__name__)
 
 # ── colour tokens ─────────────────────────────────────────────────────────────
 _IN_COLOR  = "#A6E3A1"   # green  — in scope
@@ -59,7 +63,7 @@ class ScopeEditorWidget(QWidget):
         try:
             self._repo.save_scope(cfg)
         except Exception:
-            pass
+            log.warning("Failed to persist scope to database", exc_info=True)
         self.scope_changed.emit(cfg)
 
     def current_config(self) -> ScopeConfig:
@@ -128,7 +132,7 @@ class ScopeEditorWidget(QWidget):
         add_btn.setFixedHeight(28)
         add_btn.setStyleSheet(
             f"QPushButton{{background:#313244;color:{color};border:1px solid #45475A;"
-            "border-radius:4px;padding:0 10px;font-size:9px;}}"
+            "border-radius:4px;padding:0 10px;font-size:9px;}"
             "QPushButton:hover{background:#45475A;}"
         )
 
@@ -206,9 +210,9 @@ class _EntryRow(QWidget):
         rm = QPushButton("✕  Remove")
         rm.setFixedHeight(22)
         rm.setStyleSheet(
-            "QPushButton{background:#2A1A1A;color:#F38BA8;border:1px solid #F38BA844;"
+            "QPushButton{background:#2A1A1A;color:#F38BA8;border:1px solid rgba(243,139,168,68);"
             "border-radius:3px;padding:0 8px;font-size:9px;}"
-            "QPushButton:hover{background:#F38BA822;border-color:#F38BA8;}"
+            "QPushButton:hover{background:rgba(243,139,168,34);border-color:#F38BA8;}"
         )
         rm.clicked.connect(lambda: on_remove(self._entry))
         hl.addWidget(rm)

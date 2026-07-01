@@ -140,7 +140,8 @@ class NetworkPage(QWidget):
         self._zoom_lbl.setFixedWidth(42)
         self._zoom_lbl.setAlignment(Qt.AlignCenter)
         self._zoom_lbl.setStyleSheet(
-            "color:#6C7086; font-size:9px; background:transparent; cursor:pointer;")
+            "color:#6C7086; font-size:9px; background:transparent;")
+        self._zoom_lbl.setCursor(Qt.PointingHandCursor)
         self._zoom_lbl.setToolTip("Click to reset zoom to 100%")
         self._zoom_lbl.mousePressEvent = lambda _ev: self._view.zoom_reset()
         hl.addWidget(self._zoom_lbl)

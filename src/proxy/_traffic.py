@@ -28,7 +28,8 @@ from proxy._models import ProxyResponse
 
 log = logging.getLogger(__name__)
 
-_SENTINEL = None   # queued to stop the writer thread
+_SENTINEL = None         # queued to stop the writer thread
+_MAX_BODY_BYTES = 512 * 1024   # 512 KB cap per body stored in MongoDB
 
 
 class TrafficStore:
@@ -92,6 +93,11 @@ class TrafficStore:
             not is_sse
             and _looks_like_rsc(response.body)
         )
+        # Truncate oversized bodies so single large downloads don't bloat MongoDB.
+        req_body_capped  = req_body[:_MAX_BODY_BYTES]
+        resp_body_capped = response.body[:_MAX_BODY_BYTES]
+        body_truncated   = len(response.body) > _MAX_BODY_BYTES
+
         entry = {
             "host":        host,
             "path":        parsed.path or "/",
@@ -104,16 +110,17 @@ class TrafficStore:
                 "method":        method,
                 "url":           url,
                 "headers":       _headers_to_dict(req_headers),
-                "body":          _body_str(req_body),
-                "body_encoding": _body_enc(req_body),
+                "body":          _body_str(req_body_capped),
+                "body_encoding": _body_enc(req_body_capped),
             },
             "response": {
                 "status_code":   response.status_code,
                 "reason":        response.reason,
                 "http_version":  response.http_version,
                 "headers":       _headers_to_dict(response.headers),
-                "body":          _body_str(response.body),
-                "body_encoding": _body_enc(response.body),
+                "body":          _body_str(resp_body_capped),
+                "body_encoding": _body_enc(resp_body_capped),
+                "body_truncated": body_truncated,
             },
         }
 

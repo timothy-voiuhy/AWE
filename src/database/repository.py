@@ -451,6 +451,81 @@ class AweRepository:
         result = self._db.tool_runs.insert_one(new_doc)
         return _str(result.inserted_id)
 
+    # ── Testing Methodology ───────────────────────────────────────────────────
+
+    def seed_methodology_registry(self, categories: list[dict]) -> None:
+        """
+        Upsert the full vulnerability registry into a shared DB collection
+        so other parts of the app (reports, dashboards) can query it.
+        Each vulnerability is stored as one document keyed by vuln_id.
+        """
+        from pymongo import UpdateOne
+        ops = []
+        for cat in categories:
+            cat_id   = cat["id"]
+            cat_name = cat["name"]
+            for vuln in cat.get("vulnerabilities", []):
+                ops.append(UpdateOne(
+                    {"vuln_id": vuln["id"]},
+                    {"$set": {
+                        "vuln_id":          vuln["id"],
+                        "name":             vuln["name"],
+                        "category_id":      cat_id,
+                        "category_name":    cat_name,
+                        "description_file": vuln.get("description_file", ""),
+                        "accent":           cat.get("accent", "#9399B2"),
+                        "icon":             cat.get("icon", "◉"),
+                    }},
+                    upsert=True,
+                ))
+        if ops:
+            self._db.methodology_registry.bulk_write(ops, ordered=False)
+
+    def save_methodology_state(self, states: dict) -> None:
+        """
+        Persist per-vulnerability testing state (status + notes) for this
+        project.  `states` maps vuln_id → {status, notes}.
+        """
+        from pymongo import UpdateOne
+        ops = [
+            UpdateOne(
+                {"project_dir": self._project_dir, "vuln_id": vid},
+                {"$set": {
+                    "project_dir": self._project_dir,
+                    "vuln_id":     vid,
+                    "status":      s.get("status", "not_tested"),
+                    "notes":       s.get("notes", ""),
+                    "updated_at":  _now(),
+                }},
+                upsert=True,
+            )
+            for vid, s in states.items()
+            if not vid.startswith("__")
+        ]
+        if ops:
+            self._db.methodology_states.bulk_write(ops, ordered=False)
+
+    def load_methodology_states(self) -> dict:
+        """Return {vuln_id: {status, notes}} for this project."""
+        cursor = self._db.methodology_states.find(
+            {"project_dir": self._project_dir},
+            {"vuln_id": 1, "status": 1, "notes": 1, "_id": 0},
+        )
+        return {
+            d["vuln_id"]: {"status": d.get("status", "not_tested"),
+                           "notes":  d.get("notes", "")}
+            for d in cursor
+        }
+
+    def get_methodology_summary(self) -> dict[str, int]:
+        """Return {status: count} across all vulnerabilities for this project."""
+        pipeline = [
+            {"$match": {"project_dir": self._project_dir}},
+            {"$group": {"_id": "$status", "count": {"$sum": 1}}},
+        ]
+        return {d["_id"]: d["count"]
+                for d in self._db.methodology_states.aggregate(pipeline)}
+
 
 # ── helpers ───────────────────────────────────────────────────────────────────
 

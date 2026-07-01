@@ -1,10 +1,11 @@
 import json
+import logging
 import os
+from enum import IntEnum
 from pathlib import Path
 
 from PySide6 import QtWidgets, QtGui
 from PySide6.QtCore import Qt, QPoint, QTimer
-from PySide6.QtGui import QFont
 from PySide6.QtNetwork import QNetworkProxy, QNetworkProxyFactory
 from PySide6.QtWidgets import (
     QStackedWidget, QFrame, QVBoxLayout, QHBoxLayout,
@@ -34,19 +35,26 @@ from gui.comparer import ComparerPage
 from gui.jwt_page import JwtPage
 from gui.graphql_page import GraphqlPage
 from gui.session_manager import SessionManagerWidget
+from gui.testing_methodology import TestingMethodologyWidget
 from proxy.traffic_extractor import _ExtractWorker
 from gui.appearance import load_ui_settings, apply_appearance
+from gui.palette import (
+    BASE, MANTLE, CRUST, SURFACE0, SURFACE1, OVERLAY0, OVERLAY2,
+    TEXT, SUBTEXT1, BLUE, MAUVE, GREEN, RED, YELLOW, PEACH, TEAL, SKY, PINK,
+    SCROLLBAR_V, SCROLLBAR_V_THIN, TAB_BAR,
+)
 
+log = logging.getLogger(__name__)
 
 # ── Minimal card helper (used by the Scope page) ─────────────────────────────
 
-def _card(title: str, accent: str = "#9399B2") -> tuple:
+def _card(title: str, accent: str = OVERLAY2) -> tuple:
     card = QFrame()
     card.setObjectName("scopeCard")
     card.setStyleSheet(f"""
         QFrame#scopeCard {{
-            background: #1E1E2E;
-            border: 1px solid #313244;
+            background: {BASE};
+            border: 1px solid {SURFACE0};
             border-radius: 6px;
             border-left: 3px solid {accent};
         }}
@@ -75,27 +83,46 @@ def _card(title: str, accent: str = "#9399B2") -> tuple:
 _ICONS = os.path.join(RUNDIR, "resources", "icons")
 
 _NAV = [
-    ("◉",  "Browser",    "#89B4FA", f"{_ICONS}/browser.png"),     # 0
-    ("◎",  "Target",     "#CBA6F7", f"{_ICONS}/target.png"),      # 1
-    ("⚡",  "Pipeline",   "#A6E3A1", f"{_ICONS}/pipeline.png"),    # 2
-    ("⬡",  "Docker",     "#89DCEB", f"{_ICONS}/docker.png"),      # 3
-    ("◈",  "Results",    "#FAB387", f"{_ICONS}/results.png"),     # 4
-    ("⊗",  "Network",    "#94E2D5", f"{_ICONS}/network.png"),     # 5
-    ("◫",  "SiteMap",    "#89DCEB", f"{_ICONS}/sitemap.png"),     # 6
-    ("⊟",  "History",    "#F9E2AF", f"{_ICONS}/http.png"),        # 7
-    ("⊕",  "Intercept",  "#F9E2AF", f"{_ICONS}/intercept.png"),   # 8
-    ("↻",  "Repeater",   "#F5C2E7", f"{_ICONS}/repeater.png"),    # 9
-    ("⊛",  "Intruder",   "#EE99A0", f"{_ICONS}/intruder.png"),    # 10
-    ("⇄",  "WebSockets", "#94E2D5", f"{_ICONS}/websocket.png"),   # 11
-    ("⊞",  "Decoder",   "#94E2D5", f"{_ICONS}/encoding.png"),     # 12
-    ("⇌",  "Comparer",  "#F5C2E7", f"{_ICONS}/comparer.png"),     # 13
-    ("⚿",  "JWT",       "#FAB387", f"{_ICONS}/jwt.png"),          # 14
-    ("⬡",  "GraphQL",  "#94E2D5", f"{_ICONS}/graphql.png"),      # 15
-    ("✎",  "Notes",     "#F38BA8", f"{_ICONS}/notes.png"),        # 16
-    ("⚙",  "Settings",  "#9399B2", f"{_ICONS}/settings-512.png"), # 17
+    ("◉",  "Browser",    BLUE,     f"{_ICONS}/browser.png"),     # Page.BROWSER
+    ("◎",  "Target",     MAUVE,    f"{_ICONS}/target.png"),      # Page.TARGET
+    ("⚡",  "Pipeline",   GREEN,    f"{_ICONS}/pipeline.png"),    # Page.PIPELINE
+    ("⬡",  "Docker",     SKY,      f"{_ICONS}/docker.png"),      # Page.DOCKER
+    ("◈",  "Results",    PEACH,    f"{_ICONS}/results.png"),     # Page.RESULTS
+    ("⊗",  "Network",    TEAL,     f"{_ICONS}/network.png"),     # Page.NETWORK
+    ("◫",  "SiteMap",    SKY,      f"{_ICONS}/sitemap.png"),     # Page.SITEMAP
+    ("⊟",  "History",    YELLOW,   f"{_ICONS}/http.png"),        # Page.HISTORY
+    ("⊕",  "Intercept",  YELLOW,   f"{_ICONS}/intercept.png"),   # Page.INTERCEPT
+    ("↻",  "Repeater",   PINK,f"{_ICONS}/repeater.png"),    # Page.REPEATER  (Pink)
+    ("⊛",  "Intruder",   "#EE99A0",f"{_ICONS}/intruder.png"),    # Page.INTRUDER  (custom rose)
+    ("⇄",  "WebSockets", TEAL,     f"{_ICONS}/websocket.png"),   # Page.WEBSOCKETS
+    ("⊞",  "Decoder",    TEAL,     f"{_ICONS}/encoding.png"),    # Page.DECODER
+    ("⇌",  "Comparer",   PINK,f"{_ICONS}/comparer.png"),    # Page.COMPARER  (Pink)
+    ("⚿",  "JWT",        PEACH,    f"{_ICONS}/jwt.png"),         # Page.JWT
+    ("⬡",  "GraphQL",    TEAL,     f"{_ICONS}/graphql.png"),     # Page.GRAPHQL
+    ("⚙",  "Settings",   OVERLAY2, f"{_ICONS}/settings-512.png"),# Page.SETTINGS
 ]
 
 _NAV_W = 58
+
+
+class Page(IntEnum):
+    BROWSER    = 0
+    TARGET     = 1
+    PIPELINE   = 2
+    DOCKER     = 3
+    RESULTS    = 4
+    NETWORK    = 5
+    SITEMAP    = 6
+    HISTORY    = 7
+    INTERCEPT  = 8
+    REPEATER   = 9
+    INTRUDER   = 10
+    WEBSOCKETS = 11
+    DECODER    = 12
+    COMPARER   = 13
+    JWT        = 14
+    GRAPHQL    = 15
+    SETTINGS   = 16
 
 
 # ── Activity-bar button ───────────────────────────────────────────────────────
@@ -133,7 +160,7 @@ class _NavButton(QPushButton):
             self._icon_lbl = QLabel(glyph)
             self._icon_lbl.setAlignment(Qt.AlignCenter)
             self._icon_lbl.setFixedHeight(24)
-            self._icon_lbl.setStyleSheet("font-size:18px; background:transparent; color:#6C7086;")
+            self._icon_lbl.setStyleSheet(f"font-size:18px; background:transparent; color:{OVERLAY0};")
             vb.addWidget(self._icon_lbl)
 
         self._txt_lbl = None  # labels removed; tooltip carries the name
@@ -144,18 +171,18 @@ class _NavButton(QPushButton):
         self._set_active(False)
 
     def _set_active(self, active: bool):
-        color = self._accent if active else "#6C7086"
+        color = self._accent if active else OVERLAY0
         border = (f"border-left:3px solid {self._accent};"
                   if active else "border-left:3px solid transparent;")
         self.setStyleSheet(
-            f"QPushButton {{ background:{'#1E1E2E' if active else 'transparent'};"
+            f"QPushButton {{ background:{BASE if active else 'transparent'};"
             f" border:none; {border} }}"
         )
         if self._has_icon:
             # Tint the pixmap: full color when active, grey when inactive
             from PySide6.QtGui import QPixmap, QPainter, QColor
             from PySide6.QtCore import QSize
-            tint = QColor(self._accent if active else "#6C7086")
+            tint = QColor(self._accent if active else OVERLAY0)
             src = self._px_orig.scaled(22, 22, Qt.KeepAspectRatio, Qt.SmoothTransformation)
             result = QPixmap(src.size())
             result.fill(Qt.transparent)
@@ -167,7 +194,7 @@ class _NavButton(QPushButton):
             self._icon_lbl.setPixmap(result)
         else:
             self._icon_lbl.setStyleSheet(
-                f"font-size:18px; background:transparent; color:{color};"
+                f"font-size:18px; background:transparent; color:{color};"  # color is already a palette value
             )
 
     def set_active(self, active: bool):
@@ -221,7 +248,7 @@ class TargetWindow(QtWidgets.QMainWindow):
 
         div = QFrame()
         div.setFrameShape(QFrame.VLine)
-        div.setStyleSheet("color:#313244; background:#313244;")
+        div.setStyleSheet(f"color:{SURFACE0}; background:{SURFACE0};")
         div.setFixedWidth(1)
         root_row.addWidget(div)
 
@@ -238,31 +265,34 @@ class TargetWindow(QtWidgets.QMainWindow):
         # NOTE: _build_target_page() (index 1) also creates self._scopeEditor
         # via its embedded Scope tab.  All signal wiring happens in
         # _wire_scope_signals() called below.
-        self._stack.addWidget(self._build_browser_page())    # 0 Browser
-        self._stack.addWidget(self._build_target_page())     # 1 Target (includes Scope tab)
-        self._stack.addWidget(self._build_pipeline_page())   # 2 Pipeline
-        self._stack.addWidget(self._build_docker_page())     # 3 Docker
-        self._stack.addWidget(self._build_results_page())    # 4 Results
-        self._stack.addWidget(self._build_network_page())    # 5 Network
-        self._stack.addWidget(self._build_sitemap_page())    # 6 SiteMap
-        self._stack.addWidget(self._build_history_page())    # 7 History
-        self._stack.addWidget(self._build_intercept_page())  # 8 Intercept
-        self._stack.addWidget(self._build_repeater_page())   # 9 Repeater
-        self._stack.addWidget(self._build_intruder_page())   # 10 Intruder
-        self._stack.addWidget(self._build_ws_page())          # 11 WebSockets
-        self._stack.addWidget(self._build_decoder_page())    # 12 Decoder
-        self._stack.addWidget(self._build_comparer_page())   # 13 Comparer
-        self._stack.addWidget(self._build_jwt_page())        # 14 JWT
-        self._stack.addWidget(self._build_graphql_page())    # 15 GraphQL
-        self._stack.addWidget(self._build_notes_page())      # 16 Notes
-        self._stack.addWidget(self._build_settings_page())   # 17 Settings
+        def _add(name: str, builder):
+            log.info("Loading page: %s", name)
+            self._stack.addWidget(builder())
+
+        _add("Browser",    self._build_browser_page)    # 0
+        _add("Target",     self._build_target_page)     # 1
+        _add("Pipeline",   self._build_pipeline_page)   # 2
+        _add("Docker",     self._build_docker_page)     # 3
+        _add("Results",    self._build_results_page)    # 4
+        _add("Network",    self._build_network_page)    # 5
+        _add("SiteMap",    self._build_sitemap_page)    # 6
+        _add("History",    self._build_history_page)    # 7
+        _add("Intercept",  self._build_intercept_page)  # 8
+        _add("Repeater",   self._build_repeater_page)   # 9
+        _add("Intruder",   self._build_intruder_page)   # 10
+        _add("WebSockets", self._build_ws_page)          # 11
+        _add("Decoder",    self._build_decoder_page)    # 12
+        _add("Comparer",   self._build_comparer_page)   # 13
+        _add("JWT",        self._build_jwt_page)        # 14
+        _add("GraphQL",    self._build_graphql_page)    # 15
+        _add("Settings",   self._build_settings_page)   # 16
 
         # Wire scope_changed → all consumer pages now that every page exists.
         # Also push the already-loaded scope into pages so their first render
         # respects scope, not just future saves.
         self._wire_scope_signals()
 
-        self._switch_page(0)
+        self._switch_page(Page.TARGET)
         self.topParent.newProjectCreated.emit(self)
 
     # ── Nav bar ───────────────────────────────────────────────────────────────
@@ -270,7 +300,7 @@ class TargetWindow(QtWidgets.QMainWindow):
     def _build_nav_bar(self) -> QWidget:
         outer = QWidget()
         outer.setFixedWidth(_NAV_W)
-        outer.setStyleSheet("background:#181825;")
+        outer.setStyleSheet(f"background:{MANTLE};")
         outer_vb = QVBoxLayout(outer)
         outer_vb.setContentsMargins(0, 0, 0, 0)
         outer_vb.setSpacing(0)
@@ -281,14 +311,12 @@ class TargetWindow(QtWidgets.QMainWindow):
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         scroll.setStyleSheet(
-            "QScrollArea { background:#181825; border:none; }"
-            "QScrollBar:vertical { background:#181825; width:4px; }"
-            "QScrollBar::handle:vertical { background:#45475A; border-radius:2px; min-height:20px; }"
-            "QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height:0; }"
+            f"QScrollArea {{ background:{MANTLE}; border:none; }}"
+            + SCROLLBAR_V_THIN
         )
 
         inner = QWidget()
-        inner.setStyleSheet("background:#181825;")
+        inner.setStyleSheet(f"background:{MANTLE};")
         vb = QVBoxLayout(inner)
         vb.setContentsMargins(0, 4, 0, 4)
         vb.setSpacing(0)
@@ -308,7 +336,7 @@ class TargetWindow(QtWidgets.QMainWindow):
             sep = QFrame()
             sep.setFrameShape(QFrame.HLine)
             sep.setFixedHeight(1)
-            sep.setStyleSheet("background:#313244; border:none;")
+            sep.setStyleSheet(f"background:{SURFACE0}; border:none;")
             sep_layout.addWidget(sep)
             vb.addWidget(sep_wrap)
 
@@ -338,25 +366,25 @@ class TargetWindow(QtWidgets.QMainWindow):
         _newTabBtn.setObjectName("newBrowserTabButton")
         _newTabBtn.setFixedSize(28, 28)
         _newTabBtn.setToolTip("New tab")
-        _newTabBtn.setStyleSheet("""
-            QPushButton {
-                color: #CDD6F4;
+        _newTabBtn.setStyleSheet(f"""
+            QPushButton {{
+                color: {TEXT};
                 background: transparent;
-                border: 1px solid #45475A;
+                border: 1px solid {SURFACE1};
                 border-radius: 4px;
                 font-size: 16px;
                 font-weight: bold;
                 padding: 0px;
                 min-width: 0px;
-            }
-            QPushButton:hover {
-                background: #313244;
-                border-color: #89B4FA;
-                color: #89B4FA;
-            }
-            QPushButton:pressed {
-                background: #45475A;
-            }
+            }}
+            QPushButton:hover {{
+                background: {SURFACE0};
+                border-color: {BLUE};
+                color: {BLUE};
+            }}
+            QPushButton:pressed {{
+                background: {SURFACE1};
+            }}
         """)
         _newTabBtn.clicked.connect(self.openNewBrowserTab)
         self.browserTabWidget.setCornerWidget(_newTabBtn, Qt.TopRightCorner)
@@ -386,7 +414,7 @@ class TargetWindow(QtWidgets.QMainWindow):
         scope_root.setContentsMargins(24, 20, 24, 24)
         scope_root.setSpacing(16)
 
-        card, card_vb = _card("Project Scope", "#A6E3A1")
+        card, card_vb = _card("Project Scope", GREEN)
         self._scopeEditor = ScopeEditorWidget(repository=self._repo, parent=card)
         card_vb.addWidget(self._scopeEditor)
         scope_root.addWidget(card, stretch=1)
@@ -395,43 +423,30 @@ class TargetWindow(QtWidgets.QMainWindow):
         scope_scroll.setWidgetResizable(True)
         scope_scroll.setFrameShape(QFrame.NoFrame)
         scope_scroll.setStyleSheet(
-            "QScrollArea{background:#181825;border:none;}"
-            "QScrollBar:vertical{background:#181825;width:8px;border:none;}"
-            "QScrollBar::handle:vertical{background:#313244;border-radius:4px;min-height:20px;}"
+            f"QScrollArea{{background:{MANTLE};border:none;}}"
+            + SCROLLBAR_V
         )
         scope_scroll.setWidget(scope_page)
 
         # ── Combine into a tabbed container ───────────────────────────────────
         tabs = _QTabWidget()
-        tabs.setStyleSheet("""
-            QTabWidget::pane {
-                border: none;
-                background: #1E1E2E;
-            }
-            QTabBar::tab {
-                background: #181825;
-                color: #6C7086;
-                border: none;
-                border-bottom: 2px solid transparent;
-                padding: 6px 18px;
-                font-size: 9px;
-            }
-            QTabBar::tab:selected {
-                color: #CDD6F4;
-                border-bottom: 2px solid #CBA6F7;
-                background: #1E1E2E;
-            }
-            QTabBar::tab:hover:!selected {
-                color: #CDD6F4;
-                background: #313244;
-            }
-        """)
+        tabs.setStyleSheet(TAB_BAR)
         self._sessionManager = SessionManagerWidget(repo=self._repo, parent=self)
         self._sessionManager.sessions_changed.connect(self._on_sessions_changed)
 
-        tabs.addTab(info_widget,           "Target")
-        tabs.addTab(scope_scroll,          "Scope")
-        tabs.addTab(self._sessionManager,  "Sessions")
+        # ── Notes tab ─────────────────────────────────────────────────────────
+        notes_widget = self._build_notes_widget()
+
+        # ── Testing Flow tab ──────────────────────────────────────────────────
+        self._methodologyWidget = TestingMethodologyWidget(
+            project_dir=self.projectDirPath, repo=self._repo, parent=self
+        )
+
+        tabs.addTab(info_widget,                "Target")
+        tabs.addTab(scope_scroll,               "Scope")
+        tabs.addTab(self._sessionManager,       "Sessions")
+        tabs.addTab(self._methodologyWidget,    "Testing Flow")
+        tabs.addTab(notes_widget,               "Notes")
         return tabs
 
     def _build_pipeline_page(self) -> QWidget:
@@ -600,35 +615,35 @@ class TargetWindow(QtWidgets.QMainWindow):
 
     def _send_to_repeater(self, request_text: str) -> None:
         self._repeaterPage.add_tab(request_text)
-        self._switch_page(9)   # Repeater is at index 9 in _NAV
+        self._switch_page(Page.REPEATER)
 
     def _send_to_intruder(self, request_text: str) -> None:
         self._intruderPage.load_request(request_text)
-        self._switch_page(10)  # Intruder is at index 10 in _NAV
+        self._switch_page(Page.INTRUDER)
 
     def _send_to_websocket(self, host: str, path: str) -> None:
         self._wsPage.load_connection(host, path)
-        self._switch_page(11)  # WebSockets is at index 11 in _NAV
+        self._switch_page(Page.WEBSOCKETS)
 
     def _send_to_decoder(self, text: str) -> None:
         self._decoderPage.load_text(text)
-        self._switch_page(12)  # Decoder is at index 12 in _NAV
+        self._switch_page(Page.DECODER)
 
     def _send_to_comparer_left(self, text: str) -> None:
         self._comparerPage.load_left(text)
-        self._switch_page(13)  # Comparer is at index 13 in _NAV
+        self._switch_page(Page.COMPARER)
 
     def _send_to_comparer_right(self, text: str) -> None:
         self._comparerPage.load_right(text)
-        self._switch_page(13)  # Comparer is at index 13 in _NAV
+        self._switch_page(Page.COMPARER)
 
     def _send_to_jwt(self, token: str) -> None:
         self._jwtPage.load_token(token)
-        self._switch_page(14)  # JWT is at index 14 in _NAV
+        self._switch_page(Page.JWT)
 
     def _send_to_graphql(self, raw: str) -> None:
         self._graphqlPage.load_request(raw)
-        self._switch_page(15)  # GraphQL is at index 15 in _NAV
+        self._switch_page(Page.GRAPHQL)
 
     def _on_sessions_changed(self) -> None:
         if hasattr(self, '_repeaterPage'):
@@ -637,13 +652,13 @@ class TargetWindow(QtWidgets.QMainWindow):
             self._intruderPage.refresh_sessions()
 
     def OpenIntruderWindow(self):
-        self._switch_page(10)
+        self._switch_page(Page.INTRUDER)
 
     def OpenWebSocketWindow(self):
-        self._switch_page(11)
+        self._switch_page(Page.WEBSOCKETS)
 
     def OpenInterceptWindow(self):
-        self._switch_page(8)
+        self._switch_page(Page.INTERCEPT)
 
     def _sync_proxy_traffic(self) -> None:
         """Extract data from proxy traffic DB and upsert into project results."""
@@ -677,20 +692,18 @@ class TargetWindow(QtWidgets.QMainWindow):
         if hasattr(self, "_networkPage"):
             self._networkPage.refresh()
 
-    def _build_notes_page(self) -> QWidget:
-        from PySide6.QtGui import QFont
+    def _build_notes_widget(self) -> QWidget:
         page = QWidget()
         vb = QVBoxLayout(page)
-        vb.setContentsMargins(8, 4, 8, 8)
+        vb.setContentsMargins(0, 0, 0, 0)
         vb.setSpacing(0)
-        hdr = QLabel("Notes")
-        hdr.setStyleSheet("color:#6C7086; font-size:10px; padding:2px 0;")
-        vb.addWidget(hdr)
         self._notesEdit = QTextEdit()
-        self._notesEdit.setFont(QFont("Cascadia Code", 10))
         self._notesEdit.setPlaceholderText(f"Notes for {self.main_server_name}…")
-        self._notesEdit.setStyleSheet("""
-            QTextEdit { background:#1E1E2E; color:#CDD6F4; border:none; padding:8px; }
+        self._notesEdit.setStyleSheet(f"""
+            QTextEdit {{
+                background:{BASE}; color:{TEXT};
+                border:none; padding:12px;
+            }}
         """)
         vb.addWidget(self._notesEdit)
         self._load_notes()
@@ -714,13 +727,13 @@ class TargetWindow(QtWidgets.QMainWindow):
 
     def _browser_tab_context_menu(self, pos: QPoint):
         menu = QMenu(self)
-        menu.setStyleSheet("""
-            QMenu {
-                background:#1E1E2E; color:#CDD6F4;
-                border:1px solid #313244; border-radius:4px;
-            }
-            QMenu::item:selected { background:#313244; }
-            QMenu::separator { background:#313244; height:1px; margin:2px 8px; }
+        menu.setStyleSheet(f"""
+            QMenu {{
+                background:{BASE}; color:{TEXT};
+                border:1px solid {SURFACE0}; border-radius:4px;
+            }}
+            QMenu::item:selected {{ background:{SURFACE0}; }}
+            QMenu::separator {{ background:{SURFACE0}; height:1px; margin:2px 8px; }}
         """)
 
         new_act   = menu.addAction("◉  New Tab")
@@ -752,19 +765,19 @@ class TargetWindow(QtWidgets.QMainWindow):
     # ── Public API ────────────────────────────────────────────────────────────
 
     def OpenPipelineWindow(self):
-        self._switch_page(2)
+        self._switch_page(Page.PIPELINE)
 
     def OpenDockerManager(self):
-        self._switch_page(3)
+        self._switch_page(Page.DOCKER)
 
     def OpenResultsWindow(self):
-        self._switch_page(4)
+        self._switch_page(Page.RESULTS)
 
     def OpenNetworkWindow(self):
-        self._switch_page(5)
+        self._switch_page(Page.NETWORK)
 
     def OpenTestTargetWindow(self):
-        self._switch_page(5)   # redirects to Network (Tools removed)
+        self._switch_page(Page.NETWORK)
 
     def OpenCertSetup(self):
         dlg = CertSetupDialog(self)
@@ -786,7 +799,7 @@ class TargetWindow(QtWidgets.QMainWindow):
         if bw:
             self.browserTabWidget.addTab(bw, tab_name)
             self.browserTabWidget.setCurrentWidget(bw)
-            self._switch_page(0)
+            self._switch_page(Page.BROWSER)
 
     def _close_browser_tab_by_index(self, index: int):
         if index > 0:
@@ -808,7 +821,7 @@ class TargetWindow(QtWidgets.QMainWindow):
             QVBoxLayout(dlg).addWidget(tb)
             dlg.exec()
         except Exception:
-            pass
+            log.warning("Tech detection display failed", exc_info=True)
 
     def showdevTools(self):
         pass
@@ -848,14 +861,14 @@ class TargetWindow(QtWidgets.QMainWindow):
                 with open(p) as f:
                     self._notesEdit.setPlainText(f.read())
             except Exception:
-                pass
+                log.warning("Failed to load notes from %s", p, exc_info=True)
 
     def _save_notes(self):
         try:
             with open(self._notes_path(), "w") as f:
                 f.write(self._notesEdit.toPlainText())
         except Exception:
-            pass
+            log.warning("Failed to save notes to %s", self._notes_path(), exc_info=True)
 
     # ── Project metadata ──────────────────────────────────────────────────────
 
@@ -869,7 +882,7 @@ class TargetWindow(QtWidgets.QMainWindow):
                 self.target_url = meta.get("target_url", "")
                 return
             except Exception:
-                pass
+                log.warning("Failed to load project.json from %s", meta_path, exc_info=True)
         self.main_server_name = self.projectDirPath.rstrip("/").split("/")[-1]
         self.target_url = ""
 
@@ -880,6 +893,6 @@ class TargetWindow(QtWidgets.QMainWindow):
     # ── Legacy stubs ──────────────────────────────────────────────────────────
 
     def AddTopMenu(self):   pass
-    def ViewTarget(self):   self._switch_page(1)
+    def ViewTarget(self):   self._switch_page(Page.TARGET)
     def ViewTerminal(self): pass
-    def ViewNotepad(self):  self._switch_page(16)  # Notes at 16
+    def ViewNotepad(self):  self._switch_page(Page.TARGET)
