@@ -385,9 +385,11 @@ class _GoSpider(ToolConfig):
     dockerfile: str = _DF + "Dockerfile.gospider"
 
     def build_command(self, url: str = "", depth: str = "3",
-                      concurrent: str = "10", timeout: str = "300", **_) -> str:
+                      concurrent: str = "10", timeout: str = "300",
+                      input_file: str = "", **_) -> str:
+        site = f"-S {input_file}" if input_file else f"-s {url}"
         return (
-            f"gospider -s {url} -c {concurrent} -d {depth} -t 3"
+            f"gospider {site} -c {concurrent} -d {depth} -t 3"
             f" -m {timeout} --js --sitemap --robots -a -w -r"
             f" --blacklist '.(jpg|jpeg|gif|png|css|woff|woff2|ico|svg|ttf|eot)'"
             f" -o /output/gospider_results.txt"
@@ -411,9 +413,10 @@ class _Katana(ToolConfig):
     category: str = "crawl"
 
     def build_command(self, url: str = "", depth: str = "3",
-                      concurrency: str = "25", **_) -> str:
+                      concurrency: str = "25", input_file: str = "", **_) -> str:
+        src = f"-list {input_file}" if input_file else f"-u {url}"
         return (
-            f"katana -u {url} -d {depth} -jc -j -silent"
+            f"katana {src} -d {depth} -jc -j -silent"
             f" -c {concurrency} -p {concurrency} -retry 3 -rd 1 -rl 10"
             f" -timeout 120 -o /output/katana_results.txt"
         )
@@ -435,9 +438,11 @@ class _WaybackURLs(ToolConfig):
     category: str = "crawl"
     dockerfile: str = _DF + "Dockerfile.waybackurls"
 
-    def build_command(self, domain: str = "", dates: bool = False, **_) -> str:
+    def build_command(self, domain: str = "", dates: bool = False,
+                      input_file: str = "", **_) -> str:
         flags = "--dates" if dates else ""
-        return f"waybackurls {flags} {domain} | tee /output/waybackurls_results.txt"
+        src = f"cat {input_file}" if input_file else f"echo {domain}"
+        return f"{src} | waybackurls {flags} | tee /output/waybackurls_results.txt"
 
     def param_spec(self):
         return [
@@ -456,8 +461,11 @@ class _GAU(ToolConfig):
     dockerfile: str = _DF + "Dockerfile.gau"
 
     def build_command(self, domain: str = "", providers: str = "",
-                      threads: str = "1", **_) -> str:
-        cmd = f"gau --threads {threads} --o /output/gau_results.txt {domain}"
+                      threads: str = "1", input_file: str = "", **_) -> str:
+        if input_file:
+            cmd = f"cat {input_file} | gau --threads {threads} --o /output/gau_results.txt"
+        else:
+            cmd = f"gau --threads {threads} --o /output/gau_results.txt {domain}"
         if providers:
             cmd += f" --providers {providers}"
         return cmd
@@ -601,9 +609,11 @@ class _Arjun(ToolConfig):
     dockerfile: str = _DF + "Dockerfile.arjun"
 
     def build_command(self, url: str = "", method: str = "GET",
-                      threads: str = "5", delay: str = "0", **_) -> str:
+                      threads: str = "5", delay: str = "0",
+                      input_file: str = "", **_) -> str:
+        src = f"-i {input_file}" if input_file else f"-u {url}"
         return (
-            f"arjun -u {url} -m {method} -t {threads}"
+            f"arjun {src} -m {method} -t {threads}"
             f" -d {delay} --stable -o /output/arjun_results.json"
         )
 
@@ -652,9 +662,11 @@ class _X8(ToolConfig):
     dockerfile: str = _DF + "Dockerfile.x8"
 
     def build_command(self, url: str = "", method: str = "GET",
-                      workers: str = "10", body_type: str = "urlencode", **_) -> str:
+                      workers: str = "10", body_type: str = "urlencode",
+                      input_file: str = "", **_) -> str:
+        src = input_file if input_file else url
         cmd = (
-            f"x8 -u {url} -o /output/x8_results.txt"
+            f"x8 -u {src} -o /output/x8_results.txt"
             f" -W {workers} -X {method}"
             f" --learn-requests 9 --verify"
         )
@@ -786,6 +798,100 @@ class _JwtTool(ToolConfig):
         ]
 
 
+# ── XSS / Reflection ─────────────────────────────────────────────────────────
+
+@dataclass
+class _Kxss(ToolConfig):
+    key: str = "kxss"
+    display_name: str = "kxss"
+    image: str = "awe/kxss"
+    description: str = "Probe URL parameters for reflection and which special characters survive unescaped"
+    category: str = "xss"
+    dockerfile: str = _DF + "Dockerfile.kxss"
+
+    def build_command(self, input_file: str = "", **_) -> str:
+        src = f"cat {input_file}" if input_file else "cat /input/urls.txt"
+        return f"{src} | kxss | tee /output/kxss_results.txt"
+
+    def param_spec(self):
+        return [
+            {"key": "input_file", "label": "URL list (container path)", "type": "text",
+             "default": "/input/urls.txt"},
+        ]
+
+
+@dataclass
+class _Gxss(ToolConfig):
+    key: str = "gxss"
+    display_name: str = "Gxss"
+    image: str = "awe/gxss"
+    description: str = "Concurrent GET parameter reflection checker — find which params echo input back"
+    category: str = "xss"
+    dockerfile: str = _DF + "Dockerfile.gxss"
+
+    def build_command(self, input_file: str = "", concurrency: str = "30",
+                      cookie: str = "", **_) -> str:
+        src = input_file if input_file else "/input/urls.txt"
+        cmd = f"gxss -i {src} -c {concurrency} | tee /output/gxss_results.txt"
+        if cookie:
+            cmd = f"gxss -i {src} -c {concurrency} -H 'Cookie: {cookie}' | tee /output/gxss_results.txt"
+        return cmd
+
+    def param_spec(self):
+        return [
+            {"key": "input_file",  "label": "URL list (container path)", "type": "text",
+             "default": "/input/urls.txt"},
+            {"key": "concurrency", "label": "Concurrency",               "type": "text",
+             "default": "30"},
+            {"key": "cookie",      "label": "Cookie header (optional)",  "type": "text",
+             "default": ""},
+        ]
+
+
+@dataclass
+class _Dalfox(ToolConfig):
+    key: str = "dalfox"
+    display_name: str = "Dalfox"
+    image: str = "hahwul/dalfox:latest"
+    description: str = "XSS scanner — detects reflection context, generates and verifies payloads"
+    category: str = "xss"
+
+    def build_command(self, url: str = "", mode: str = "url",
+                      cookie: str = "", headers: str = "",
+                      data: str = "", worker: str = "10",
+                      timeout: str = "10", blind: str = "",
+                      input_file: str = "", **_) -> str:
+        if input_file:
+            cmd = f"dalfox file {input_file} -o /output/dalfox_results.txt --format json -w {worker} --timeout {timeout}"
+        elif mode == "pipe":
+            cmd = f"dalfox pipe -o /output/dalfox_results.txt --format json -w {worker} --timeout {timeout}"
+        else:
+            cmd = f"dalfox url {url} -o /output/dalfox_results.txt --format json -w {worker} --timeout {timeout}"
+        if cookie:
+            cmd += f" --cookie '{cookie}'"
+        if headers:
+            for h in headers.split(";;"):
+                cmd += f" --header '{h.strip()}'"
+        if data:
+            cmd += f" --data '{data}'"
+        if blind:
+            cmd += f" --blind {blind}"
+        return cmd
+
+    def param_spec(self):
+        return [
+            {"key": "url",     "label": "Target URL",              "type": "text",  "default": ""},
+            {"key": "mode",    "label": "Mode",                    "type": "combo",
+             "options": ["url", "pipe", "sxss"],                   "default": "url"},
+            {"key": "worker",  "label": "Workers",                 "type": "text",  "default": "10"},
+            {"key": "timeout", "label": "Timeout (s)",             "type": "text",  "default": "10"},
+            {"key": "cookie",  "label": "Cookie",                  "type": "text",  "default": ""},
+            {"key": "headers", "label": "Headers (;; separated)",  "type": "text",  "default": ""},
+            {"key": "data",    "label": "POST body",               "type": "text",  "default": ""},
+            {"key": "blind",   "label": "Blind XSS callback URL",  "type": "text",  "default": ""},
+        ]
+
+
 # ── GraphQL Analysis ─────────────────────────────────────────────────────────
 
 @dataclass
@@ -808,6 +914,208 @@ class _GraphQLTools(ToolConfig):
     def param_spec(self):
         return [
             {"key": "endpoint", "label": "GraphQL Endpoint URL", "type": "text", "default": ""},
+        ]
+
+
+# ── Screenshot ────────────────────────────────────────────────────────────────
+
+@dataclass
+class _Gowitness(ToolConfig):
+    key: str = "gowitness"
+    display_name: str = "Gowitness"
+    image: str = "awe/gowitness"
+    description: str = "Screenshot live HTTP hosts — visual triage of large attack surfaces"
+    category: str = "screenshot"
+    dockerfile: str = _DF + "Dockerfile.gowitness"
+
+    def get_volumes(self, output_dir: str, input_dir: str | None = None) -> dict:
+        os.makedirs(output_dir, exist_ok=True)
+        os.makedirs(os.path.join(output_dir, "screenshots"), exist_ok=True)
+        vols = {output_dir: {"bind": "/output", "mode": "rw"}}
+        if input_dir:
+            vols[input_dir] = {"bind": "/input", "mode": "ro"}
+        return vols
+
+    def build_command(self, input_file: str = "", url: str = "",
+                      timeout: str = "10", **_) -> str:
+        src = f"-f {input_file}" if input_file else f"-f /dev/stdin"
+        return (
+            f"gowitness scan file {src}"
+            f" -s /output/screenshots/ --write-jsonl"
+            f" --timeout {timeout} --log-scan-errors"
+        )
+
+    def param_spec(self):
+        return [
+            {"key": "timeout", "label": "Per-URL timeout (s)", "type": "text", "default": "10"},
+        ]
+
+
+# ── Subdomain takeover ────────────────────────────────────────────────────────
+
+@dataclass
+class _Subzy(ToolConfig):
+    key: str = "subzy"
+    display_name: str = "Subzy"
+    image: str = "awe/subzy"
+    description: str = "Subdomain takeover checker — finds unclaimed cloud/SaaS resources"
+    category: str = "vuln"
+    dockerfile: str = _DF + "Dockerfile.subzy"
+
+    def build_command(self, input_file: str = "", domain: str = "",
+                      timeout: str = "10", concurrency: str = "10", **_) -> str:
+        targets = f"--targets {input_file}" if input_file else f"--target {domain}"
+        return (
+            f"subzy run {targets} --timeout {timeout}"
+            f" --concurrency {concurrency} --hide-fails"
+            f" --output /output/subzy_results.json"
+        )
+
+    def param_spec(self):
+        return [
+            {"key": "timeout",     "label": "Timeout (s)",   "type": "text", "default": "10"},
+            {"key": "concurrency", "label": "Concurrency",   "type": "text", "default": "10"},
+        ]
+
+
+# ── WAF detection ─────────────────────────────────────────────────────────────
+
+@dataclass
+class _Wafw00f(ToolConfig):
+    key: str = "wafw00f"
+    display_name: str = "wafw00f"
+    image: str = "awe/wafw00f"
+    description: str = "WAF fingerprinting — detect and identify web application firewalls"
+    category: str = "vuln"
+    dockerfile: str = _DF + "Dockerfile.wafw00f"
+
+    def build_command(self, input_file: str = "", url: str = "", **_) -> str:
+        src = f"-i {input_file}" if input_file else url
+        return f"wafw00f {src} -f json -o /output/wafw00f_results.json"
+
+    def param_spec(self):
+        return [
+            {"key": "url", "label": "Target URL (single)", "type": "text", "default": ""},
+        ]
+
+
+# ── SQL injection ─────────────────────────────────────────────────────────────
+
+@dataclass
+class _Sqlmap(ToolConfig):
+    key: str = "sqlmap"
+    display_name: str = "sqlmap"
+    image: str = "awe/sqlmap"
+    description: str = "Automated SQL injection detection and exploitation"
+    category: str = "vuln"
+    dockerfile: str = _DF + "Dockerfile.sqlmap"
+
+    def build_command(self, input_file: str = "", url: str = "",
+                      level: str = "1", risk: str = "1",
+                      threads: str = "5", dbms: str = "", **_) -> str:
+        src = f"-m {input_file}" if input_file else f"-u {url}"
+        cmd = (
+            f"python3 sqlmap.py {src} --batch --level {level} --risk {risk}"
+            f" -t {threads} --output-dir /output/"
+        )
+        if dbms:
+            cmd += f" --dbms {dbms}"
+        return cmd
+
+    def param_spec(self):
+        return [
+            {"key": "url",     "label": "Target URL",     "type": "text",  "default": ""},
+            {"key": "level",   "label": "Level (1-5)",    "type": "combo",
+             "options": ["1", "2", "3", "4", "5"],        "default": "1"},
+            {"key": "risk",    "label": "Risk (1-3)",     "type": "combo",
+             "options": ["1", "2", "3"],                  "default": "1"},
+            {"key": "threads", "label": "Threads",        "type": "text",  "default": "5"},
+            {"key": "dbms",    "label": "DBMS (optional)","type": "text",  "default": ""},
+        ]
+
+
+# ── API discovery ─────────────────────────────────────────────────────────────
+
+@dataclass
+class _Kiterunner(ToolConfig):
+    key: str = "kiterunner"
+    display_name: str = "Kiterunner"
+    image: str = "awe/kiterunner"
+    description: str = "API route discovery using assetnote wordlists — finds hidden REST/GraphQL endpoints"
+    category: str = "crawl"
+    dockerfile: str = _DF + "Dockerfile.kiterunner"
+
+    def build_command(self, input_file: str = "", url: str = "",
+                      wordlist: str = "apiroutes-210228:20000",
+                      workers: str = "20", fail_codes: str = "404", **_) -> str:
+        target = input_file if input_file else url
+        return (
+            f"kr scan {target} -A={wordlist}"
+            f" -x {workers} --fail-status-codes {fail_codes}"
+            f" -o /output/kiterunner_results.txt"
+        )
+
+    def param_spec(self):
+        return [
+            {"key": "url",        "label": "Target URL",             "type": "text",
+             "default": ""},
+            {"key": "wordlist",   "label": "Assetnote wordlist",     "type": "text",
+             "default": "apiroutes-210228:20000"},
+            {"key": "workers",    "label": "Workers",                "type": "text",
+             "default": "20"},
+            {"key": "fail_codes", "label": "Fail status codes",      "type": "text",
+             "default": "404"},
+        ]
+
+
+# ── CORS misconfiguration ─────────────────────────────────────────────────────
+
+@dataclass
+class _Corsy(ToolConfig):
+    key: str = "corsy"
+    display_name: str = "Corsy"
+    image: str = "awe/corsy"
+    description: str = "CORS misconfiguration scanner — wildcard origins, credential leakage"
+    category: str = "vuln"
+    dockerfile: str = _DF + "Dockerfile.corsy"
+
+    def build_command(self, input_file: str = "", url: str = "",
+                      threads: str = "10", headers: str = "", **_) -> str:
+        src = f"-i {input_file}" if input_file else f"-u {url}"
+        cmd = f"python3 corsy.py {src} -t {threads} -o /output/corsy_results.json"
+        if headers:
+            cmd += f" --headers '{headers}'"
+        return cmd
+
+    def param_spec(self):
+        return [
+            {"key": "url",     "label": "Target URL (single)", "type": "text",  "default": ""},
+            {"key": "threads", "label": "Threads",             "type": "text",  "default": "10"},
+            {"key": "headers", "label": "Extra headers",       "type": "text",  "default": ""},
+        ]
+
+
+# ── Secret / credential exposure ──────────────────────────────────────────────
+
+@dataclass
+class _SecretFinder(ToolConfig):
+    key: str = "secretfinder"
+    display_name: str = "SecretFinder"
+    image: str = "awe/secretfinder"
+    description: str = "Scan JavaScript files for API keys, tokens and credentials"
+    category: str = "vuln"
+    dockerfile: str = _DF + "Dockerfile.secretfinder"
+
+    def build_command(self, url: str = "", cookies: str = "", **_) -> str:
+        cmd = f"python3 SecretFinder.py -i {url} -e -o cli | tee /output/secretfinder_results.txt"
+        if cookies:
+            cmd = f"python3 SecretFinder.py -i {url} -e -c '{cookies}' -o cli | tee /output/secretfinder_results.txt"
+        return cmd
+
+    def param_spec(self):
+        return [
+            {"key": "url",     "label": "Target URL",         "type": "text", "default": ""},
+            {"key": "cookies", "label": "Cookies (optional)", "type": "text", "default": ""},
         ]
 
 
@@ -845,6 +1153,23 @@ TOOL_REGISTRY: dict[str, ToolConfig] = {
         _Arjun(),
         _Parameth(),
         _X8(),
+        # xss / reflection
+        _Kxss(),
+        _Gxss(),
+        _Dalfox(),
+        # sqli
+        _Sqlmap(),
+        # screenshot
+        _Gowitness(),
+        # takeover / waf
+        _Subzy(),
+        _Wafw00f(),
+        # api discovery
+        _Kiterunner(),
+        # cors
+        _Corsy(),
+        # secrets
+        _SecretFinder(),
         # vulnerability scanning
         _Nuclei(),
         _JwtTool(),

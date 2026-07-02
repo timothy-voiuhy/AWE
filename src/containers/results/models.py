@@ -5,7 +5,6 @@ Each model has a `key` property used for deduplication, a `sources` list trackin
 which tools produced it, and a `merge()` method for combining duplicates.
 """
 from dataclasses import dataclass, field
-from typing import Optional
 
 
 @dataclass
@@ -311,6 +310,37 @@ class CdnResult(BaseResult):
         return self
 
 
+# ── Screenshot results (gowitness) ───────────────────────────────────────────
+
+@dataclass
+class ScreenshotResult(BaseResult):
+    url: str = ""
+    final_url: str = ""
+    status_code: int = 0
+    title: str = ""
+    screenshot_path: str = ""
+    technologies: list[str] = field(default_factory=list)
+
+    @property
+    def key(self) -> str:
+        return self.url.lower().rstrip("/")
+
+    def merge(self, other: "ScreenshotResult") -> "ScreenshotResult":
+        super().merge(other)
+        for t in other.technologies:
+            if t not in self.technologies:
+                self.technologies.append(t)
+        if not self.title and other.title:
+            self.title = other.title
+        if not self.screenshot_path and other.screenshot_path:
+            self.screenshot_path = other.screenshot_path
+        return self
+
+    @property
+    def tech_str(self) -> str:
+        return ", ".join(self.technologies)
+
+
 # ── Wordlist (CeWL output) ────────────────────────────────────────────────────
 
 @dataclass
@@ -351,18 +381,19 @@ class CustomNode(BaseResult):
 # ── Category → model class mapping ───────────────────────────────────────────
 
 CATEGORY_MODEL = {
-    "subdomain": SubdomainResult,
-    "dns":       DNSRecord,
-    "portscan":  PortResult,
-    "http":      LiveHost,
-    "crawl":     EndpointResult,
-    "params":    ParamResult,
-    "fuzz":      FuzzResult,
-    "vuln":      VulnFinding,
-    "osint":     OSINTResult,
-    "cdn":    CdnResult,
-    "info":   InfoNote,
-    "custom": CustomNode,
+    "subdomain":  SubdomainResult,
+    "dns":        DNSRecord,
+    "portscan":   PortResult,
+    "http":       LiveHost,
+    "crawl":      EndpointResult,
+    "params":     ParamResult,
+    "fuzz":       FuzzResult,
+    "vuln":       VulnFinding,
+    "osint":      OSINTResult,
+    "cdn":        CdnResult,
+    "info":       InfoNote,
+    "custom":     CustomNode,
+    "screenshot": ScreenshotResult,
 }
 
 

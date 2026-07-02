@@ -17,7 +17,8 @@ from urllib.parse import urlsplit
 
 from containers.results.models import (
     DNSRecord, EndpointResult, FuzzResult, LiveHost, OSINTResult,
-    ParamResult, PortResult, SubdomainResult, VulnFinding, WordlistEntry,
+    ParamResult, PortResult, ScreenshotResult, SubdomainResult,
+    VulnFinding, WordlistEntry,
 )
 
 logger = logging.getLogger(__name__)
@@ -613,6 +614,284 @@ def parse_graphql_tools(output_dir: str) -> list:
     return results
 
 
+# ── XSS / reflection parsers ─────────────────────────────────────────────────
+
+def parse_kxss(output_dir: str) -> list[VulnFinding]:
+    results = []
+    for line in _read_lines(os.path.join(output_dir, "kxss_results.txt")):
+        url_m = re.search(r"(https?://\S+)", line)
+        chars_m = re.search(r"chars?:\s*(.+)", line, re.I)
+        if not url_m:
+            continue
+        chars = chars_m.group(1).strip() if chars_m else "unknown"
+        r = VulnFinding(
+            template_id="kxss",
+            name="Reflected Parameter Detected",
+            severity="medium",
+            url=url_m.group(1),
+            matched=line.strip(),
+            description=f"Parameter reflected unescaped. Surviving chars: {chars}",
+            tags=["xss", "reflection"],
+        )
+        r.add_source("kxss")
+        results.append(r)
+    return results
+
+
+def parse_gxss(output_dir: str) -> list[VulnFinding]:
+    results = []
+    for line in _read_lines(os.path.join(output_dir, "gxss_results.txt")):
+        if not _URL_RE.match(line):
+            continue
+        r = VulnFinding(
+            template_id="gxss",
+            name="Reflected Parameter Detected",
+            severity="medium",
+            url=line,
+            matched=line,
+            description="Parameter value reflected in response body.",
+            tags=["xss", "reflection"],
+        )
+        r.add_source("gxss")
+        results.append(r)
+    return results
+
+
+def parse_dalfox(output_dir: str) -> list[VulnFinding]:
+    results = []
+    for obj in _read_jsonl(os.path.join(output_dir, "dalfox_results.txt")):
+        raw_sev = obj.get("severity", obj.get("type", "medium"))
+        sev_map = {"G": "high", "E": "medium", "HIGH": "high",
+                   "MEDIUM": "medium", "LOW": "low"}
+        severity = sev_map.get(str(raw_sev).upper(), "medium")
+        url = obj.get("data", obj.get("url", ""))
+        r = VulnFinding(
+            template_id="dalfox",
+            name="Cross-Site Scripting (XSS)",
+            severity=severity,
+            url=url,
+            matched=obj.get("poc", obj.get("payload", url)),
+            description=f"Param: {obj.get('param', '?')} — Payload: {obj.get('payload', '')}",
+            tags=["xss", "cwe-79"],
+        )
+        r.add_source("dalfox")
+        results.append(r)
+    return results
+
+
+# ── SQL injection parsers ─────────────────────────────────────────────────────
+
+def parse_sqlmap(output_dir: str) -> list[VulnFinding]:
+    results = []
+    _INJECT_RE = re.compile(
+        r"(parameter\s+'?([^']+)'?\s+is\s+'([^']+)'\s+injectable"
+        r"|identified the following injection point"
+        r"|Type:\s+(.+))",
+        re.I,
+    )
+    for log_file in Path(output_dir).rglob("log"):
+        current_target = ""
+        for line in _read_lines(str(log_file)):
+            target_m = re.search(r"testing URL\s+'?(https?://\S+?)'?$", line, re.I)
+            if target_m:
+                current_target = target_m.group(1)
+            if _INJECT_RE.search(line):
+                r = VulnFinding(
+                    template_id="sqlmap",
+                    name="SQL Injection",
+                    severity="critical",
+                    url=current_target,
+                    matched=line.strip(),
+                    description=line.strip(),
+                    tags=["sqli", "cwe-89"],
+                )
+                r.add_source("sqlmap")
+                results.append(r)
+    return results
+
+
+# ── Screenshot parsers ────────────────────────────────────────────────────────
+
+def parse_gowitness(output_dir: str) -> list[ScreenshotResult]:
+    results = []
+    for obj in _read_jsonl(os.path.join(output_dir, "gowitness.jsonl")):
+        url = obj.get("url", "")
+        if not url:
+            continue
+        techs = []
+        for t in obj.get("technologies", []) or []:
+            name = t.get("name", "") if isinstance(t, dict) else str(t)
+            if name:
+                techs.append(name)
+        r = ScreenshotResult(
+            url=url,
+            final_url=obj.get("final_url", url),
+            status_code=obj.get("response_code", obj.get("status_code", 0)),
+            title=obj.get("title", ""),
+            screenshot_path=obj.get("screenshot_path", ""),
+            technologies=techs,
+        )
+        r.add_source("gowitness")
+        results.append(r)
+    return results
+
+
+# ── Subdomain takeover parsers ────────────────────────────────────────────────
+
+def parse_subzy(output_dir: str) -> list[VulnFinding]:
+    results = []
+    data = _read_json(os.path.join(output_dir, "subzy_results.json"))
+    if isinstance(data, list):
+        for entry in data:
+            if not isinstance(entry, dict):
+                continue
+            if not entry.get("vulnerable", False):
+                continue
+            subdomain = entry.get("subdomain", entry.get("target", ""))
+            service   = entry.get("service", entry.get("fingerprint", ""))
+            r = VulnFinding(
+                template_id="subzy",
+                name="Subdomain Takeover",
+                severity="high",
+                url=subdomain,
+                matched=f"{subdomain} → {service}",
+                description=f"Unclaimed {service} resource; subdomain may be hijacked.",
+                tags=["takeover", "subdomain"],
+            )
+            r.add_source("subzy")
+            results.append(r)
+    else:
+        for line in _read_lines(os.path.join(output_dir, "subzy_results.txt")):
+            if "[VULNERABLE]" not in line.upper():
+                continue
+            r = VulnFinding(
+                template_id="subzy",
+                name="Subdomain Takeover",
+                severity="high",
+                url=line,
+                matched=line.strip(),
+                description=line.strip(),
+                tags=["takeover", "subdomain"],
+            )
+            r.add_source("subzy")
+            results.append(r)
+    return results
+
+
+# ── WAF detection parsers ─────────────────────────────────────────────────────
+
+def parse_wafw00f(output_dir: str) -> list[VulnFinding]:
+    results = []
+    data = _read_json(os.path.join(output_dir, "wafw00f_results.json"))
+    entries = data if isinstance(data, list) else ([data] if isinstance(data, dict) else [])
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        url      = entry.get("url", "")
+        detected = entry.get("detected", False)
+        firewall = entry.get("firewall", "Unknown WAF")
+        severity = "info" if detected else "info"
+        r = VulnFinding(
+            template_id="wafw00f",
+            name=f"WAF Detected: {firewall}" if detected else "No WAF Detected",
+            severity=severity,
+            url=url,
+            matched=firewall if detected else "none",
+            description=(
+                f"{firewall} is protecting {url}." if detected
+                else f"No WAF detected in front of {url}."
+            ),
+            tags=["waf", "recon"],
+        )
+        r.add_source("wafw00f")
+        results.append(r)
+    return results
+
+
+# ── CORS parsers ──────────────────────────────────────────────────────────────
+
+def parse_corsy(output_dir: str) -> list[VulnFinding]:
+    results = []
+    data = _read_json(os.path.join(output_dir, "corsy_results.json"))
+    if not isinstance(data, dict):
+        return results
+    for url, detail in data.items():
+        if not isinstance(detail, dict):
+            continue
+        cls = detail.get("class", "")
+        if not cls or cls.lower() in ("not vulnerable", "secure"):
+            continue
+        origin = detail.get("origin", "")
+        creds  = detail.get("credentials", False)
+        sev    = "high" if creds else "medium"
+        r = VulnFinding(
+            template_id="corsy",
+            name=f"CORS Misconfiguration: {cls}",
+            severity=sev,
+            url=url,
+            matched=f"Reflected origin: {origin}, credentials: {creds}",
+            description=(
+                f"{cls} CORS policy on {url}. "
+                f"Origin '{origin}' is reflected"
+                + (" with credentials." if creds else ".")
+            ),
+            tags=["cors", "cwe-942"],
+        )
+        r.add_source("corsy")
+        results.append(r)
+    return results
+
+
+# ── Secret / credential parsers ───────────────────────────────────────────────
+
+_SECRET_RE = re.compile(
+    r"\[(?:CRITICAL|HIGH|MEDIUM|LOW|INFO)\]\s*(.+?):\s*(.+)", re.I
+)
+
+def parse_secretfinder(output_dir: str) -> list[VulnFinding]:
+    results = []
+    for line in _read_lines(os.path.join(output_dir, "secretfinder_results.txt")):
+        m = _SECRET_RE.match(line)
+        if not m:
+            continue
+        secret_type = m.group(1).strip()
+        value       = m.group(2).strip()
+        sev_m = re.match(r"\[(CRITICAL|HIGH|MEDIUM|LOW|INFO)\]", line, re.I)
+        sev_map = {"critical": "critical", "high": "high",
+                   "medium": "medium", "low": "low", "info": "info"}
+        sev = sev_map.get((sev_m.group(1).lower() if sev_m else ""), "medium")
+        r = VulnFinding(
+            template_id="secretfinder",
+            name=f"Exposed Secret: {secret_type}",
+            severity=sev,
+            url="",
+            matched=value[:120],
+            description=f"{secret_type} found in JavaScript: {value[:200]}",
+            tags=["secrets", "exposure", "js"],
+        )
+        r.add_source("secretfinder")
+        results.append(r)
+    return results
+
+
+# ── API discovery parsers (kiterunner) ────────────────────────────────────────
+
+_KR_RE = re.compile(
+    r"(GET|POST|PUT|DELETE|PATCH|HEAD|OPTIONS)\s+\d+\s+\[.*?\]\s+(https?://\S+)", re.I
+)
+
+def parse_kiterunner(output_dir: str) -> list[EndpointResult]:
+    results = []
+    for line in _read_lines(os.path.join(output_dir, "kiterunner_results.txt")):
+        m = _KR_RE.search(line)
+        if not m:
+            continue
+        r = EndpointResult(url=m.group(2).rstrip("/"), method=m.group(1).upper())
+        r.add_source("kiterunner")
+        results.append(r)
+    return results
+
+
 # ── Master parser registry ────────────────────────────────────────────────────
 
 PARSERS: dict[str, callable] = {
@@ -650,6 +929,24 @@ PARSERS: dict[str, callable] = {
     "nuclei":        parse_nuclei,
     "jwt_tool":      parse_jwt_tool,
     "graphql_tools": parse_graphql_tools,
+    # xss / reflection
+    "kxss":          parse_kxss,
+    "gxss":          parse_gxss,
+    "dalfox":        parse_dalfox,
+    # sqli
+    "sqlmap":        parse_sqlmap,
+    # screenshot
+    "gowitness":     parse_gowitness,
+    # takeover
+    "subzy":         parse_subzy,
+    # waf
+    "wafw00f":       parse_wafw00f,
+    # cors
+    "corsy":         parse_corsy,
+    # secrets
+    "secretfinder":  parse_secretfinder,
+    # api
+    "kiterunner":    parse_kiterunner,
     # osint
     "github_recon":  parse_github_recon,
     "cloud_enum":    parse_cloud_enum,

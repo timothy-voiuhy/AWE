@@ -1,0 +1,8 @@
+FROM python:3.12-slim
+RUN apt-get update -qq && apt-get install -y --no-install-recommends \
+    git && rm -rf /var/lib/apt/lists/*
+RUN git clone --depth 1 https://github.com/s0md3v/Corsy.git /corsy
+WORKDIR /corsy
+RUN pip install --no-cache-dir requests
+RUN mkdir /output
+ENTRYPOINT ["python3", "corsy.py"]

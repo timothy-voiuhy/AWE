@@ -230,15 +230,16 @@ class AweRepository:
         Used to build input files for downstream pipeline stages.
         """
         _VALUE_FIELD = {
-            "subdomain": "domain",
-            "dns":       "name",
-            "portscan":  None,   # returns host:port
-            "http":      "url",
-            "crawl":     "url",
-            "params":    "endpoint",
-            "fuzz":      None,
-            "vuln":      "url",
-            "osint":     "value",
+            "subdomain":  "domain",
+            "dns":        "name",
+            "portscan":   None,   # returns host:port
+            "http":       "url",
+            "crawl":      "url",
+            "params":     "endpoint",
+            "fuzz":       None,
+            "vuln":       "url",
+            "osint":      "value",
+            "screenshot": "url",
         }
         field = _VALUE_FIELD.get(category, "value")
         cursor = self._db.results.find(

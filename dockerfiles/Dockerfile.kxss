@@ -1,0 +1,9 @@
+FROM golang:1.24-alpine AS builder
+RUN apk add --no-cache git
+RUN go install github.com/tomnomnom/kxss@latest
+
+FROM alpine:3.19
+RUN apk add --no-cache ca-certificates
+COPY --from=builder /go/bin/kxss /usr/local/bin/kxss
+RUN mkdir /output
+ENTRYPOINT ["kxss"]
