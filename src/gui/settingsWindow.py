@@ -745,13 +745,47 @@ class SettingsWidget(QWidget):
 
         vb.addWidget(_section_label("Multi-Agent Runtime"))
         vb.addSpacing(6)
-        self._aiMultiAgentCheck = QCheckBox("Enable multi-agent runtime (coming soon)")
-        self._aiMultiAgentCheck.setEnabled(False)
+        self._aiMultiAgentCheck = QCheckBox("Enable multi-agent runtime")
         self._aiMultiAgentCheck.setToolTip(
-            "Reserved for forgeai.multiagent.MultiAgentRuntime (supervisor -> workers -> "
-            "reviewer). Not yet wired up — the AI Chat page always uses a single agent."
+            "Runs the AI Chat page as a supervisor -> parallel workers -> reviewer team "
+            "(forgeai.multiagent.MultiAgentRuntime) instead of a single agent. The "
+            "supervisor breaks your request into tasks, workers run them in parallel "
+            "with live tool/token visibility per lane, and a reviewer checks the combined "
+            "results before showing you a verdict."
         )
         vb.addWidget(self._aiMultiAgentCheck)
+        vb.addSpacing(16)
+
+        workers_row = QHBoxLayout()
+        workers_row.addWidget(_hint_label("Max parallel workers"))
+        self._aiMaxWorkersSpin = QSpinBox()
+        self._aiMaxWorkersSpin.setRange(1, 10)
+        self._aiMaxWorkersSpin.setValue(int(DEFAULTS[Keys.LLM_MAX_WORKERS]))
+        self._aiMaxWorkersSpin.setFixedWidth(70)
+        workers_row.addWidget(self._aiMaxWorkersSpin)
+        workers_row.addStretch()
+        vb.addLayout(workers_row)
+        vb.addSpacing(16)
+
+        vb.addWidget(_hint_label(
+            "Optional prompt overrides for each role — leave blank to use AWE's "
+            "pentest-tailored defaults."
+        ))
+        vb.addSpacing(8)
+
+        for label, attr, placeholder in [
+            ("Supervisor prompt", "_aiSupervisorPromptEdit", "Breaks the request into parallel tasks…"),
+            ("Worker prompt", "_aiWorkerPromptEdit", "Executes one task using AWE's tools…"),
+            ("Reviewer prompt", "_aiReviewerPromptEdit", "Cross-checks worker results…"),
+        ]:
+            vb.addWidget(_hint_label(label))
+            vb.addSpacing(3)
+            edit = QLineEdit()
+            edit.setPlaceholderText(placeholder)
+            setattr(self, attr, edit)
+            vb.addWidget(edit)
+            vb.addSpacing(10)
+
         vb.addStretch()
 
         scroll.setWidget(body)
@@ -909,6 +943,13 @@ class SettingsWidget(QWidget):
         self._aiModelEdit.setText(all_settings.get(Keys.LLM_MODEL, "") or "")
         self._aiApiKeyEdit.setText(all_settings.get(Keys.LLM_API_KEY, "") or "")
         self._aiBaseUrlEdit.setText(all_settings.get(Keys.LLM_BASE_URL, "") or "")
+        self._aiMultiAgentCheck.setChecked(all_settings.get(Keys.LLM_MULTI_AGENT, "false") == "true")
+        self._aiMaxWorkersSpin.setValue(
+            int(all_settings.get(Keys.LLM_MAX_WORKERS, DEFAULTS[Keys.LLM_MAX_WORKERS]) or DEFAULTS[Keys.LLM_MAX_WORKERS])
+        )
+        self._aiSupervisorPromptEdit.setText(all_settings.get(Keys.LLM_SUPERVISOR_PROMPT, "") or "")
+        self._aiWorkerPromptEdit.setText(all_settings.get(Keys.LLM_WORKER_PROMPT, "") or "")
+        self._aiReviewerPromptEdit.setText(all_settings.get(Keys.LLM_REVIEWER_PROMPT, "") or "")
 
     def save(self):
         """Persist all MongoDB-backed fields and tool-command overrides."""
@@ -920,7 +961,11 @@ class SettingsWidget(QWidget):
         mapping[Keys.LLM_MODEL] = self._aiModelEdit.text().strip()
         mapping[Keys.LLM_API_KEY] = self._aiApiKeyEdit.text().strip()
         mapping[Keys.LLM_BASE_URL] = self._aiBaseUrlEdit.text().strip()
-        mapping[Keys.LLM_MULTI_AGENT] = "false"
+        mapping[Keys.LLM_MULTI_AGENT] = "true" if self._aiMultiAgentCheck.isChecked() else "false"
+        mapping[Keys.LLM_MAX_WORKERS] = str(self._aiMaxWorkersSpin.value())
+        mapping[Keys.LLM_SUPERVISOR_PROMPT] = self._aiSupervisorPromptEdit.text().strip()
+        mapping[Keys.LLM_WORKER_PROMPT] = self._aiWorkerPromptEdit.text().strip()
+        mapping[Keys.LLM_REVIEWER_PROMPT] = self._aiReviewerPromptEdit.text().strip()
         self._repo.set_many(mapping)
         for tool_key, edit in self._cmd_fields.items():
             val = edit.text().strip()

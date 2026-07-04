@@ -34,6 +34,9 @@ def awe_forgeai_qss() -> str:
 
     QFrame#MessageBubbleUser {{ background:{SURFACE0}; border-radius:10px; }}
     QFrame#MessageBubbleAssistant {{ background:{MANTLE}; border-radius:10px; }}
+    QFrame#MessageBubbleSystem {{
+        background:{SURFACE0}; border:1px dashed {OVERLAY0}; border-radius:10px;
+    }}
     QLabel#MessageRoleLabel {{ color:{SUBTEXT1}; font-size:8pt; font-weight:bold; }}
 
     QFrame#ToolCallRow {{ background:{SURFACE1}; border-radius:6px; }}
@@ -44,5 +47,10 @@ def awe_forgeai_qss() -> str:
 
     QFrame#PermissionRequestWidget {{
         background:{MANTLE}; border:1px solid {PEACH}; border-radius:8px;
+    }}
+
+    QFrame#WorkerLaneWidget {{
+        background:{MANTLE}; border:1px solid {SURFACE1}; border-radius:10px;
+        margin:2px 0;
     }}
     """

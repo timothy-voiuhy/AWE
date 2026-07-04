@@ -104,6 +104,10 @@ class Keys:
     LLM_API_KEY         = "llm_api_key"
     LLM_BASE_URL        = "llm_base_url"
     LLM_MULTI_AGENT     = "llm_multi_agent_enabled"
+    LLM_MAX_WORKERS       = "llm_max_workers"
+    LLM_SUPERVISOR_PROMPT = "llm_supervisor_prompt"
+    LLM_WORKER_PROMPT     = "llm_worker_prompt"
+    LLM_REVIEWER_PROMPT   = "llm_reviewer_prompt"
 
 DEFAULTS = {
     Keys.RESOLVER_PATH:       "/wordlists/resolvers.txt",
@@ -114,4 +118,5 @@ DEFAULTS = {
     Keys.PROXY_PORT:          "8080",
     Keys.UPSTREAM_PROXY:      "",
     Keys.EDITOR_FONT_SIZE:    "9",
+    Keys.LLM_MAX_WORKERS:     "3",
 }

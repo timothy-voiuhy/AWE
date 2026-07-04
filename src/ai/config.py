@@ -9,6 +9,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from forgeai import AgentConfig
+from forgeai.multiagent import MultiAgentConfig
 
 from database.settings_repository import Keys, SettingsRepository
 
@@ -19,6 +20,25 @@ _DEFAULT_MODEL_FOR = {
 }
 
 _PROMPT_PATH = Path(__file__).parent / "prompts" / "awe_system_prompt.md"
+
+_DEFAULT_SUPERVISOR_PROMPT = (
+    "You are the supervisor of an AWE pentest team. Break the user's request into a "
+    "set of independent recon/testing tasks that worker agents can run in parallel "
+    "using AWE's tools (findings/DB, pipelines, dockerized recon/vuln tools, proxy "
+    "traffic, JWT, GraphQL, testing methodology). Keep tasks self-contained — a worker "
+    "only sees its own task description and context, not the other tasks."
+)
+_DEFAULT_WORKER_PROMPT = (
+    "You are a pentest worker agent with access to AWE's recon/vuln/proxy/JWT/GraphQL/"
+    "methodology tools. Complete your assigned task thoroughly, using tools as needed, "
+    "and report concrete findings — cite what a tool actually returned, don't invent "
+    "results."
+)
+_DEFAULT_REVIEWER_PROMPT = (
+    "You are a read-only pentest reviewer. Cross-check the worker results against the "
+    "original request and AWE's testing methodology; flag missed coverage, unsupported "
+    "claims, or findings that need follow-up. Never suggest modifying state yourself."
+)
 
 
 def load_agent_config(settings: SettingsRepository) -> AgentConfig:
@@ -34,4 +54,21 @@ def load_agent_config(settings: SettingsRepository) -> AgentConfig:
         base_url=base_url,
         system_prompt=_PROMPT_PATH,
         skills_dir=None,  # skills are registered programmatically, see ai.skills.methodology_skill
+    )
+
+
+def load_multi_agent_config(settings: SettingsRepository) -> MultiAgentConfig:
+    base = load_agent_config(settings)
+    max_workers_raw = settings.get(Keys.LLM_MAX_WORKERS, default="3") or "3"
+    try:
+        max_workers = int(max_workers_raw)
+    except (TypeError, ValueError):
+        max_workers = 3
+
+    return MultiAgentConfig.from_agent_config(
+        base,
+        max_workers=max_workers,
+        supervisor_prompt=settings.get(Keys.LLM_SUPERVISOR_PROMPT, default="") or _DEFAULT_SUPERVISOR_PROMPT,
+        worker_prompt=settings.get(Keys.LLM_WORKER_PROMPT, default="") or _DEFAULT_WORKER_PROMPT,
+        reviewer_prompt=settings.get(Keys.LLM_REVIEWER_PROMPT, default="") or _DEFAULT_REVIEWER_PROMPT,
     )
