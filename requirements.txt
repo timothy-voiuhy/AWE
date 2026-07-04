@@ -21,3 +21,7 @@ telethon
 colorama
 certifi
 docker
+pydantic>=2.0
+qasync>=0.27
+anthropic>=0.40
+openai>=1.30

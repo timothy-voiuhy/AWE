@@ -98,6 +98,12 @@ class Keys:
     EDITOR_FONT_SIZE    = "editor_font_size"
     # Internal
     MONGO_URI           = "mongo_uri"
+    # AI
+    LLM_PROVIDER        = "llm_provider"
+    LLM_MODEL           = "llm_model"
+    LLM_API_KEY         = "llm_api_key"
+    LLM_BASE_URL        = "llm_base_url"
+    LLM_MULTI_AGENT     = "llm_multi_agent_enabled"
 
 DEFAULTS = {
     Keys.RESOLVER_PATH:       "/wordlists/resolvers.txt",

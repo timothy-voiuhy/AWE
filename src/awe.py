@@ -990,6 +990,13 @@ if __name__ == "__main__":
 
     App = QApplication()
 
+    # qasync installs its event loop on the Qt main thread — it does not compete
+    # with AWE's existing QThread workers (PipelineExecutor, _JwtToolWorker, ...),
+    # which keep running exactly as before. Must be installed before any AgentBridge
+    # (i.e. before the first AI Chat page / project tab) is constructed.
+    from forgeai.ui.async_bridge import install_qasync
+    _qasync_loop = install_qasync(App)
+
     # ── Pre-flight: Docker must be running and MongoDB must be reachable ──────
     sys.path.insert(0, os.path.dirname(__file__))
 
@@ -1064,7 +1071,8 @@ if __name__ == "__main__":
 
     main_window = MainWin()
     main_window.showMaximized()
-    sys.exit(App.exec())
+    with _qasync_loop:
+        _qasync_loop.run_forever()
 
 # TODO:
 """

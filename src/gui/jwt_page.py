@@ -275,6 +275,7 @@ class JwtPage(QWidget):
     """Interactive JWT decoder and attack workbench (nav index 14)."""
 
     send_to_repeater = Signal(str)
+    send_to_ai       = Signal(dict)
 
     def __init__(self, repository=None, parent=None):
         super().__init__(parent)
@@ -331,6 +332,7 @@ class JwtPage(QWidget):
             ("Parse",       self._parse,        _BTN_ACCENT),
             ("Clear",       self._clear,        _BTN),
             ("Copy Output", self._copy_output,  _BTN),
+            ("Send to AI",  self._send_to_ai,   _BTN),
         ]:
             btn = QPushButton(label)
             btn.setFixedHeight(26)
@@ -765,6 +767,19 @@ class JwtPage(QWidget):
         txt = self._output.toPlainText()
         if txt:
             QApplication.clipboard().setText(txt)
+
+    def _send_to_ai(self) -> None:
+        token = self._token_input.text().strip()
+        log_txt = self._output.toPlainText().strip()
+        text = f"Token: {token}"
+        if log_txt:
+            text += f"\n\nAnalyzer log:\n{log_txt}"
+        self.send_to_ai.emit({
+            "kind": "jwt",
+            "text": text,
+            "source_page": "jwt",
+            "meta": {"token": token},
+        })
 
     def _current_payload_b64(self) -> str:
         raw = self._pay_edit.toPlainText().strip()

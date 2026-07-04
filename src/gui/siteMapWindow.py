@@ -107,6 +107,7 @@ class SiteMapPage(QWidget):
     send_to_comparer_right = Signal(str)
     send_to_jwt            = Signal(str)
     send_to_graphql        = Signal(str)
+    send_to_ai             = Signal(dict)
     sync_requested         = Signal()
     traffic_changed        = Signal()
     scope_modified         = Signal(object)   # emits ScopeConfig after a sitemap scope action
@@ -272,6 +273,7 @@ class SiteMapPage(QWidget):
         self._req_view.send_to_comparer_right.connect(self.send_to_comparer_right)
         self._req_view.send_to_jwt.connect(self.send_to_jwt)
         self._req_view.send_to_graphql.connect(self.send_to_graphql)
+        self._req_view.send_to_ai.connect(self.send_to_ai)
         self._resp_view.send_to_repeater.connect(
             lambda _: self.send_to_repeater.emit(self._req_view.toPlainText()))
         self._resp_view.send_to_intruder.connect(
@@ -281,6 +283,7 @@ class SiteMapPage(QWidget):
         self._resp_view.send_to_comparer_right.connect(self.send_to_comparer_right)
         self._resp_view.send_to_jwt.connect(self.send_to_jwt)
         self._resp_view.send_to_graphql.connect(self.send_to_graphql)
+        self._resp_view.send_to_ai.connect(self.send_to_ai)
         rr_vb.addWidget(self._tabs)
 
         self._search_bar = SearchBar(rr)
@@ -857,6 +860,7 @@ class _CodeView(QTextEdit):
     send_to_comparer_right = Signal(str)
     send_to_jwt            = Signal(str)
     send_to_graphql        = Signal(str)
+    send_to_ai             = Signal(dict)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -897,6 +901,9 @@ class _CodeView(QTextEdit):
         _is_gql = ('"query"' in txt or '"mutation"' in txt
                    or txt.lstrip().startswith(('query ', 'mutation ', 'subscription ', '{')))
         gql_act.setEnabled(has_text and _is_gql)
+
+        ai_act = menu.addAction("Send to AI")
+        ai_act.setEnabled(has_text)
 
         menu.addSeparator()
         fmt_menu = menu.addMenu("Format Body")
@@ -945,6 +952,13 @@ class _CodeView(QTextEdit):
             self.send_to_jwt.emit(selected)
         elif chosen is gql_act:
             self.send_to_graphql.emit(txt)
+        elif chosen is ai_act:
+            self.send_to_ai.emit({
+                "kind": "context",
+                "text": selected if has_sel else txt,
+                "source_page": "sitemap",
+                "meta": {},
+            })
         elif chosen in fmt_map:
             result = format_http_body(txt, fmt_map[chosen])
             if result is not None:

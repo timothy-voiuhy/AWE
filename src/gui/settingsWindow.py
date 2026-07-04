@@ -139,6 +139,7 @@ class SettingsWidget(QWidget):
         self._tabs.addTab(self._build_tools_tab(),        "Tools")
         self._tabs.addTab(self._build_scan_tab(),         "Scan")
         self._tabs.addTab(self._build_cmd_tab(),          "Tool Commands")
+        self._tabs.addTab(self._build_ai_tab(),           "AI")
         root.addWidget(self._tabs, stretch=1)
 
         footer = QWidget()
@@ -684,6 +685,78 @@ class SettingsWidget(QWidget):
              DEFAULTS[Keys.DEFAULT_CONCURRENCY], False),
         ])
 
+    _AI_DEFAULT_MODEL = {
+        "anthropic": "claude-sonnet-5",
+        "openai": "gpt-4o-mini",
+        "ollama": "llama3.1",
+    }
+
+    def _build_ai_tab(self) -> QWidget:
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        body = QWidget()
+        vb = QVBoxLayout(body)
+        vb.setContentsMargins(28, 24, 28, 24)
+        vb.setSpacing(0)
+
+        vb.addWidget(_section_label("Provider"))
+        vb.addSpacing(8)
+        self._aiProviderCombo = QComboBox()
+        self._aiProviderCombo.addItems(["anthropic", "openai", "ollama"])
+        vb.addWidget(self._aiProviderCombo)
+        vb.addSpacing(20)
+
+        vb.addWidget(_section_label("Model"))
+        vb.addSpacing(6)
+        self._aiModelEdit = QLineEdit()
+        self._aiModelEdit.setPlaceholderText(self._AI_DEFAULT_MODEL["anthropic"])
+        vb.addWidget(self._aiModelEdit)
+        vb.addSpacing(5)
+        vb.addWidget(_hint_label(
+            "Leave blank to use the suggested default model for the selected provider."
+        ))
+        vb.addSpacing(20)
+
+        def _update_model_placeholder(provider: str):
+            self._aiModelEdit.setPlaceholderText(self._AI_DEFAULT_MODEL.get(provider, ""))
+
+        self._aiProviderCombo.currentTextChanged.connect(_update_model_placeholder)
+
+        vb.addWidget(_hline())
+        vb.addSpacing(20)
+
+        vb.addWidget(_section_label("API Key"))
+        vb.addSpacing(6)
+        self._aiApiKeyEdit = QLineEdit()
+        self._aiApiKeyEdit.setEchoMode(QLineEdit.Password)
+        self._aiApiKeyEdit.setPlaceholderText("sk-… / not needed for ollama")
+        vb.addWidget(self._aiApiKeyEdit)
+        vb.addSpacing(20)
+
+        vb.addWidget(_section_label("Base URL"))
+        vb.addSpacing(6)
+        self._aiBaseUrlEdit = QLineEdit()
+        self._aiBaseUrlEdit.setPlaceholderText("Optional — e.g. http://localhost:11434 for ollama")
+        vb.addWidget(self._aiBaseUrlEdit)
+        vb.addSpacing(20)
+        vb.addWidget(_hline())
+        vb.addSpacing(20)
+
+        vb.addWidget(_section_label("Multi-Agent Runtime"))
+        vb.addSpacing(6)
+        self._aiMultiAgentCheck = QCheckBox("Enable multi-agent runtime (coming soon)")
+        self._aiMultiAgentCheck.setEnabled(False)
+        self._aiMultiAgentCheck.setToolTip(
+            "Reserved for forgeai.multiagent.MultiAgentRuntime (supervisor -> workers -> "
+            "reviewer). Not yet wired up — the AI Chat page always uses a single agent."
+        )
+        vb.addWidget(self._aiMultiAgentCheck)
+        vb.addStretch()
+
+        scroll.setWidget(body)
+        return scroll
+
     def _flat_tab(self, entries: list) -> QWidget:
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
@@ -830,12 +903,24 @@ class SettingsWidget(QWidget):
         for tool_key, edit in self._cmd_fields.items():
             edit.setText(overrides.get(tool_key, ""))
 
+        provider = all_settings.get(Keys.LLM_PROVIDER, "anthropic")
+        if provider in ("anthropic", "openai", "ollama"):
+            self._aiProviderCombo.setCurrentText(provider)
+        self._aiModelEdit.setText(all_settings.get(Keys.LLM_MODEL, "") or "")
+        self._aiApiKeyEdit.setText(all_settings.get(Keys.LLM_API_KEY, "") or "")
+        self._aiBaseUrlEdit.setText(all_settings.get(Keys.LLM_BASE_URL, "") or "")
+
     def save(self):
         """Persist all MongoDB-backed fields and tool-command overrides."""
         mapping: dict = {}
         for key, edit in self._fields.items():
             val = edit.text().strip()
             mapping[key] = val if val else (DEFAULTS.get(key) or "")
+        mapping[Keys.LLM_PROVIDER] = self._aiProviderCombo.currentText()
+        mapping[Keys.LLM_MODEL] = self._aiModelEdit.text().strip()
+        mapping[Keys.LLM_API_KEY] = self._aiApiKeyEdit.text().strip()
+        mapping[Keys.LLM_BASE_URL] = self._aiBaseUrlEdit.text().strip()
+        mapping[Keys.LLM_MULTI_AGENT] = "false"
         self._repo.set_many(mapping)
         for tool_key, edit in self._cmd_fields.items():
             val = edit.text().strip()

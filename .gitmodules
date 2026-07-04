@@ -1,0 +1,6 @@
+[submodule "src/forgeai"]
+	path = src/forgeai
+	url = https://github.com/timothy-voiuhy/forgeai.git
+[submodule "resources/Bug_Bounty_Notes"]
+	path = resources/Bug_Bounty_Notes
+	url = https://github.com/R-s0n/Bug_Bounty_Notes.git

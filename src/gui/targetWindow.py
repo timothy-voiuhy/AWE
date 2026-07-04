@@ -100,6 +100,7 @@ _NAV = [
     ("⚿",  "JWT",        PEACH,    f"{_ICONS}/jwt.png"),         # Page.JWT
     ("⬡",  "GraphQL",    TEAL,     f"{_ICONS}/graphql.png"),     # Page.GRAPHQL
     ("⚙",  "Settings",   OVERLAY2, f"{_ICONS}/settings-512.png"),# Page.SETTINGS
+    ("✦",  "AI Chat",    MAUVE,    None),                       # Page.AI_CHAT
 ]
 
 _NAV_W = 58
@@ -123,6 +124,7 @@ class Page(IntEnum):
     JWT        = 14
     GRAPHQL    = 15
     SETTINGS   = 16
+    AI_CHAT    = 17
 
 
 # ── Activity-bar button ───────────────────────────────────────────────────────
@@ -286,6 +288,7 @@ class TargetWindow(QtWidgets.QMainWindow):
         _add("JWT",        self._build_jwt_page)        # 14
         _add("GraphQL",    self._build_graphql_page)    # 15
         _add("Settings",   self._build_settings_page)   # 16
+        _add("AI Chat",    self._build_ai_chat_page)    # 17
 
         # Wire scope_changed → all consumer pages now that every page exists.
         # Also push the already-loaded scope into pages so their first render
@@ -534,6 +537,7 @@ class TargetWindow(QtWidgets.QMainWindow):
         self._siteMapPage.send_to_comparer_right.connect(self._send_to_comparer_right)
         self._siteMapPage.send_to_jwt.connect(self._send_to_jwt)
         self._siteMapPage.send_to_graphql.connect(self._send_to_graphql)
+        self._siteMapPage.send_to_ai.connect(self._send_to_ai)
         self._siteMapPage.sync_requested.connect(self._sync_proxy_traffic)
         self._siteMapPage.traffic_changed.connect(self._debounce_timer.start)
         return self._siteMapPage
@@ -552,6 +556,7 @@ class TargetWindow(QtWidgets.QMainWindow):
         self._historyPage.send_to_comparer_right.connect(self._send_to_comparer_right)
         self._historyPage.send_to_jwt.connect(self._send_to_jwt)
         self._historyPage.send_to_graphql.connect(self._send_to_graphql)
+        self._historyPage.send_to_ai.connect(self._send_to_ai)
         self._historyPage.traffic_changed.connect(self._debounce_timer.start)
         return self._historyPage
 
@@ -567,6 +572,7 @@ class TargetWindow(QtWidgets.QMainWindow):
         self._repeaterPage.send_to_comparer_right.connect(self._send_to_comparer_right)
         self._repeaterPage.send_to_jwt.connect(self._send_to_jwt)
         self._repeaterPage.send_to_graphql.connect(self._send_to_graphql)
+        self._repeaterPage.send_to_ai.connect(self._send_to_ai)
         return self._repeaterPage
 
     def _build_intruder_page(self) -> QWidget:
@@ -602,6 +608,7 @@ class TargetWindow(QtWidgets.QMainWindow):
 
     def _build_jwt_page(self) -> QWidget:
         self._jwtPage = JwtPage(repository=self._repo, parent=self)
+        self._jwtPage.send_to_ai.connect(self._send_to_ai)
         return self._jwtPage
 
     def _build_graphql_page(self) -> QWidget:
@@ -611,6 +618,7 @@ class TargetWindow(QtWidgets.QMainWindow):
             parent=self,
         )
         self._graphqlPage.send_to_repeater.connect(self._send_to_repeater)
+        self._graphqlPage.send_to_ai.connect(self._send_to_ai)
         return self._graphqlPage
 
     def _send_to_repeater(self, request_text: str) -> None:
@@ -722,6 +730,22 @@ class TargetWindow(QtWidgets.QMainWindow):
             parent=self,
         )
         return self._settingsWidget
+
+    def _build_ai_chat_page(self) -> QWidget:
+        from gui.ai_chat_page import AiChatPage
+        self._aiChatPage = AiChatPage(
+            project_dir=self.projectDirPath,
+            repo=self._repo,
+            target=self.main_server_name or "",
+            proxy_col=self._get_proxy_col(),
+            proxy_port=self.proxy_port,
+            parent=self,
+        )
+        return self._aiChatPage
+
+    def _send_to_ai(self, payload: dict) -> None:
+        self._aiChatPage.receive_context(payload)
+        self._switch_page(Page.AI_CHAT)
 
     # ── Browser tab context menu ──────────────────────────────────────────────
 

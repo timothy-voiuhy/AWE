@@ -504,6 +504,7 @@ class GraphqlPage(QWidget):
     """GraphQL security testing workbench."""
 
     send_to_repeater = Signal(str)
+    send_to_ai       = Signal(dict)
 
     def __init__(self, repository=None, proxy_port: int = 8080, parent=None) -> None:
         super().__init__(parent)
@@ -776,6 +777,10 @@ class GraphqlPage(QWidget):
         rep_btn.setToolTip("Open query in Repeater as a raw HTTP POST")
         rep_btn.clicked.connect(self._on_send_to_repeater)
         sb.addWidget(rep_btn)
+        ai_btn = _btn("→ AI", _BTN)
+        ai_btn.setToolTip("Send this query/endpoint to the AI Chat page")
+        ai_btn.clicked.connect(self._on_send_to_ai)
+        sb.addWidget(ai_btn)
         req_vb.addWidget(send_bar)
         req_vb.addWidget(_sep())
 
@@ -1482,6 +1487,20 @@ class GraphqlPage(QWidget):
 
         raw = f"POST {path} HTTP/1.1\n" + "\n".join(hdrs) + "\n\n" + body
         self.send_to_repeater.emit(raw)
+
+    def _on_send_to_ai(self) -> None:
+        ep = self._endpoint()
+        q = self._query_edit.toPlainText().strip()
+        v_raw = self._vars_edit.toPlainText().strip()
+        text = f"Endpoint: {ep}\n\nQuery:\n{q}"
+        if v_raw:
+            text += f"\n\nVariables:\n{v_raw}"
+        self.send_to_ai.emit({
+            "kind": "graphql_query",
+            "text": text,
+            "source_page": "graphql",
+            "meta": {"endpoint": ep},
+        })
 
     def _on_add_headers(self) -> None:
         from PySide6.QtWidgets import QDialog, QDialogButtonBox, QFormLayout

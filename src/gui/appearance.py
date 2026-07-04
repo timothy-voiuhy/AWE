@@ -117,6 +117,8 @@ def apply_appearance(
     fam = _app_state["font_family"]
     sz  = _app_state["font_size"]
 
+    from ai.theme import awe_forgeai_qss
+
     QApplication.instance().setFont(QFont(fam, sz))
     QApplication.instance().setStyleSheet(f"""
         QWidget          {{ background:{t['base']}; color:{t['text']};
@@ -156,4 +158,4 @@ def apply_appearance(
                      border:1px solid {t['surface']}; border-radius:6px; padding:4px; }}
         QMenu::item:selected {{ background:{t['surface']}; border-radius:3px; }}
         QMenu::separator {{ background:{t['surface']}; height:1px; margin:4px 6px; }}
-    """)
+    """ + awe_forgeai_qss())
