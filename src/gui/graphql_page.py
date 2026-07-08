@@ -14,16 +14,17 @@ from pathlib import Path
 
 import httpx
 from PySide6.QtCore import Qt, QThread, QTimer, Signal
-from PySide6.QtGui import QFont
+from PySide6.QtGui import QColor, QFont
 from PySide6.QtWidgets import (
     QAbstractItemView, QApplication, QFileDialog, QFrame, QHBoxLayout,
     QLabel, QLineEdit, QMenu, QPushButton, QScrollArea, QSplitter,
-    QSpinBox, QTabWidget, QTextEdit, QTreeWidget, QTreeWidgetItem,
-    QVBoxLayout, QWidget,
+    QSpinBox, QTabWidget, QTableWidget, QTableWidgetItem, QTextEdit,
+    QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget,
 )
 
 from gui.guiUtilities import SyntaxHighlighter, ResponseRenderView
 from gui.repeater import _CodeEdit
+from proxy._markers import TOOL_MARKER_HEADER
 
 log = logging.getLogger(__name__)
 
@@ -351,6 +352,7 @@ class _GraphqlWorker(QThread):
             for pair in (self._extra_headers or []):
                 if len(pair) == 2 and pair[0].strip():
                     hdrs[pair[0].strip()] = pair[1]
+            hdrs[TOOL_MARKER_HEADER] = "graphql"
 
             with httpx.Client(proxy=proxy, verify=False,
                               follow_redirects=True, timeout=30.0) as client:
@@ -418,6 +420,7 @@ class _FieldFuzzWorker(QThread):
         for pair in (self._extra_headers or []):
             if len(pair) == 2 and pair[0].strip():
                 hdrs[pair[0].strip()] = pair[1]
+        hdrs[TOOL_MARKER_HEADER] = "graphql"
 
         try:
             words = Path(self._wordlist_path).read_text(errors="replace").splitlines()
@@ -505,6 +508,7 @@ class GraphqlPage(QWidget):
 
     send_to_repeater = Signal(str)
     send_to_ai       = Signal(dict)
+    pending_review_changed = Signal()
 
     def __init__(self, repository=None, proxy_port: int = 8080, parent=None) -> None:
         super().__init__(parent)
@@ -515,6 +519,7 @@ class GraphqlPage(QWidget):
         self._extra_headers: list[list[str]] = []
         self._wordlist_path = ""
         self._last_schema_json: dict = {}
+        self._review_rows: list[dict] = []
 
         self._last_resp_body: bytes = b""
         self._last_resp_ct:   str   = ""
@@ -539,8 +544,51 @@ class GraphqlPage(QWidget):
         self._vars_edit.textChanged.connect(self._preview_timer.start)
 
         self._restore_state()
+        self.refresh_review_queue()
 
     # ── public API ────────────────────────────────────────────────────────────
+
+    def load_from_review(self, payload: dict) -> None:
+        """Populate endpoint/query/variables directly from a queued candidate
+        (structured, unlike load_request which parses a raw HTTP block)."""
+        self._endpoint_input.setText(payload.get("endpoint", ""))
+        self._query_edit.setPlainText(payload.get("query", ""))
+        variables = payload.get("variables") or {}
+        if variables:
+            self._vars_edit.setPlainText(json.dumps(variables, indent=2))
+        self._update_request_preview()
+        self._left_tabs.setCurrentIndex(3)
+
+    def refresh_review_queue(self) -> None:
+        """Reload pending GraphQL-shaped requests spotted passively in proxy traffic."""
+        if not self._repo:
+            return
+        self._review_rows = self._repo.list_review_items("graphql")
+        self._review_lbl.setText(f"PENDING REVIEW ({len(self._review_rows)})")
+        self._review_table.setRowCount(len(self._review_rows))
+        for r, item in enumerate(self._review_rows):
+            cell = QTableWidgetItem(item.get("summary", ""))
+            cell.setForeground(QColor("#F9E2AF"))
+            self._review_table.setItem(r, 0, cell)
+
+    def _on_review_item_activated(self, table_item) -> None:
+        row = table_item.row()
+        if row < 0 or row >= len(self._review_rows):
+            return
+        item = self._review_rows[row]
+        self.load_from_review(item.get("payload", {}))
+        self._repo.mark_review_item(item["id"], "reviewed")
+        self.refresh_review_queue()
+        self.pending_review_changed.emit()
+
+    def _on_dismiss_review_item(self) -> None:
+        row = self._review_table.currentRow()
+        if row < 0 or row >= len(self._review_rows):
+            return
+        item = self._review_rows[row]
+        self._repo.mark_review_item(item["id"], "dismissed")
+        self.refresh_review_queue()
+        self.pending_review_changed.emit()
 
     def load_request(self, raw_http: str) -> None:
         """Parse a raw HTTP request block and populate endpoint, headers, query."""
@@ -815,6 +863,57 @@ class GraphqlPage(QWidget):
         return w
 
     def _build_right_pane(self) -> QWidget:
+        outer = QWidget()
+        outer.setStyleSheet(f"background:{_SURFACE};")
+        ol = QVBoxLayout(outer)
+        ol.setContentsMargins(0, 0, 0, 0)
+        ol.setSpacing(0)
+
+        vert = QSplitter(Qt.Vertical)
+        vert.setChildrenCollapsible(False)
+        vert.setStyleSheet(f"QSplitter::handle{{background:{_BORDER};height:3px;}}")
+        vert.addWidget(self._build_review_panel())
+        vert.addWidget(self._build_attacks_scroll())
+        vert.setSizes([160, 520])
+        ol.addWidget(vert, stretch=1)
+        return outer
+
+    def _build_review_panel(self) -> QWidget:
+        """Pending review (GraphQL requests spotted passively in traffic)."""
+        panel = QWidget()
+        panel.setMinimumHeight(80)
+        panel.setStyleSheet(f"background:{_SURFACE};")
+        lay = QVBoxLayout(panel)
+        lay.setContentsMargins(0, 4, 0, 4)
+        lay.setSpacing(2)
+
+        review_row = QHBoxLayout()
+        review_row.setContentsMargins(6, 2, 6, 2)
+        self._review_lbl = QLabel("PENDING REVIEW (0)")
+        self._review_lbl.setStyleSheet("color:#F9E2AF; font-size:9px; font-weight:bold;")
+        review_row.addWidget(self._review_lbl)
+        review_row.addStretch()
+        dismiss_btn = _btn("Dismiss", _BTN)
+        dismiss_btn.clicked.connect(self._on_dismiss_review_item)
+        review_row.addWidget(dismiss_btn)
+        lay.addLayout(review_row)
+
+        self._review_table = QTableWidget(0, 1)
+        self._review_table.setHorizontalHeaderLabels(["Double-click to load"])
+        self._review_table.horizontalHeader().setVisible(False)
+        self._review_table.verticalHeader().setVisible(False)
+        self._review_table.setStyleSheet(
+            "QTableWidget{background:#11111B;color:#CDD6F4;border:1px solid #313244;"
+            "gridline-color:#313244;font-size:9px;}"
+            "QTableWidget::item:selected{background:#313244;}"
+        )
+        self._review_table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self._review_table.horizontalHeader().setStretchLastSection(True)
+        self._review_table.itemDoubleClicked.connect(self._on_review_item_activated)
+        lay.addWidget(self._review_table, stretch=1)
+        return panel
+
+    def _build_attacks_scroll(self) -> QWidget:
         outer = QWidget()
         outer.setStyleSheet(f"background:{_SURFACE};")
         ol = QVBoxLayout(outer)

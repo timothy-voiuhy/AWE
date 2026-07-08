@@ -31,6 +31,7 @@ from PySide6.QtWidgets import (
 
 from database.scope import ScopeConfig
 from gui.repeater import _CodeEdit
+from proxy._markers import TOOL_MARKER_HEADER
 from proxy._ws_store import WSStore
 
 log = logging.getLogger(__name__)
@@ -143,6 +144,7 @@ class _WSClientWorker(QThread):
             async with aiohttp.ClientSession(connector=connector) as session:
                 async with session.ws_connect(
                     self._url, proxy=proxy, ssl=False,
+                    headers={TOOL_MARKER_HEADER: "websocket"},
                 ) as ws:
                     self.connection_status.emit("connected")
 
@@ -181,9 +183,14 @@ class _WSClientWorker(QThread):
 # ── Main page ─────────────────────────────────────────────────────────────────
 
 class WebSocketPage(QWidget):
-    def __init__(self, proxy_port: int = 8080, parent=None):
+    # Emitted whenever the pending-review count changes, so TargetWindow can
+    # update the nav badge for this page.
+    pending_review_changed = Signal()
+
+    def __init__(self, proxy_port: int = 8080, repo=None, parent=None):
         super().__init__(parent)
         self._proxy_port  = proxy_port
+        self._repo        = repo
         self._ws_store    = WSStore()         # read-only instance for the GUI
         self._conn_rows:  list[dict] = []     # current connection list
         self._frame_rows: list[dict] = []     # frames for selected connection
@@ -193,7 +200,14 @@ class WebSocketPage(QWidget):
         self._scope        = ScopeConfig()
         self._filter_scope = True
 
+        # Connections already known about when this page/proxy came up don't
+        # need review — only genuinely NEW connections seen from here on do.
+        self._seen_conn_ids: set[str] = set()
+        self._baseline_done = False
+        self._review_rows: list[dict] = []
+
         self._build_ui()
+        self.refresh_review_queue()
 
         self._timer = QTimer(self)
         self._timer.setInterval(3000)
@@ -265,6 +279,9 @@ class WebSocketPage(QWidget):
         vb.addLayout(tb)
         vb.addWidget(_hline())
 
+        vb.addWidget(self._build_review_panel())
+        vb.addWidget(_hline())
+
         # connection table
         self._conn_table = QTableWidget(0, 4)
         self._conn_table.setHorizontalHeaderLabels(["Host", "Path", "#", "Status"])
@@ -279,6 +296,40 @@ class WebSocketPage(QWidget):
         self._conn_table.setColumnWidth(2, 35)
         self._conn_table.itemSelectionChanged.connect(self._on_connection_selected)
         vb.addWidget(self._conn_table, stretch=1)
+        return w
+
+    def _build_review_panel(self) -> QWidget:
+        w = QWidget()
+        vb = QVBoxLayout(w)
+        vb.setContentsMargins(0, 0, 0, 0)
+        vb.setSpacing(0)
+
+        hdr_row = QHBoxLayout()
+        hdr_row.setContentsMargins(8, 4, 8, 4)
+        self._review_lbl = QLabel("Pending Review (0)")
+        self._review_lbl.setStyleSheet(
+            "color:#F9E2AF;font-size:9px;font-weight:bold;background:transparent;"
+        )
+        hdr_row.addWidget(self._review_lbl)
+        hdr_row.addStretch()
+        dismiss_btn = QPushButton("Dismiss")
+        dismiss_btn.setStyleSheet(_BTN_SS)
+        dismiss_btn.clicked.connect(self._on_dismiss_review_item)
+        hdr_row.addWidget(dismiss_btn)
+        vb.addLayout(hdr_row)
+
+        self._review_table = QTableWidget(0, 1)
+        self._review_table.setHorizontalHeaderLabels(["New connection — double-click to review"])
+        self._review_table.horizontalHeader().setVisible(False)
+        self._review_table.setFont(_MONO)
+        self._review_table.setStyleSheet(_TABLE_SS)
+        self._review_table.verticalHeader().setVisible(False)
+        self._review_table.setSelectionBehavior(QTableWidget.SelectRows)
+        self._review_table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self._review_table.horizontalHeader().setStretchLastSection(True)
+        self._review_table.setMaximumHeight(90)
+        self._review_table.itemDoubleClicked.connect(self._on_review_item_activated)
+        vb.addWidget(self._review_table)
         return w
 
     def _build_right(self) -> QWidget:
@@ -429,6 +480,7 @@ class WebSocketPage(QWidget):
         else:
             conns = all_conns
         self._conn_rows = conns
+        self._detect_new_connections(conns)
 
         prev_id = self._current_conn_id
         self._conn_table.setRowCount(len(conns))
@@ -450,6 +502,69 @@ class WebSocketPage(QWidget):
         # Auto-update frame log when new frames arrive for the selected connection
         if prev_id and new_frame_count != len(self._frame_rows):
             self._load_frames(prev_id)
+
+    # ── Review queue ──────────────────────────────────────────────────────────
+
+    def _detect_new_connections(self, conns: list[dict]) -> None:
+        """Connections already open when this page came up are the baseline —
+        only connections that appear *after* that need review, matching "if a
+        websocket is intercepted" (i.e. happens live), not backfilling history."""
+        current_ids = {c.get("id") for c in conns if c.get("id")}
+        if not self._baseline_done:
+            self._seen_conn_ids = set(current_ids)
+            self._baseline_done = True
+            return
+
+        new_ids = current_ids - self._seen_conn_ids
+        if not new_ids:
+            return
+        self._seen_conn_ids |= new_ids
+
+        if self._repo:
+            for c in conns:
+                if c.get("id") not in new_ids:
+                    continue
+                host, path = c.get("host", ""), c.get("path", "/")
+                self._repo.create_review_item(
+                    queue_name="websocket",
+                    kind="ws_connection",
+                    summary=f"{host}{path}",
+                    payload={"host": host, "path": path},
+                    dedup_key=c.get("id"),
+                )
+        self.refresh_review_queue()
+        self.pending_review_changed.emit()
+
+    def refresh_review_queue(self) -> None:
+        if not self._repo:
+            return
+        self._review_rows = self._repo.list_review_items("websocket")
+        self._review_lbl.setText(f"Pending Review ({len(self._review_rows)})")
+        self._review_table.setRowCount(len(self._review_rows))
+        for r, item in enumerate(self._review_rows):
+            cell = QTableWidgetItem(item.get("summary", ""))
+            cell.setForeground(QColor("#F9E2AF"))
+            self._review_table.setItem(r, 0, cell)
+
+    def _on_review_item_activated(self, table_item) -> None:
+        row = table_item.row()
+        if row < 0 or row >= len(self._review_rows):
+            return
+        item = self._review_rows[row]
+        payload = item.get("payload", {})
+        self.load_connection(payload.get("host", ""), payload.get("path", "/"))
+        self._repo.mark_review_item(item["id"], "reviewed")
+        self.refresh_review_queue()
+        self.pending_review_changed.emit()
+
+    def _on_dismiss_review_item(self) -> None:
+        row = self._review_table.currentRow()
+        if row < 0 or row >= len(self._review_rows):
+            return
+        item = self._review_rows[row]
+        self._repo.mark_review_item(item["id"], "dismissed")
+        self.refresh_review_queue()
+        self.pending_review_changed.emit()
 
     def _on_connection_selected(self) -> None:
         rows = self._conn_table.selectedItems()

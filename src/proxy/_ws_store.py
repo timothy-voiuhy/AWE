@@ -59,11 +59,17 @@ class WSStore:
     # ── write API ─────────────────────────────────────────────────────────────
     # These are called from the asyncio event-loop thread; they must NEVER block.
 
-    def create_connection(self, host: str, path: str) -> str:
+    def create_connection(
+        self, host: str, path: str, tool_source: str | None = None,
+    ) -> str:
         """
         Reserve a new ws_connections document.  The ObjectId is generated
         locally so callers get a non-empty conn_id immediately without any
         I/O.  The actual DB insert happens on the writer thread.
+
+        `tool_source` tags connections opened by one of AWE's own testing
+        panels (e.g. "websocket") so they can be excluded from the review
+        queue — see proxy._markers.
         """
         conn_id = str(ObjectId())
         self._queue.put_nowait({
@@ -71,6 +77,7 @@ class WSStore:
             "conn_id":  conn_id,
             "host":     host,
             "path":     path or "/",
+            "tool_source": tool_source,
             "opened_at": _now(),
         })
         return conn_id
@@ -181,6 +188,7 @@ class WSStore:
                         "_id":        ObjectId(entry["conn_id"]),
                         "host":       entry["host"],
                         "path":       entry["path"],
+                        "tool_source": entry.get("tool_source"),
                         "opened_at":  entry["opened_at"],
                         "closed_at":  None,
                         "frame_count": 0,

@@ -51,6 +51,20 @@ class GraphDataLoader(QThread):
                 if "reverse proxy" in new_pt.lower():
                     ex.data["proxy_type"] = new_pt
                     ex.kind = "reverse_proxy"  # upgrade kind in-place
+            elif kind == "subdomain" and data:
+                # The apex domain is pre-registered as its own subdomain node
+                # (see default_sub_id below) before any session data arrives for
+                # it, and the same subdomain can also be reported by multiple
+                # sessions — merge ips/sources instead of dropping them.
+                ex = nodes[nid]
+                ex_ips = ex.data.setdefault("ips", [])
+                for ip in (data.get("ips") or []):
+                    if ip and ip not in ex_ips:
+                        ex_ips.append(ip)
+                ex_src = ex.data.setdefault("sources", [])
+                for src in (data.get("sources") or []):
+                    if src and src not in ex_src:
+                        ex_src.append(src)
 
         _CDN_EDGE_KINDS = {"proxied_by", "routes_through"}
 
@@ -67,6 +81,14 @@ class GraphDataLoader(QThread):
 
         root_id = f"target:{target}"
         _node(root_id, "target", target, {"domain": target})
+
+        # Default "self" subdomain — mirrors the apex domain so results that
+        # aren't tied to a specific discovered subdomain (root-level vulns,
+        # CDN detections, OSINT hits) still hang off a subdomain node and flow
+        # through the lane layout instead of being orphaned off the target.
+        default_sub_id = f"subdomain:{target}"
+        _node(default_sub_id, "subdomain", target, {"domain": target})
+        _edge(root_id, default_sub_id, "has_subdomain")
 
         # Process oldest sessions first so base nodes (subdomains from early
         # pipeline runs) exist in `nodes` before newer manual/proxy additions
@@ -105,6 +127,8 @@ class GraphDataLoader(QThread):
                 d = r.get("data", {})
                 host, port = d.get("host", ""), d.get("port", 0)
                 if not host or not port:
+                    continue
+                if scope is not None and not scope.matches(host):
                     continue
                 ip_id = f"ip:{host}"
                 _node(ip_id, "ip", host, {"ip": host})
@@ -235,6 +259,8 @@ class GraphDataLoader(QThread):
                 subdomain = d.get("subdomain", "")
                 if not provider:
                     continue
+                if subdomain and scope is not None and not scope.matches(subdomain):
+                    continue
                 proxy_type = d.get("proxy_type", "CDN")
                 kind       = _cdn_node_kind(proxy_type)
                 cdn_id     = f"cdn:{provider.lower()}:{subdomain.lower()}"
@@ -248,7 +274,7 @@ class GraphDataLoader(QThread):
                     "sources":       r.get("sources", []),
                 })
                 parent_id = (f"subdomain:{subdomain}"
-                             if f"subdomain:{subdomain}" in nodes else root_id)
+                             if f"subdomain:{subdomain}" in nodes else default_sub_id)
                 edge_kind = "routes_through" if kind == "reverse_proxy" else "proxied_by"
                 _edge(parent_id, cdn_id, edge_kind)
                 for origin_ip in d.get("origin_ips", []):
@@ -272,13 +298,15 @@ class GraphDataLoader(QThread):
                     host = urlsplit(url).hostname or ""
                 except Exception:
                     host = ""
+                if host and scope is not None and not scope.matches(host):
+                    continue
                 vid   = f"vuln:{d.get('template_id','?')}:{host}"
                 label = f"[{sev[:4].upper()}] {name[:18]}"
                 _node(vid, "vuln", label, {
                     "name": name, "severity": sev,
                     "url": url, "description": d.get("description", ""),
                 })
-                parent = f"subdomain:{host}" if f"subdomain:{host}" in nodes else root_id
+                parent = f"subdomain:{host}" if f"subdomain:{host}" in nodes else default_sub_id
                 _edge(parent, vid, "has_vuln")
 
             # ── OSINT ─────────────────────────────────────────────────────────
@@ -288,13 +316,25 @@ class GraphDataLoader(QThread):
                 value = d.get("value", "")
                 if not value:
                     continue
+                # OSINT hits are often intentionally off the target's own domain
+                # (cloud buckets, GitHub matches, leaked creds) — only scope-filter
+                # when the value is actually host/URL-shaped, e.g. a discovered
+                # domain or a URL with a hostname. Free-text artifacts always show.
+                try:
+                    osint_host = urlsplit(value).hostname or ""
+                except Exception:
+                    osint_host = ""
+                if not osint_host and rtype in ("github_domain", "domain", "subdomain"):
+                    osint_host = value
+                if osint_host and scope is not None and not scope.matches(osint_host):
+                    continue
                 oid = f"osint:{rtype}:{value}"
                 _node(oid, "osint", value[:24], {
                     "type": rtype, "value": value,
                     "extra": d.get("extra", ""),
                     "provider": d.get("provider", ""),
                 })
-                _edge(root_id, oid, "is_osint")
+                _edge(default_sub_id, oid, "is_osint")
 
             # ── Info notes ────────────────────────────────────────────────────
             for r in repo.get_results(sid, "info"):

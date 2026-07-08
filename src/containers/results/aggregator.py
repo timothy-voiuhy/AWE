@@ -10,8 +10,11 @@ Workflow:
 
 Public API
 ──────────
-  load_all(output_dir)             → CategoryResults for every category
-  load_category(cat, output_dir)   → CategoryResults for one category
+  load_all(output_dir)             → CategoryResults for every category (legacy, file-based)
+  load_category(cat, output_dir)   → CategoryResults for one category (legacy, file-based)
+  load_from_session(session_id, repo) → CategoryResults for one Mongo-backed session
+  load_from_project(repo)          → CategoryResults merged across every session in
+                                      the project, including the proxy pseudo-session
   CategoryResults.combined         → deduplicated, source-merged list
   CategoryResults.per_tool         → {tool_key: [results]} raw per-tool
   CategoryResults.stats            → {tool_key: count, "combined": count}
@@ -147,6 +150,49 @@ def load_from_session(session_id: str, repo) -> dict[str, CategoryResults]:
             category=category,
             per_tool=per_tool,
             combined=combined,
+        )
+
+    return all_results
+
+
+def load_from_project(repo) -> dict[str, CategoryResults]:
+    """Load all results across every session in the project — every pipeline run
+    plus the persistent proxy-traffic pseudo-session (SiteMap/proxy-derived crawl,
+    params, etc.) — merged into one view. Unlike `load_from_session`, the same
+    result can appear in more than one session's Mongo documents (e.g. a parameter
+    found by both a tool run and the proxy tap), so duplicates are merged by key
+    here rather than just appended. `repo` is an AweRepository instance.
+    """
+    from containers.results.models import CATEGORY_MODEL, result_from_dict
+
+    all_results: dict[str, CategoryResults] = {}
+
+    for category in CATEGORY_MODEL:
+        docs = repo.get_results_project(category=category)
+        if not docs:
+            all_results[category] = CategoryResults(category=category)
+            continue
+
+        per_tool: dict[str, list[BaseResult]] = {}
+        combined: dict[str, BaseResult] = {}
+
+        for doc in docs:
+            obj = result_from_dict(category, doc.get("data", {}), doc.get("sources", []))
+            if obj is None:
+                continue
+            for source in obj.sources:
+                per_tool.setdefault(source, []).append(obj)
+            key = obj.key
+            if key in combined:
+                combined[key].merge(obj)
+            else:
+                combined[key] = obj
+
+        merged = _post_process(category, list(combined.values()))
+        all_results[category] = CategoryResults(
+            category=category,
+            per_tool=per_tool,
+            combined=merged,
         )
 
     return all_results

@@ -1,15 +1,16 @@
 """
 Pipeline Runner Window — configuration, execution, session history.
 """
+import os
 import subprocess
-from datetime import datetime
+from datetime import datetime, timezone
 
 from PySide6.QtCore import Qt, QThread, Signal
 from PySide6.QtGui import QColor, QFont
 from PySide6.QtWidgets import (
-    QComboBox, QDialog, QFileDialog, QFrame, QHBoxLayout, QLabel,
+    QCheckBox, QComboBox, QDialog, QFileDialog, QFrame, QHBoxLayout, QLabel,
     QLineEdit, QListWidget, QListWidgetItem, QMainWindow, QMessageBox,
-    QProgressBar, QPushButton, QScrollArea, QSplitter, QTabWidget,
+    QPushButton, QScrollArea, QSplitter, QTabWidget,
     QTextEdit, QVBoxLayout, QWidget, QFormLayout,
 )
 
@@ -78,14 +79,22 @@ class _StepRow(QWidget):
     rerun_requested          = Signal(str)   # tool_key — emitted on rerun button / context menu
     rerun_parser_requested   = Signal(str)   # tool_key — emitted from context menu
     stop_requested           = Signal(str)   # tool_key — emitted on stop button
+    check_toggled            = Signal(str, bool)   # tool_key, checked — batch-select checkbox
 
     def __init__(self, tool_key: str, display_name: str, stage: int, parent=None):
         super().__init__(parent)
         self.tool_key = tool_key
         self._selected = False
+        self._row_running = False
         row = QHBoxLayout(self)
         row.setContentsMargins(4, 1, 4, 1)
         row.setSpacing(4)
+
+        self._check = QCheckBox()
+        self._check.setFixedWidth(16)
+        self._check.setToolTip("Select for batch rerun")
+        self._check.toggled.connect(lambda c: self.check_toggled.emit(self.tool_key, c))
+        row.addWidget(self._check)
 
         # Status icon — use app default font so Unicode symbols render reliably
         self._icon = QLabel("○")
@@ -189,12 +198,29 @@ class _StepRow(QWidget):
         icon, color = _STATUS_ICON.get(status, ("?", "#CDD6F4"))
         self._icon.setText(icon)
         self._icon.setStyleSheet(f"color:{color}; font-size:11px;")
-        is_running = status == "running"
-        self._stop_btn.setVisible(is_running)
-        self._rerun_btn.setVisible(not is_running)
+        self._row_running = status == "running"
+        self._stop_btn.setVisible(self._row_running)
+        self._rerun_btn.setVisible(not self._row_running)
+        # Rerun stays clickable even while OTHER tools are running elsewhere
+        # in the pipeline — PipelineExecutor.add_tool_keys() lets the GUI hand
+        # new tools to an already-running executor instead of starting a
+        # second one. Only this row's OWN in-flight run blocks it (its button
+        # is hidden above anyway; disabling too guards the sliver of time
+        # between a rerun click and the container actually reporting started).
+        self._rerun_btn.setEnabled(not self._row_running)
         if count:
             self._count.setText(str(count))
             self._count.setVisible(True)
+
+    # ── batch-select checkbox ────────────────────────────────────────────────
+
+    def is_checked(self) -> bool:
+        return self._check.isChecked()
+
+    def set_checked(self, value: bool) -> None:
+        self._check.blockSignals(True)
+        self._check.setChecked(value)
+        self._check.blockSignals(False)
 
     def append_log(self, line: str):
         # Show last log line as a tooltip on the row rather than a cramped label
@@ -210,6 +236,7 @@ class _MonitorPanel(QWidget):
     rerun_stage        = Signal(int)   # stage_num
     rerun_tool         = Signal(str)   # tool_key
     rerun_tool_parser  = Signal(str)   # tool_key
+    rerun_selected     = Signal(object)   # set[str] of tool_key — batch rerun of checked rows
     stop_tool          = Signal(str)   # tool_key
     stop_stage         = Signal(int)   # stage_num
 
@@ -224,7 +251,51 @@ class _MonitorPanel(QWidget):
             "QSplitter::handle{background:#313244; width:2px;}")
         splitter.setChildrenCollapsible(False)
 
-        # ── left: step list ───────────────────────────────────────────────────
+        # ── left: selection toolbar + step list ─────────────────────────────────
+        left_panel = QWidget()
+        left_vb = QVBoxLayout(left_panel)
+        left_vb.setContentsMargins(0, 0, 0, 0)
+        left_vb.setSpacing(2)
+
+        _sel_btn_ss = (
+            "QPushButton{background:#1A1A2E;color:#89B4FA;border:1px solid #313244;"
+            "border-radius:3px;font-size:8px;padding:0 6px;min-height:18px;max-height:18px;}"
+            "QPushButton:hover{background:#252540;border-color:#89B4FA;}"
+            "QPushButton:disabled{color:#45475A;border-color:#252540;}"
+        )
+        _run_sel_btn_ss = (
+            "QPushButton{background:#1A2E1A;color:#A6E3A1;border:1px solid #313244;"
+            "border-radius:3px;font-size:8px;padding:0 6px;min-height:18px;max-height:18px;}"
+            "QPushButton:hover{background:#233A23;border-color:#A6E3A1;}"
+            "QPushButton:disabled{color:#45475A;border-color:#252540;}"
+        )
+
+        sel_bar = QHBoxLayout()
+        sel_bar.setContentsMargins(4, 2, 4, 2)
+        sel_bar.setSpacing(6)
+        self._selected_lbl = QLabel("")
+        self._selected_lbl.setStyleSheet("color:#6C7086; font-size:9px;")
+        sel_bar.addWidget(self._selected_lbl)
+        sel_bar.addStretch()
+        self._select_all_btn = QPushButton("Select All")
+        self._select_all_btn.setStyleSheet(_sel_btn_ss)
+        self._select_all_btn.clicked.connect(self._select_all)
+        sel_bar.addWidget(self._select_all_btn)
+        self._clear_sel_btn = QPushButton("Clear")
+        self._clear_sel_btn.setStyleSheet(_sel_btn_ss)
+        self._clear_sel_btn.clicked.connect(self._clear_selection)
+        sel_bar.addWidget(self._clear_sel_btn)
+        self._run_selected_btn = QPushButton("▶ Run Selected")
+        self._run_selected_btn.setToolTip(
+            "Run every checked tool together — tools in the same stage run "
+            "in parallel, just like an automatic pipeline run."
+        )
+        self._run_selected_btn.setStyleSheet(_run_sel_btn_ss)
+        self._run_selected_btn.setEnabled(False)
+        self._run_selected_btn.clicked.connect(self._on_run_selected_clicked)
+        sel_bar.addWidget(self._run_selected_btn)
+        left_vb.addLayout(sel_bar)
+
         step_scroll = QScrollArea()
         step_scroll.setWidgetResizable(True)
         step_scroll.setFrameShape(QFrame.NoFrame)
@@ -235,7 +306,9 @@ class _MonitorPanel(QWidget):
         self._vbox.addStretch()
         step_scroll.setWidget(self._container)
         self._step_scroll = step_scroll
-        splitter.addWidget(step_scroll)
+        left_vb.addWidget(step_scroll, stretch=1)
+
+        splitter.addWidget(left_panel)
 
         # ── right: per-tool log ───────────────────────────────────────────────
         log_panel = QWidget()
@@ -274,15 +347,18 @@ class _MonitorPanel(QWidget):
         self._stage_tools: dict[int, list[str]] = {}
         self._tool_stage: dict[str, int] = {}          # tool_key → stage_num
         self._running_tools: set[str] = set()
+        self._checked_keys: set[str] = set()           # tool_key → batch-selected for rerun
         self._is_running = False
 
     # ── public API ────────────────────────────────────────────────────────────
 
     def set_running(self, running: bool) -> None:
-        """Toggle stage rerun buttons; stage stop buttons are driven by on_started/on_done."""
+        """Track pipeline running state. Rerun/stage/selection controls stay
+        clickable while running — PipelineExecutor.add_tool_keys() lets the
+        GUI hand new tools to an already-running executor rather than
+        starting a competing one. Stage stop buttons are driven separately
+        by on_started/on_done since they track per-tool activity."""
         self._is_running = running
-        for btn in self._stage_rerun_btns.values():
-            btn.setEnabled(not running)
         if not running:
             # Pipeline finished — disable all stage stop buttons and clear tracking
             for btn in self._stage_stop_btns.values():
@@ -302,10 +378,12 @@ class _MonitorPanel(QWidget):
         self._stage_tools.clear()
         self._tool_stage.clear()
         self._running_tools.clear()
+        self._checked_keys.clear()
         self._selected_key = None
         self._tool_log.clear()
         self._log_title.setText("Select a tool to view its log")
         self._clear_tool_log_btn.setEnabled(False)
+        self._update_selection_ui()
 
         # Group steps by stage
         stages: dict[int, list] = {}
@@ -347,7 +425,9 @@ class _MonitorPanel(QWidget):
             self._stage_stop_btns[stage_num] = stop_btn
             rerun_btn = QPushButton(f"↺ Rerun S{stage_num}")
             rerun_btn.setStyleSheet(_BTN_SS)
-            rerun_btn.setEnabled(not self._is_running)
+            # Always enabled: clicking while a pipeline is running hands this
+            # stage's tools to it via add_tool_keys() (see _rerun_stage).
+            rerun_btn.setEnabled(True)
             rerun_btn.clicked.connect(lambda checked=False, sn=_sn: self.rerun_stage.emit(sn))
             hdr_hl.addWidget(rerun_btn)
             self._stage_rerun_btns[stage_num] = rerun_btn
@@ -362,6 +442,7 @@ class _MonitorPanel(QWidget):
                 r.rerun_requested.connect(self.rerun_tool)
                 r.rerun_parser_requested.connect(self.rerun_tool_parser)
                 r.stop_requested.connect(self.stop_tool)
+                r.check_toggled.connect(self._on_row_checked)
                 self._vbox.addWidget(r)
                 self._rows[step.tool_key] = r
                 self._log_buffer[step.tool_key] = []
@@ -470,6 +551,40 @@ class _MonitorPanel(QWidget):
         if self._selected_key and self._selected_key in self._log_buffer:
             self._log_buffer[self._selected_key].clear()
 
+    # ── batch selection ───────────────────────────────────────────────────────
+
+    def _on_row_checked(self, key: str, checked: bool) -> None:
+        if checked:
+            self._checked_keys.add(key)
+        else:
+            self._checked_keys.discard(key)
+        self._update_selection_ui()
+
+    def _update_selection_ui(self) -> None:
+        # Enabled purely on selection count — clicking it while a pipeline is
+        # already running hands the batch to it via add_tool_keys() instead
+        # of starting a competing PipelineExecutor (see PipelineWindow._start_pipeline).
+        n = len(self._checked_keys)
+        self._selected_lbl.setText(f"{n} selected" if n else "")
+        self._run_selected_btn.setEnabled(n > 0)
+        self._run_selected_btn.setText(f"▶ Run Selected ({n})" if n else "▶ Run Selected")
+
+    def _select_all(self) -> None:
+        for key, row in self._rows.items():
+            row.set_checked(True)
+            self._checked_keys.add(key)
+        self._update_selection_ui()
+
+    def _clear_selection(self) -> None:
+        for row in self._rows.values():
+            row.set_checked(False)
+        self._checked_keys.clear()
+        self._update_selection_ui()
+
+    def _on_run_selected_clicked(self) -> None:
+        if self._checked_keys:
+            self.rerun_selected.emit(set(self._checked_keys))
+
     def _scroll_log_to_end(self):
         from PySide6.QtGui import QTextCursor
         c = self._tool_log.textCursor()
@@ -529,6 +644,15 @@ class PipelineWindow(QMainWindow):
         self._runBtn.clicked.connect(self._start_pipeline)
         row.addWidget(self._runBtn)
 
+        self._initBtn = QPushButton("⊞  Initialize")
+        self._initBtn.setToolTip(
+            "Create a session and populate Live Monitor without running any "
+            "tools — trigger individual tools/stages manually from there, "
+            "or still click Run Pipeline to execute everything."
+        )
+        self._initBtn.clicked.connect(self._initialize_pipeline)
+        row.addWidget(self._initBtn)
+
         self._stopBtn = QPushButton("■  Stop")
         self._stopBtn.clicked.connect(self._stop_pipeline)
         self._stopBtn.setEnabled(False)
@@ -554,12 +678,6 @@ class PipelineWindow(QMainWindow):
         row.addWidget(settingsBtn)
 
         row.addStretch()
-
-        self._progressBar = QProgressBar()
-        self._progressBar.setFixedWidth(220)
-        self._progressBar.setTextVisible(True)
-        self._progressBar.setVisible(False)
-        row.addWidget(self._progressBar)
 
         self._mongoStatus = QLabel("⬤ …")
         self._mongoStatus.setObjectName("certDialogSubtitle")
@@ -680,6 +798,7 @@ class PipelineWindow(QMainWindow):
         self._monitor.rerun_stage.connect(self._rerun_stage)
         self._monitor.rerun_tool.connect(self._rerun_tool)
         self._monitor.rerun_tool_parser.connect(self._rerun_parser)
+        self._monitor.rerun_selected.connect(self._rerun_selected)
         self._monitor.stop_tool.connect(self._stop_tool)
         self._monitor.stop_stage.connect(self._stop_stage)
         vbox.addWidget(self._monitor, stretch=1)
@@ -704,6 +823,56 @@ class PipelineWindow(QMainWindow):
 
     # ── Pipeline run control ──────────────────────────────────────────────────
 
+    def _initialize_pipeline(self):
+        """Create a session and populate Live Monitor with pending steps
+        without running anything, so the operator can trigger individual
+        tools/stages by hand from the monitor's rerun buttons — or still
+        click Run Pipeline afterwards to execute everything."""
+        _target    = self._targetEdit.text().strip()
+        _in_scope  = parse_scope_text(self._inScopeEdit.text())
+        _out_scope = parse_scope_text(self._outScopeEdit.text())
+
+        if not _target:
+            self._log("[!] Enter a target domain")
+            return
+        ok, msg = ping(_MONGO_URI)
+        if not ok:
+            self._log(f"[!] MongoDB: {msg}")
+            return
+
+        tmpl = self._current_template()
+        if not tmpl:
+            return
+
+        ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+        output_dir = os.path.join(self._project_dir, "sessions", f"{tmpl.key}_{ts}")
+        os.makedirs(output_dir, exist_ok=True)
+
+        session_id = self._repo.create_session(
+            pipeline_key=tmpl.key,
+            pipeline_name=tmpl.name,
+            target=_target,
+            output_dir=output_dir,
+            in_scope=_in_scope,
+            out_of_scope=_out_scope,
+        )
+        # create_session() defaults new sessions to "running" — override since
+        # nothing is executing yet. _STATUS_ICON / history list already know
+        # how to render "pending".
+        self._repo.update_session_status(session_id, "pending")
+
+        self._current_session_id = session_id
+        self._refresh_sessions()   # selects the new session, populates Monitor/Log tabs
+        self._retryBtn.setEnabled(True)
+        self._resumeBtn.setEnabled(False)
+        self._mainTabs.setCurrentIndex(1)
+        self._log(
+            f"[i] Initialized '{tmpl.name}' → {_target}  "
+            f"({len(tmpl.steps)} steps pending). Use the rerun buttons in "
+            f"Live Monitor to run tools/stages manually, or click "
+            f"Run Pipeline to execute everything."
+        )
+
     def _start_pipeline(
         self,
         retry_keys: set[str] | None = None,
@@ -712,6 +881,27 @@ class PipelineWindow(QMainWindow):
         in_scope: list | None = None,
         out_scope: list | None = None,
     ):
+        if self._executor is not None and self._executor.isRunning():
+            # Never replace self._executor while its QThread is still running —
+            # dropping the last reference to a live QThread makes Qt abort the
+            # process with "QThread: Destroyed while thread is still running".
+            # For a targeted (re)run, hand the tools to the live executor
+            # instead of refusing outright — but only if it's executing the
+            # SAME session, otherwise we'd misattribute results to the wrong
+            # session/output_dir.
+            live_sid = getattr(self._executor, "_session_id", "")
+            if retry_keys and session_id and session_id == live_sid \
+                    and self._executor.add_tool_keys(set(retry_keys)):
+                self._monitor.reset_rows(retry_keys)
+                names = ", ".join(sorted(retry_keys))
+                self._log(f"[i] Queued onto the running pipeline: {names}")
+                return
+            self._log(
+                "[!] A pipeline is already running — stop it, or wait for it "
+                "to finish, before starting another."
+            )
+            return
+
         _target   = target    or self._targetEdit.text().strip()
         _in_scope = in_scope  if in_scope  is not None else parse_scope_text(self._inScopeEdit.text())
         _out_scope = out_scope if out_scope is not None else parse_scope_text(self._outScopeEdit.text())
@@ -741,9 +931,6 @@ class PipelineWindow(QMainWindow):
         self._monitor.set_running(True)
         self._mainTabs.setCurrentIndex(1)
 
-        self._progressBar.setMaximum(len(steps_to_run))
-        self._progressBar.setValue(0)
-        self._progressBar.setVisible(True)
         self._stageLabel.setText(f"Running: {tmpl.name}  →  {_target}")
 
         self._executor = PipelineExecutor(
@@ -756,6 +943,7 @@ class PipelineWindow(QMainWindow):
             session_id=session_id,
             mongo_uri=_MONGO_URI,
         )
+        self._executor.session_started.connect(self._on_session_started)
         self._executor.step_started.connect(
             lambda k, n, s: (self._monitor.on_started(k), self._log(f"[S{s}] ▶ {n}")))
         self._executor.step_log.connect(
@@ -763,10 +951,10 @@ class PipelineWindow(QMainWindow):
         self._executor.step_done.connect(self._on_step_done)
         self._executor.stage_done.connect(lambda n: self._stageLabel.setText(f"Stage {n} done"))
         self._executor.pipeline_done.connect(self._on_pipeline_done)
-        self._executor.progress.connect(lambda d, t: self._progressBar.setValue(d))
         self._executor.start()
 
         self._runBtn.setEnabled(False)
+        self._initBtn.setEnabled(False)
         self._stopBtn.setEnabled(True)
         self._retryBtn.setEnabled(False)
         self._resumeBtn.setEnabled(False)
@@ -867,6 +1055,33 @@ class PipelineWindow(QMainWindow):
         self._last_rerun_key = tool_key
         self._start_pipeline(
             retry_keys={tool_key},
+            session_id=sid,
+            target=session_doc.get("target"),
+            in_scope=session_doc.get("in_scope"),
+            out_scope=session_doc.get("out_of_scope"),
+        )
+
+    def _rerun_selected(self, tool_keys: set[str]):
+        """Rerun a manually-checked batch of tools together, in a single
+        PipelineExecutor — tools that share a stage run in parallel, exactly
+        like an automatic run. This is the safe way to run several tools at
+        once by hand: starting them via separate individual rerun clicks
+        would spin up competing PipelineExecutor threads and crash Qt."""
+        if not tool_keys:
+            return
+        sid = self._current_session_id
+        if not sid:
+            self._log("[!] Select a session first")
+            return
+        session_doc = self._repo.get_session(sid)
+        if not session_doc:
+            return
+        tmpl = (PIPELINE_REGISTRY.get(session_doc["pipeline_key"]) or
+                self._custom_templates.get(session_doc["pipeline_key"]))
+        if not tmpl:
+            return
+        self._start_pipeline(
+            retry_keys=set(tool_keys),
             session_id=sid,
             target=session_doc.get("target"),
             in_scope=session_doc.get("in_scope"),
@@ -1085,6 +1300,14 @@ class PipelineWindow(QMainWindow):
 
     # ── Executor signals ──────────────────────────────────────────────────────
 
+    def _on_session_started(self, session_id: str):
+        """Fires as soon as the live executor knows its session id — before that,
+        self._current_session_id stays "" for a fresh run (it used to only get
+        set in _on_pipeline_done), which made the rerun/rerun-stage/rerun-selected
+        buttons silently no-op ("Select a session first") for the entire
+        duration of a pipeline's first run."""
+        self._current_session_id = session_id
+
     def _on_step_done(self, key: str, status: str, count: int):
         self._monitor.on_done(key, status, count)
         icon = {"completed": "✓", "skipped": "⏭", "failed": "✗", "stopped": "⏹"}.get(status, "?")
@@ -1103,8 +1326,8 @@ class PipelineWindow(QMainWindow):
             icon, label = "✗", "Failed"
         self._log(f"\n{icon} Pipeline {label} — {message}")
         self._stageLabel.setText(f"{icon} {label}: {message}")
-        self._progressBar.setVisible(False)
         self._runBtn.setEnabled(True)
+        self._initBtn.setEnabled(True)
         self._stopBtn.setEnabled(False)
         self._retryBtn.setEnabled(True)
         self._resumeBtn.setEnabled(was_stopped or not success)
@@ -1453,6 +1676,7 @@ class PipelineWindow(QMainWindow):
             self._mongoStatus.setText(f"⬤ {msg}")
             self._mongoStatus.setStyleSheet("color: #F38BA8;")
             self._runBtn.setEnabled(False)
+            self._initBtn.setEnabled(False)
 
     # ── Utilities ─────────────────────────────────────────────────────────────
 

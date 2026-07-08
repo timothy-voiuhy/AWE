@@ -40,6 +40,7 @@ logger = logging.getLogger(__name__)
 
 
 class PipelineExecutor(QThread):
+    session_started = Signal(str)   # session_id — emitted as soon as it's known, before any step runs
     step_started  = Signal(str, str, int)
     step_log      = Signal(str, str)
     step_done     = Signal(str, str, int)
@@ -58,6 +59,7 @@ class PipelineExecutor(QThread):
         retry_tool_keys: set[str] | None = None,
         session_id: str | None = None,
         mongo_uri: str = "mongodb://localhost:27017",
+        reuse_project_results: bool = True,
     ):
         super().__init__()
         self._template            = template
@@ -69,12 +71,25 @@ class PipelineExecutor(QThread):
         self._retry_keys          = retry_tool_keys   # None = run all
         self._given_session_id    = session_id        # reuse existing if set
         self._mongo_uri           = mongo_uri
+        self._reuse_project       = reuse_project_results
         self._stop_event          = threading.Event()
         self._session_id          = ""
         self._active_containers: dict[str, object] = {}
         self._containers_lock     = threading.Lock()
         self._step_log_accum: dict[str, list[str]] = {}
         self._log_accum_lock      = threading.Lock()
+        # Tools explicitly targeted for a (re)run — original retry_keys plus
+        # anything queued later via add_tool_keys(). These always execute
+        # even if reuse_project_results would otherwise skip them as already
+        # completed elsewhere in the project.
+        self._explicit_keys: set[str] = set(retry_tool_keys or ())
+        # Tools queued onto this already-running executor from the GUI thread
+        # while run() is mid-flight — picked up once the current round of
+        # stages finishes. Guarded by _queue_lock since it's written from the
+        # GUI thread and read/drained from this QThread's own thread.
+        self._extra_steps: list[PipelineStep] = []
+        self._queue_lock          = threading.Lock()
+        self._accepting           = True   # False once run() commits to finishing
 
     def stop(self):
         """Signal every running container to stop immediately, then set the event."""
@@ -86,6 +101,29 @@ class PipelineExecutor(QThread):
                 container.stop(timeout=3)
             except Exception:
                 pass
+
+    def add_tool_keys(self, tool_keys: set[str]) -> bool:
+        """Queue additional tools onto this already-running executor.
+
+        Called from the GUI thread while run() is executing on this QThread.
+        Returns False if the executor is no longer accepting new work (it has
+        stopped, or has already committed to finishing) — the caller should
+        start a fresh PipelineExecutor instead. Tools already active right
+        now are skipped so we never launch two containers under the same
+        (deterministic) container name concurrently.
+        """
+        with self._containers_lock:
+            active = set(self._active_containers.keys())
+        steps = [s for s in self._template.steps
+                 if s.tool_key in tool_keys and s.tool_key not in active]
+        if not steps:
+            return False
+        with self._queue_lock:
+            if not self._accepting or self._stop_event.is_set():
+                return False
+            self._extra_steps.extend(steps)
+            self._explicit_keys.update(s.tool_key for s in steps)
+        return True
 
     def stop_tool(self, tool_key: str):
         """Stop a single running tool container without halting the whole pipeline."""
@@ -133,6 +171,7 @@ class PipelineExecutor(QThread):
                 out_of_scope=self._out_of_scope,
             )
         self._session_id = session_id
+        self.session_started.emit(session_id)
 
         steps = self._template.steps
         # If retrying, filter to only the requested tool keys
@@ -142,31 +181,50 @@ class PipelineExecutor(QThread):
         total = len(steps)
         completed_count = 0
 
-        stages: dict[int, list[PipelineStep]] = {}
-        for step in steps:
-            stages.setdefault(step.stage, []).append(step)
-
         try:
-            for stage_num in sorted(stages.keys()):
+            # Outer loop: each pass runs the current `steps` grouped by stage,
+            # then checks whether the GUI queued more work (add_tool_keys())
+            # while we were busy. Only stops accepting new work once a pass
+            # finishes with nothing waiting — see _accepting / add_tool_keys.
+            while True:
+                stages: dict[int, list[PipelineStep]] = {}
+                for step in steps:
+                    stages.setdefault(step.stage, []).append(step)
+
+                for stage_num in sorted(stages.keys()):
+                    if self._stop_event.is_set():
+                        break
+                    stage_steps = stages[stage_num]
+                    with ThreadPoolExecutor(max_workers=max(1, len(stage_steps))) as pool:
+                        futures = {
+                            pool.submit(self._run_step, step, repo, settings, session_id, output_dir): step
+                            for step in stage_steps
+                        }
+                        for future in as_completed(futures):
+                            step = futures[future]
+                            completed_count += 1
+                            self.progress.emit(completed_count, total)
+                            try:
+                                status, count = future.result()
+                                self.step_done.emit(step.tool_key, status, count)
+                            except Exception as exc:
+                                logger.exception("Step %s raised", step.tool_key)
+                                self.step_done.emit(step.tool_key, "failed", 0)
+                    self.stage_done.emit(stage_num)
+
                 if self._stop_event.is_set():
+                    with self._queue_lock:
+                        self._accepting = False
                     break
-                stage_steps = stages[stage_num]
-                with ThreadPoolExecutor(max_workers=max(1, len(stage_steps))) as pool:
-                    futures = {
-                        pool.submit(self._run_step, step, repo, settings, session_id, output_dir): step
-                        for step in stage_steps
-                    }
-                    for future in as_completed(futures):
-                        step = futures[future]
-                        completed_count += 1
-                        self.progress.emit(completed_count, total)
-                        try:
-                            status, count = future.result()
-                            self.step_done.emit(step.tool_key, status, count)
-                        except Exception as exc:
-                            logger.exception("Step %s raised", step.tool_key)
-                            self.step_done.emit(step.tool_key, "failed", 0)
-                self.stage_done.emit(stage_num)
+
+                with self._queue_lock:
+                    if self._extra_steps:
+                        steps = self._extra_steps
+                        self._extra_steps = []
+                        total += len(steps)
+                    else:
+                        self._accepting = False   # commit to finishing
+                        break
 
             was_stopped = self._stop_event.is_set()
             final = "stopped" if was_stopped else "completed"
@@ -177,6 +235,8 @@ class PipelineExecutor(QThread):
 
         except Exception as exc:
             logger.exception("Pipeline %s failed", self._template.key)
+            with self._queue_lock:
+                self._accepting = False
             try:
                 repo.update_session_status(session_id, "failed")
             except Exception:
@@ -216,6 +276,19 @@ class PipelineExecutor(QThread):
             if self._stop_event.is_set():
                 repo.update_tool_run_skipped(run_id, "pipeline stopped")
                 return "skipped", 0
+
+            # Skip re-running tools that already completed with results in a
+            # prior session for this project (unless explicitly targeted —
+            # either via the original retry_keys or a later add_tool_keys()
+            # hand-off; both land in _explicit_keys).
+            if self._reuse_project and step.tool_key not in self._explicit_keys:
+                if repo.tool_ran_in_project(step.tool_key):
+                    self._emit(
+                        step.tool_key,
+                        "⏭ Already completed in a previous session — reusing existing results",
+                    )
+                    repo.update_tool_run_skipped(run_id, "reused from project history")
+                    return "skipped", 0
 
             repo.update_tool_run_started(run_id)
 
@@ -384,7 +457,12 @@ class PipelineExecutor(QThread):
             return ""
         if cond.startswith("if:"):
             category = cond[3:]
-            if repo.count_results(session_id, category) == 0:
+            count = (
+                repo.count_results_project(category)
+                if self._reuse_project
+                else repo.count_results(session_id, category)
+            )
+            if count == 0:
                 return f"no {category} results yet"
         return ""
 
@@ -395,7 +473,11 @@ class PipelineExecutor(QThread):
         category: str,
         output_dir: str,
     ) -> tuple[str | None, str]:
-        values = repo.get_combined_values(session_id, category)
+        values = (
+            repo.get_combined_values_project(category)
+            if self._reuse_project
+            else repo.get_combined_values(session_id, category)
+        )
         if not values:
             return None, ""
 

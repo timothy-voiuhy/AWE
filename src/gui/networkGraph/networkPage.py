@@ -2,10 +2,11 @@ import logging
 
 from PySide6.QtCore import Qt, QRectF, QTimer, Signal
 from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QSplitter, QLabel,
+    QWidget, QVBoxLayout, QHBoxLayout, QSplitter, QLabel, QFrame,
     QPushButton, QMessageBox, QDialog, QMenu,
 )
 
+from gui.appearance import load_ui_settings, save_ui_settings
 from .networkGraphScene import NetworkGraphScene
 from .networkGraphView import NetworkGraphView
 from .detailPanel import DetailPanel
@@ -18,6 +19,7 @@ from ._dialogs import (
     _AddOSINTDlg, _AddCdnDlg, _InfoNoteDlg, _AddCustomNodeDlg, _AddOriginServerDlg,
 )
 from ._helpers import _SearchEdit
+from ._filterPanel import GraphFilterPanel
 
 logger = logging.getLogger(__name__)
 
@@ -54,6 +56,17 @@ class NetworkPage(QWidget):
         self._status.setStyleSheet(
             "color:#6C7086; font-size:10px; padding:3px 10px; background:#11111B;")
 
+        # ── Findings / endpoints filter panel (hidden until toggled) ────────────
+        self._filter_panel = GraphFilterPanel()
+        self._filter_panel.setVisible(False)
+        self._filter_panel.changed.connect(self._on_filter_changed)
+
+        self._filter_sep = QFrame()
+        self._filter_sep.setFrameShape(QFrame.HLine)
+        self._filter_sep.setFixedHeight(1)
+        self._filter_sep.setStyleSheet("background:#313244; border:none;")
+        self._filter_sep.setVisible(False)
+
         splitter = QSplitter(Qt.Horizontal)
         splitter.addWidget(self._view)
         splitter.addWidget(self._detail)
@@ -65,8 +78,13 @@ class NetworkPage(QWidget):
         vb.setContentsMargins(0, 0, 0, 0)
         vb.setSpacing(0)
         vb.addWidget(toolbar)
+        vb.addWidget(self._filter_panel)
+        vb.addWidget(self._filter_sep)
         vb.addWidget(splitter, stretch=1)
         vb.addWidget(self._status)
+
+        self._restore_saved_filters()
+        self._scene.set_node_filter(self._filter_panel.passes)
 
         # _load_data() is NOT called here.  _wire_scope_signals() in
         # TargetWindow calls on_scope_changed() with the persisted scope
@@ -121,6 +139,29 @@ class NetworkPage(QWidget):
                             "border:1px solid #FE640B;border-radius:4px;"
                             "padding:2px 10px;font-size:10px;min-height:26px;}"
                             "QPushButton:hover{background:#4D3B2F;}")
+
+        # ── Findings / endpoints filter toggle ───────────────────────────────────
+        self._filter_btn = QPushButton("Filters ▾")
+        self._filter_btn.setCheckable(True)
+        self._filter_btn.setFixedHeight(26)
+        self._filter_btn.setStyleSheet(_btn_ss)
+        self._filter_btn.toggled.connect(self._on_filter_toggle)
+        hl.addWidget(self._filter_btn)
+
+        self._filter_reset_btn = QPushButton("Reset")
+        self._filter_reset_btn.setFixedHeight(26)
+        self._filter_reset_btn.setStyleSheet(_btn_ss)
+        self._filter_reset_btn.clicked.connect(self._on_filter_reset)
+        self._filter_reset_btn.setVisible(False)
+        hl.addWidget(self._filter_reset_btn)
+
+        self._filter_active_lbl = QLabel("")
+        self._filter_active_lbl.setStyleSheet(
+            "color:#F9E2AF; font-size:9px; background:#2A2A1A;"
+            " border:1px solid #45475A; border-radius:3px; padding:0 6px;"
+        )
+        self._filter_active_lbl.setVisible(False)
+        hl.addWidget(self._filter_active_lbl)
 
         # ── Zoom controls ─────────────────────────────────────────────────────
         _icon_btn_ss = ("QPushButton{background:#313244;color:#CDD6F4;"
@@ -310,6 +351,50 @@ class NetworkPage(QWidget):
         win = self.window()
         if hasattr(win, "openNewBrowserTab"):
             win.openNewBrowserTab(url)
+
+    # ── Findings / endpoints filter panel ────────────────────────────────────────
+
+    def _on_filter_toggle(self, checked: bool) -> None:
+        self._filter_panel.setVisible(checked)
+        self._filter_sep.setVisible(checked)
+        self._filter_btn.setText("Filters ▴" if checked else "Filters ▾")
+
+    def _on_filter_changed(self) -> None:
+        self._scene.set_node_filter(self._filter_panel.passes)
+        active = self._filter_panel.is_active()
+        self._filter_reset_btn.setVisible(active)
+        self._filter_active_lbl.setText("filtered" if active else "")
+        self._filter_active_lbl.setVisible(active)
+        self._save_filters()
+
+    def _on_filter_reset(self) -> None:
+        self._filter_panel.reset()
+        self._filter_reset_btn.setVisible(False)
+        self._scene.set_node_filter(self._filter_panel.passes)
+        self._save_filters()
+
+    def _save_filters(self) -> None:
+        try:
+            data = load_ui_settings()
+            data["network_filters"] = self._filter_panel.to_dict()
+            save_ui_settings(data)
+        except Exception:
+            pass
+
+    def _restore_saved_filters(self) -> None:
+        try:
+            data  = load_ui_settings()
+            saved = data.get("network_filters")
+            if saved is None:
+                return
+            self._filter_panel.from_dict(saved)
+            if self._filter_panel.is_active():
+                self._filter_btn.setChecked(True)
+                self._filter_reset_btn.setVisible(True)
+                self._filter_active_lbl.setText("filtered")
+                self._filter_active_lbl.setVisible(True)
+        except Exception:
+            pass
 
     def _fit_first_rows(self, n_rows: int = 2) -> None:
         """Fit the view to show the first n_rows lane bands (plus the header)."""

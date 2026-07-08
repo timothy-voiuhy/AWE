@@ -166,11 +166,35 @@ class _NavButton(QPushButton):
             vb.addWidget(self._icon_lbl)
 
         self._txt_lbl = None  # labels removed; tooltip carries the name
+        self._badge: QLabel | None = None
+        self._badge_count = 0
+        self._base_tooltip = label
 
         self.setFlat(True)
         self.setFixedWidth(_NAV_W)
         self.setFixedHeight(44)
         self._set_active(False)
+
+    def set_badge(self, count: int) -> None:
+        """Show/hide a small notification dot in the icon's top-right corner,
+        Burp-style, indicating `count` pending review items for this page."""
+        self._badge_count = count
+        if count <= 0:
+            if self._badge is not None:
+                self._badge.setVisible(False)
+            self.setToolTip(self._base_tooltip)
+            return
+
+        if self._badge is None:
+            self._badge = QLabel(self)
+            self._badge.setFixedSize(10, 10)
+            self._badge.setStyleSheet(
+                f"background:{YELLOW}; border-radius:5px; border:1px solid {BASE};"
+            )
+            self._badge.move(_NAV_W - 16, 4)
+        self._badge.setVisible(True)
+        self._badge.raise_()
+        self.setToolTip(f"{self._base_tooltip} — {count} pending review")
 
     def _set_active(self, active: bool):
         color = self._accent if active else OVERLAY0
@@ -219,6 +243,13 @@ class TargetWindow(QtWidgets.QMainWindow):
         self.target_url        = ""
         self.proxy             = QNetworkProxy()
         self._nav_btns: list[_NavButton] = []
+
+        # Route the embedded browser through AWE's proxy by default so traffic
+        # is captured without the user having to remember to enable it —
+        # requires the CA cert to already be trusted, otherwise HTTPS breaks.
+        if Path(ROOT_CERT_FILE).exists():
+            self.enableProxy()
+            self.proxy_status = True
 
         self.getMainSeverName()
         self.setObjectName(self.projectDirPath)
@@ -294,6 +325,7 @@ class TargetWindow(QtWidgets.QMainWindow):
         # Also push the already-loaded scope into pages so their first render
         # respects scope, not just future saves.
         self._wire_scope_signals()
+        self._refresh_review_badges()
 
         self._switch_page(Page.TARGET)
         self.topParent.newProjectCreated.emit(self)
@@ -327,7 +359,14 @@ class TargetWindow(QtWidgets.QMainWindow):
         for i, (glyph, label, accent, icon_path) in enumerate(_NAV):
             btn = _NavButton(glyph, label, accent, icon_path)
             btn.setToolTip(label)
-            btn.clicked.connect(lambda _, idx=i: self._switch_page(idx))
+            if i == Page.RESULTS:
+                # Direct nav clicks always land on the merged, all-sessions
+                # view — narrowing to one pipeline's session only happens via
+                # the Pipeline page's explicit "View Results" (OpenResultsWindow
+                # preceded by ResultsWindow.load_session()).
+                btn.clicked.connect(lambda: self._open_merged_results())
+            else:
+                btn.clicked.connect(lambda _, idx=i: self._switch_page(idx))
             vb.addWidget(btn)
             self._nav_btns.append(btn)
             # thin separator after every button (inset 10px each side)
@@ -467,8 +506,11 @@ class TargetWindow(QtWidgets.QMainWindow):
         return self._dockerManager
 
     def _build_results_page(self) -> QWidget:
+        # repo (no session_id) => the project-wide view: every pipeline session
+        # merged with the proxy/SiteMap-derived pseudo-session, so results aren't
+        # siloed to whichever tool last ran.
         self._resultsWindow = ResultsWindow(
-            output_dir=self.projectDirPath, parent=self
+            output_dir=self.projectDirPath, repo=self._repo, parent=self
         )
         return self._resultsWindow
 
@@ -521,6 +563,22 @@ class TargetWindow(QtWidgets.QMainWindow):
             return get_proxy_traffic_db().traffic
         except Exception:
             return None
+
+    # ── Review-queue nav badges (Burp-style pending-review dots) ──────────────
+
+    def _refresh_review_badge(self, queue_name: str, page: "Page") -> None:
+        if not self._repo:
+            return
+        try:
+            count = self._repo.count_pending_review(queue_name)
+        except Exception:
+            count = 0
+        self._nav_btns[page].set_badge(count)
+
+    def _refresh_review_badges(self) -> None:
+        self._refresh_review_badge("jwt", Page.JWT)
+        self._refresh_review_badge("graphql", Page.GRAPHQL)
+        self._refresh_review_badge("websocket", Page.WEBSOCKETS)
 
     def _build_sitemap_page(self) -> QWidget:
         self._siteMapPage = SiteMapPage(
@@ -594,7 +652,11 @@ class TargetWindow(QtWidgets.QMainWindow):
     def _build_ws_page(self) -> QWidget:
         self._wsPage = WebSocketPage(
             proxy_port=self.proxy_port,
+            repo=self._repo,
             parent=self,
+        )
+        self._wsPage.pending_review_changed.connect(
+            lambda: self._refresh_review_badge("websocket", Page.WEBSOCKETS)
         )
         return self._wsPage
 
@@ -609,6 +671,9 @@ class TargetWindow(QtWidgets.QMainWindow):
     def _build_jwt_page(self) -> QWidget:
         self._jwtPage = JwtPage(repository=self._repo, parent=self)
         self._jwtPage.send_to_ai.connect(self._send_to_ai)
+        self._jwtPage.pending_review_changed.connect(
+            lambda: self._refresh_review_badge("jwt", Page.JWT)
+        )
         return self._jwtPage
 
     def _build_graphql_page(self) -> QWidget:
@@ -619,6 +684,9 @@ class TargetWindow(QtWidgets.QMainWindow):
         )
         self._graphqlPage.send_to_repeater.connect(self._send_to_repeater)
         self._graphqlPage.send_to_ai.connect(self._send_to_ai)
+        self._graphqlPage.pending_review_changed.connect(
+            lambda: self._refresh_review_badge("graphql", Page.GRAPHQL)
+        )
         return self._graphqlPage
 
     def _send_to_repeater(self, request_text: str) -> None:
@@ -676,7 +744,9 @@ class TargetWindow(QtWidgets.QMainWindow):
         scope  = self._scopeEditor.current_config() if hasattr(self, "_scopeEditor") else None
         target = self.main_server_name or ""
         self._extractWorker = _ExtractWorker(col, scope, parent=self)
-        self._extractWorker.done.connect(lambda results: self._on_extract_done(results, target))
+        self._extractWorker.done.connect(
+            lambda results, review_candidates: self._on_extract_done(results, review_candidates, target)
+        )
         self._extractWorker.error.connect(
             lambda msg: __import__("logging").getLogger(__name__).warning(
                 "proxy traffic extraction error: %s", msg
@@ -684,7 +754,7 @@ class TargetWindow(QtWidgets.QMainWindow):
         )
         self._extractWorker.start()
 
-    def _on_extract_done(self, results: dict, target: str) -> None:
+    def _on_extract_done(self, results: dict, review_candidates: dict, target: str) -> None:
         if not self._repo:
             return
         try:
@@ -699,6 +769,47 @@ class TargetWindow(QtWidgets.QMainWindow):
             return
         if hasattr(self, "_networkPage"):
             self._networkPage.refresh()
+        if hasattr(self, "_resultsWindow"):
+            self._resultsWindow.refresh()
+        self._enqueue_review_candidates(review_candidates)
+
+    def _enqueue_review_candidates(self, review_candidates: dict) -> None:
+        import hashlib
+
+        for jwt_hit in review_candidates.get("jwt", []):
+            token = jwt_hit["token"]
+            dedup_key = hashlib.sha256(token.encode()).hexdigest()
+            self._repo.create_review_item(
+                queue_name="jwt",
+                kind="jwt_header" if jwt_hit["header_name"] == "Authorization" else "jwt_cookie",
+                summary=f"{jwt_hit['header_name']} — {jwt_hit['source_url']}",
+                payload={"token": token, "source_url": jwt_hit["source_url"]},
+                dedup_key=dedup_key,
+            )
+
+        for gql_hit in review_candidates.get("graphql", []):
+            dedup_key = hashlib.sha256(
+                f"{gql_hit['endpoint']}|{gql_hit['query']}".encode()
+            ).hexdigest()
+            summary = gql_hit["query"].strip().splitlines()[0][:80]
+            self._repo.create_review_item(
+                queue_name="graphql",
+                kind="graphql_request",
+                summary=f"{gql_hit['endpoint']} — {summary}",
+                payload={
+                    "endpoint": gql_hit["endpoint"],
+                    "query": gql_hit["query"],
+                    "variables": gql_hit["variables"],
+                },
+                dedup_key=dedup_key,
+            )
+
+        if hasattr(self, "_jwtPage"):
+            self._jwtPage.refresh_review_queue()
+        if hasattr(self, "_graphqlPage"):
+            self._graphqlPage.refresh_review_queue()
+        self._refresh_review_badge("jwt", Page.JWT)
+        self._refresh_review_badge("graphql", Page.GRAPHQL)
 
     def _build_notes_widget(self) -> QWidget:
         page = QWidget()
@@ -797,6 +908,14 @@ class TargetWindow(QtWidgets.QMainWindow):
     def OpenResultsWindow(self):
         self._switch_page(Page.RESULTS)
 
+    def _open_merged_results(self):
+        """Direct "Results" nav click — always show the project-wide merged
+        view, regardless of whatever session a prior "View Results" narrowed
+        it to."""
+        if hasattr(self, "_resultsWindow"):
+            self._resultsWindow.show_merged()
+        self._switch_page(Page.RESULTS)
+
     def OpenNetworkWindow(self):
         self._switch_page(Page.NETWORK)
 
@@ -814,16 +933,25 @@ class TargetWindow(QtWidgets.QMainWindow):
         bw = None
         try:
             if isinstance(link, bool) or link is None:
-                bw = BrowserWindow("google.com")
+                # Pass no link through so BrowserWindow can restore a saved
+                # session URL for this tab; it falls back to google.com itself
+                # when there's nothing to restore.
+                bw = BrowserWindow()
             else:
                 bw = BrowserWindow(link)
-                tab_name = link.split("//")[-1].split("/")[0].split(".")[0] or "new"
         except Exception:
             bw = BrowserWindow("google.com")
         if bw:
+            shown_url = bw.init_link or bw.browser.url().toString()
+            if shown_url:
+                tab_name = shown_url.split("//")[-1].split("/")[0].split(".")[0] or "new"
             self.browserTabWidget.addTab(bw, tab_name)
             self.browserTabWidget.setCurrentWidget(bw)
             self._switch_page(Page.BROWSER)
+            # Any further URLs restored alongside this tab's own become
+            # sibling tabs instead of orphan windows.
+            for extra_link in BrowserWindow.pop_pending_restore_links():
+                self.openNewBrowserTab(extra_link)
 
     def _close_browser_tab_by_index(self, index: int):
         if index > 0:

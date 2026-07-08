@@ -14,6 +14,7 @@ Usage:
     db = get_db(project_dir)
     db.scan_sessions.find_one(...)
 """
+import hashlib
 import re
 from functools import lru_cache
 
@@ -23,12 +24,28 @@ from pymongo.database import Database
 
 _DEFAULT_URI = "mongodb://localhost:27017"
 
+_MAX_DB_NAME = 38   # MongoDB max db name ≤ 38 chars on some platforms
+
 
 def _safe_db_name(project_dir: str) -> str:
-    """Convert a filesystem path to a valid MongoDB database name."""
+    """Convert a filesystem path to a valid MongoDB database name.
+
+    Paths short enough to fit unchanged keep the exact name they always
+    have (no behavior change for the common case — existing projects keep
+    pointing at their existing database). Paths long enough to need
+    truncation get an 8-hex-char hash of the full path appended instead of
+    being blindly cut off, so two distinct long paths that happen to share
+    the same first ~30 characters can no longer collide onto the same
+    truncated name and silently share a database.
+    """
     name = re.sub(r"[^a-zA-Z0-9_]", "_", project_dir.strip("/").replace("/", "_"))
     name = re.sub(r"_+", "_", name).strip("_")
-    return f"awe_{name}"[:38]   # MongoDB max db name ≤ 38 chars on some platforms
+    full = f"awe_{name}"
+    if len(full) <= _MAX_DB_NAME:
+        return full
+    digest = hashlib.sha1(project_dir.encode()).hexdigest()[:8]
+    prefix_budget = _MAX_DB_NAME - len(digest) - 1   # "_" separator
+    return f"{full[:prefix_budget]}_{digest}"
 
 
 @lru_cache(maxsize=16)

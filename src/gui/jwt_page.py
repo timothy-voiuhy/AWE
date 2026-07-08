@@ -27,11 +27,11 @@ import time
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QThread, QTimer, Signal
-from PySide6.QtGui import QFont
+from PySide6.QtGui import QColor, QFont
 from PySide6.QtWidgets import (
     QApplication, QComboBox, QFileDialog, QFrame, QHBoxLayout,
     QLabel, QLineEdit, QPushButton, QScrollArea, QSplitter,
-    QTextEdit, QVBoxLayout, QWidget,
+    QTableWidget, QTableWidgetItem, QTextEdit, QVBoxLayout, QWidget,
 )
 
 from gui.utilities.syntax_highlighter import SyntaxHighlighter
@@ -276,6 +276,7 @@ class JwtPage(QWidget):
 
     send_to_repeater = Signal(str)
     send_to_ai       = Signal(dict)
+    pending_review_changed = Signal()
 
     def __init__(self, repository=None, parent=None):
         super().__init__(parent)
@@ -288,6 +289,7 @@ class JwtPage(QWidget):
         self._brute:     _BruteWorker   | None = None
         self._jt_worker: _JwtToolWorker | None = None
         self._save_timer = None
+        self._review_rows: list[dict] = []
         self._build_ui()
         self._save_timer = QTimer(self)
         self._save_timer.setSingleShot(True)
@@ -298,12 +300,44 @@ class JwtPage(QWidget):
         self._secret_in.textChanged.connect(self._save_timer.start)
         self._pubkey_in.textChanged.connect(self._save_timer.start)
         self._restore_state()
+        self.refresh_review_queue()
 
     # ── public API ────────────────────────────────────────────────────────────
 
     def load_token(self, token: str) -> None:
         self._token_input.setText(token.strip())
         self._parse()
+
+    def refresh_review_queue(self) -> None:
+        """Reload pending JWTs spotted passively in proxy traffic."""
+        if not self._repo:
+            return
+        self._review_rows = self._repo.list_review_items("jwt")
+        self._review_lbl.setText(f"PENDING REVIEW ({len(self._review_rows)})")
+        self._review_table.setRowCount(len(self._review_rows))
+        for r, item in enumerate(self._review_rows):
+            cell = QTableWidgetItem(item.get("summary", ""))
+            cell.setForeground(QColor("#F9E2AF"))
+            self._review_table.setItem(r, 0, cell)
+
+    def _on_review_item_activated(self, table_item) -> None:
+        row = table_item.row()
+        if row < 0 or row >= len(self._review_rows):
+            return
+        item = self._review_rows[row]
+        self.load_token(item.get("payload", {}).get("token", ""))
+        self._repo.mark_review_item(item["id"], "reviewed")
+        self.refresh_review_queue()
+        self.pending_review_changed.emit()
+
+    def _on_dismiss_review_item(self) -> None:
+        row = self._review_table.currentRow()
+        if row < 0 or row >= len(self._review_rows):
+            return
+        item = self._review_rows[row]
+        self._repo.mark_review_item(item["id"], "dismissed")
+        self.refresh_review_queue()
+        self.pending_review_changed.emit()
 
     # ── UI ────────────────────────────────────────────────────────────────────
 
@@ -377,6 +411,60 @@ class JwtPage(QWidget):
     def _build_attack_panel(self) -> QWidget:
         outer = QWidget()
         outer.setMinimumWidth(280)
+        outer.setStyleSheet("background:#181825;")
+        ol = QVBoxLayout(outer)
+        ol.setContentsMargins(0, 0, 0, 0)
+        ol.setSpacing(0)
+
+        vert = QSplitter(Qt.Vertical)
+        vert.setChildrenCollapsible(False)
+        vert.setStyleSheet("QSplitter::handle{background:#313244;height:3px;}")
+        vert.addWidget(self._build_review_panel())
+        vert.addWidget(self._build_attacks_scroll())
+        vert.setSizes([160, 520])
+        ol.addWidget(vert, stretch=1)
+        return outer
+
+    def _build_review_panel(self) -> QWidget:
+        """Pending review (JWTs spotted passively in proxy traffic)."""
+        panel = QWidget()
+        panel.setMinimumHeight(80)
+        panel.setStyleSheet("background:#181825;")
+        pl = QVBoxLayout(panel)
+        pl.setContentsMargins(8, 8, 8, 4)
+        pl.setSpacing(4)
+
+        review_row = QHBoxLayout()
+        self._review_lbl = QLabel("PENDING REVIEW (0)")
+        self._review_lbl.setStyleSheet(
+            "color:#F9E2AF;font-size:9px;font-weight:bold;background:transparent;"
+        )
+        review_row.addWidget(self._review_lbl)
+        review_row.addStretch()
+        dismiss_btn = QPushButton("Dismiss")
+        dismiss_btn.setStyleSheet(_BTN)
+        dismiss_btn.setFixedHeight(22)
+        dismiss_btn.clicked.connect(self._on_dismiss_review_item)
+        review_row.addWidget(dismiss_btn)
+        pl.addLayout(review_row)
+
+        self._review_table = QTableWidget(0, 1)
+        self._review_table.setHorizontalHeaderLabels(["Double-click to load"])
+        self._review_table.horizontalHeader().setVisible(False)
+        self._review_table.verticalHeader().setVisible(False)
+        self._review_table.setStyleSheet(
+            "QTableWidget{background:#11111B;color:#CDD6F4;border:1px solid #313244;"
+            "gridline-color:#313244;font-size:9px;}"
+            "QTableWidget::item:selected{background:#313244;}"
+        )
+        self._review_table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self._review_table.horizontalHeader().setStretchLastSection(True)
+        self._review_table.itemDoubleClicked.connect(self._on_review_item_activated)
+        pl.addWidget(self._review_table, stretch=1)
+        return panel
+
+    def _build_attacks_scroll(self) -> QWidget:
+        outer = QWidget()
         outer.setStyleSheet("background:#181825;")
         ol = QVBoxLayout(outer)
         ol.setContentsMargins(0, 0, 0, 0)

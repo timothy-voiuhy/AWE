@@ -1,7 +1,8 @@
 """Per-project context closed over by AI tool functions.
 
-One Agent (and therefore one set of registered tools) lives per TargetWindow —
-this dataclass carries whatever those tools need without resorting to globals.
+One AiToolContext lives per TargetWindow and is shared by every chat tab's
+Agent — this dataclass carries whatever those tools need without resorting
+to globals.
 """
 from __future__ import annotations
 

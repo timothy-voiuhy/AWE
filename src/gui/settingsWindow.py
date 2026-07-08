@@ -9,6 +9,7 @@ Tabs:
 from __future__ import annotations
 
 import json
+import logging
 import uuid
 from collections import defaultdict
 from pathlib import Path
@@ -29,6 +30,8 @@ from gui.appearance import (
     load_ui_settings, save_ui_settings, apply_appearance,
 )
 from gui.certSetupDialog import CertSetupWidget
+
+log = logging.getLogger(__name__)
 
 # ── Palette constants ─────────────────────────────────────────────────────────
 _BG      = "#1E1E2E"
@@ -967,6 +970,11 @@ class SettingsWidget(QWidget):
         mapping[Keys.LLM_WORKER_PROMPT] = self._aiWorkerPromptEdit.text().strip()
         mapping[Keys.LLM_REVIEWER_PROMPT] = self._aiReviewerPromptEdit.text().strip()
         self._repo.set_many(mapping)
+        if self._target_window and hasattr(self._target_window, "_aiChatPage"):
+            try:
+                self._target_window._aiChatPage.reload_settings()
+            except Exception:
+                log.exception("AiChatPage.reload_settings() failed")
         for tool_key, edit in self._cmd_fields.items():
             val = edit.text().strip()
             if val:

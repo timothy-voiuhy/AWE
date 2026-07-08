@@ -1,9 +1,11 @@
 FROM golang:1.24-alpine AS builder
 RUN apk add --no-cache git
-RUN go install github.com/KathanP01/Gxss@latest
+RUN git clone --depth 1 https://github.com/KathanP01/Gxss.git /gxss
+WORKDIR /gxss
+RUN go build -o /go/bin/gxss .
 
 FROM alpine:3.19
 RUN apk add --no-cache ca-certificates
-COPY --from=builder /go/bin/Gxss /usr/local/bin/gxss
+COPY --from=builder /go/bin/gxss /usr/local/bin/gxss
 RUN mkdir /output
 ENTRYPOINT ["gxss"]

@@ -207,6 +207,39 @@ class AweRepository:
         result = self._db.results.bulk_write(ops, ordered=False)
         return result.upserted_count
 
+    def delete_results(
+        self,
+        category: str,
+        result_keys: list[str],
+        session_id: str | None = None,
+    ) -> int:
+        """Delete stored result docs matching category+result_key — backs the
+        Results page's row-level Delete context menu action.
+
+        Scoped to a single session_id when the Results page is narrowed to
+        one pipeline session (load_session()); otherwise every session in the
+        project, including the proxy/manual-import pseudo-sessions, so a
+        "deleted" finding doesn't reappear from another session's copy the
+        next time the merged view reloads.
+        """
+        if not result_keys:
+            return 0
+        filt: dict[str, Any] = {"category": category, "result_key": {"$in": result_keys}}
+        if session_id:
+            filt["session_id"] = session_id
+        else:
+            sids = self._all_session_ids_including_proxy()
+            if not sids:
+                return 0
+            filt["session_id"] = {"$in": sids}
+        result = self._db.results.delete_many(filt)
+        self._db.reviewed_results.delete_many({
+            "project_dir": self._project_dir,
+            "category": category,
+            "key": {"$in": result_keys},
+        })
+        return result.deleted_count
+
     def get_results(
         self,
         session_id: str,
@@ -224,47 +257,135 @@ class AweRepository:
             cursor = cursor.limit(limit)
         return [_flatten(d) for d in cursor]
 
-    def get_combined_values(self, session_id: str, category: str) -> list[str]:
-        """
-        Returns the primary string value for each unique result in a category.
-        Used to build input files for downstream pipeline stages.
-        """
-        _VALUE_FIELD = {
-            "subdomain":  "domain",
-            "dns":        "name",
-            "portscan":   None,   # returns host:port
-            "http":       "url",
-            "crawl":      "url",
-            "params":     "endpoint",
-            "fuzz":       None,
-            "vuln":       "url",
-            "osint":      "value",
-            "screenshot": "url",
-        }
-        field = _VALUE_FIELD.get(category, "value")
+    # ── Project-scope helpers (across all sessions for this project) ──────────
+
+    _VALUE_FIELD: dict[str, str | None] = {
+        "subdomain":  "domain",
+        "dns":        "name",
+        "portscan":   None,   # returns host:port
+        "http":       "url",
+        "crawl":      "url",
+        "params":     "endpoint",
+        "fuzz":       None,
+        "vuln":       "url",
+        "osint":      "value",
+        "screenshot": "url",
+    }
+
+    def _all_session_ids(self) -> list[str]:
+        """All session IDs for this project (excludes proxy pseudo-session)."""
+        cursor = self._db.scan_sessions.find(
+            {
+                "project_dir":  self._project_dir,
+                "pipeline_key": {"$ne": "proxy_traffic"},
+            },
+            {"_id": 1},
+        )
+        return [_str(d["_id"]) for d in cursor]
+
+    def _all_session_ids_including_proxy(self) -> list[str]:
+        """Every session ID for this project, including the proxy pseudo-session —
+        used for the project-wide Results view so browser-tapped traffic is merged
+        in alongside tool-run sessions."""
+        cursor = self._db.scan_sessions.find(
+            {"project_dir": self._project_dir}, {"_id": 1}
+        )
+        return [_str(d["_id"]) for d in cursor]
+
+    def get_results_project(self, category: str | None = None) -> list[dict]:
+        """All results across every session in this project (tool-run sessions plus
+        the proxy pseudo-session) — the data source for the Results page's default
+        whole-project view."""
+        sids = self._all_session_ids_including_proxy()
+        if not sids:
+            return []
+        filt: dict[str, Any] = {"session_id": {"$in": sids}}
+        if category:
+            filt["category"] = category
+        return [_flatten(d) for d in self._db.results.find(filt)]
+
+    def _completed_session_ids(self) -> list[str]:
+        """Session IDs where status == completed (excludes proxy pseudo-session)."""
+        cursor = self._db.scan_sessions.find(
+            {
+                "project_dir":  self._project_dir,
+                "status":       "completed",
+                "pipeline_key": {"$ne": "proxy_traffic"},
+            },
+            {"_id": 1},
+        )
+        return [_str(d["_id"]) for d in cursor]
+
+    def _get_values_for_sessions(self, session_ids: list[str], category: str) -> list[str]:
+        """Extract deduplicated primary values for a category from the given sessions."""
+        if not session_ids:
+            return []
+        field = self._VALUE_FIELD.get(category, "value")
         cursor = self._db.results.find(
-            {"session_id": session_id, "category": category},
+            {"session_id": {"$in": session_ids}, "category": category},
             {"data": 1, "_id": 0},
         )
-        values = []
+        seen: set[str] = set()
+        values: list[str] = []
         for doc in cursor:
             data = doc.get("data", {})
             if category == "portscan":
                 host = data.get("host", "")
                 port = data.get("port", "")
-                if host and port:
-                    values.append(f"{host}:{port}")
-            elif field and field in data:
-                v = data[field]
-                if v:
-                    values.append(v)
+                v = f"{host}:{port}" if host and port else ""
+            elif field:
+                v = data.get(field, "")
+            else:
+                v = ""
+            if v and v not in seen:
+                seen.add(v)
+                values.append(v)
         return values
+
+    def get_combined_values(self, session_id: str, category: str) -> list[str]:
+        """
+        Returns the primary string value for each unique result in a category.
+        Used to build input files for downstream pipeline stages.
+        """
+        return self._get_values_for_sessions([session_id], category)
+
+    def get_combined_values_project(self, category: str) -> list[str]:
+        """
+        Returns deduplicated primary values for a category across ALL sessions
+        in this project (including the currently running one).
+        Used when reuse_project_results is enabled in the executor.
+        """
+        return self._get_values_for_sessions(self._all_session_ids(), category)
 
     def count_results(self, session_id: str, category: str | None = None) -> int:
         filt: dict[str, Any] = {"session_id": session_id}
         if category:
             filt["category"] = category
         return self._db.results.count_documents(filt)
+
+    def count_results_project(self, category: str) -> int:
+        """Count results for a category across ALL sessions in this project."""
+        sids = self._all_session_ids()
+        if not sids:
+            return 0
+        return self._db.results.count_documents(
+            {"session_id": {"$in": sids}, "category": category}
+        )
+
+    def tool_ran_in_project(self, tool_key: str) -> bool:
+        """
+        True if this tool completed with at least one result in any finished
+        session for this project. Used to skip redundant re-runs.
+        """
+        sids = self._completed_session_ids()
+        if not sids:
+            return False
+        return self._db.tool_runs.find_one({
+            "session_id":   {"$in": sids},
+            "tool_key":     tool_key,
+            "status":       "completed",
+            "result_count": {"$gt": 0},
+        }) is not None
 
     def get_failed_tool_keys(self, session_id: str) -> list[str]:
         cursor = self._db.tool_runs.find(
@@ -383,6 +504,67 @@ class AweRepository:
     def delete_auth_session(self, session_id: str) -> None:
         self._db.auth_sessions.delete_one({"_id": _oid(session_id)})
 
+    # ── Review Queue (passively-detected candidates awaiting user review) ────
+    #
+    # queue_name: "jwt" | "graphql" | "websocket" — one nav-badge-worth of items.
+    # dedup_key identifies the underlying artifact (e.g. a token's hash, a
+    # websocket conn_id) so the same thing detected repeatedly across traffic
+    # is never queued twice, mirroring how Burp doesn't re-flag an already-seen
+    # issue. Once a dedup_key exists for a (project_dir, queue_name), it is
+    # never recreated even if later dismissed/reviewed.
+
+    def create_review_item(
+        self,
+        queue_name: str,
+        kind: str,
+        summary: str,
+        payload: dict,
+        dedup_key: str,
+    ) -> str | None:
+        """Insert a new pending review item, or return None if this exact
+        artifact (by dedup_key) has already been queued before."""
+        existing = self._db.review_queue.find_one({
+            "project_dir": self._project_dir,
+            "queue_name":  queue_name,
+            "dedup_key":   dedup_key,
+        })
+        if existing:
+            return None
+        doc = {
+            "project_dir": self._project_dir,
+            "queue_name":  queue_name,
+            "kind":        kind,
+            "summary":     summary,
+            "payload":     payload,
+            "dedup_key":   dedup_key,
+            "status":      "pending",
+            "created_at":  _now(),
+            "reviewed_at": None,
+        }
+        result = self._db.review_queue.insert_one(doc)
+        return _str(result.inserted_id)
+
+    def list_review_items(self, queue_name: str, status: str | None = "pending") -> list[dict]:
+        filt: dict[str, Any] = {"project_dir": self._project_dir, "queue_name": queue_name}
+        if status:
+            filt["status"] = status
+        cursor = self._db.review_queue.find(filt, sort=[("created_at", -1)])
+        return [_flatten(d) for d in cursor]
+
+    def count_pending_review(self, queue_name: str) -> int:
+        return self._db.review_queue.count_documents({
+            "project_dir": self._project_dir,
+            "queue_name":  queue_name,
+            "status":      "pending",
+        })
+
+    def mark_review_item(self, item_id: str, status: str) -> None:
+        """status: 'reviewed' | 'dismissed'."""
+        self._db.review_queue.update_one(
+            {"_id": _oid(item_id)},
+            {"$set": {"status": status, "reviewed_at": _now()}},
+        )
+
     # ── UI Page State ─────────────────────────────────────────────────────────
 
     def save_page_state(self, page: str, state: dict) -> None:
@@ -446,6 +628,60 @@ class AweRepository:
             "status":       "running",
             "started_at":   _now(),
             "completed_at": None,
+            "result_count": 0,
+            "error_msg":    None,
+        }
+        result = self._db.tool_runs.insert_one(new_doc)
+        return _str(result.inserted_id)
+
+    # ── Manual import pseudo-session ──────────────────────────────────────────
+
+    MANUAL_IMPORT_SESSION_KEY = "manual_import"
+
+    def get_or_create_manual_import_session(self, target: str = "") -> str:
+        """Return the session_id for the persistent manual-import pseudo-session
+        — used by the Results page's Import button to seed subdomains/endpoints
+        from external text files. Mirrors get_or_create_proxy_session()."""
+        doc = self._db.scan_sessions.find_one({
+            "project_dir":  self._project_dir,
+            "pipeline_key": self.MANUAL_IMPORT_SESSION_KEY,
+        })
+        if doc:
+            return _str(doc["_id"])
+        new_doc = {
+            "project_dir":   self._project_dir,
+            "pipeline_key":  self.MANUAL_IMPORT_SESSION_KEY,
+            "pipeline_name": "Manual Import",
+            "target":        target,
+            "status":        "completed",
+            "started_at":    _now(),
+            "completed_at":  _now(),
+            "output_dir":    "",
+            "params":        {},
+            "in_scope":      [],
+            "out_of_scope":  [],
+        }
+        result = self._db.scan_sessions.insert_one(new_doc)
+        return _str(result.inserted_id)
+
+    def get_manual_import_tool_run_id(self, session_id: str) -> str:
+        """Return the shared tool_run_id for manual imports into this session —
+        one run accumulates every import batch, like proxy_traffic_extractor."""
+        doc = self._db.tool_runs.find_one({
+            "session_id": session_id,
+            "tool_key":   "manual_import",
+        })
+        if doc:
+            return _str(doc["_id"])
+        new_doc = {
+            "session_id":   session_id,
+            "tool_key":     "manual_import",
+            "display_name": "Manual Import",
+            "category":     "mixed",
+            "stage":        0,
+            "status":       "completed",
+            "started_at":   _now(),
+            "completed_at": _now(),
             "result_count": 0,
             "error_msg":    None,
         }
@@ -526,6 +762,26 @@ class AweRepository:
         ]
         return {d["_id"]: d["count"]
                 for d in self._db.methodology_states.aggregate(pipeline)}
+
+    # ── Results Window: reviewed rows ─────────────────────────────────────────
+
+    def mark_result_reviewed(self, category: str, key: str, reviewed: bool = True) -> None:
+        """Persist reviewed/unreviewed state for one result row, keyed by its
+        `.key` within a category (e.g. a subdomain name or endpoint URL)."""
+        self._db.reviewed_results.update_one(
+            {"project_dir": self._project_dir, "category": category, "key": key},
+            {"$set": {"project_dir": self._project_dir, "category": category,
+                      "key": key, "reviewed": reviewed, "updated_at": _now()}},
+            upsert=True,
+        )
+
+    def get_reviewed_keys(self, category: str) -> set[str]:
+        """Return the set of reviewed result keys for this project/category."""
+        cursor = self._db.reviewed_results.find(
+            {"project_dir": self._project_dir, "category": category, "reviewed": True},
+            {"key": 1, "_id": 0},
+        )
+        return {d["key"] for d in cursor}
 
 
 # ── helpers ───────────────────────────────────────────────────────────────────

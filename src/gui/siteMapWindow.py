@@ -340,7 +340,10 @@ class SiteMapPage(QWidget):
             return
 
         pipeline = [
-            {"$match": {"host": {"$in": in_scope}}},
+            # tool_source: None matches missing-field docs too — hides traffic
+            # AWE's own testing panels (GraphQL/WebSocket/etc.) generated
+            # about themselves, so it doesn't clutter the SiteMap.
+            {"$match": {"host": {"$in": in_scope}, "tool_source": None}},
             {"$sort": {"timestamp": -1}},
             {"$group": {
                 "_id":          {"host": "$host", "method": "$method", "path": "$path"},

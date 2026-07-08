@@ -1,6 +1,8 @@
 FROM golang:1.24-alpine AS builder
 RUN apk add --no-cache git
-RUN go install github.com/assetnote/kiterunner/cmd/kr@latest
+RUN git clone --depth 1 https://github.com/assetnote/kiterunner.git /kiterunner
+WORKDIR /kiterunner
+RUN go build -o /go/bin/kr ./cmd/kr/
 
 FROM alpine:3.19
 RUN apk add --no-cache ca-certificates

@@ -34,6 +34,7 @@ from proxy._http import (
     read_request,
 )
 from proxy._intercept import InterceptGate, decision_body, decision_headers
+from proxy._markers import pop_tool_marker
 from proxy._models import ProxyResponse
 from proxy._rules import RulesEngine
 from proxy._traffic import TrafficStore
@@ -181,6 +182,7 @@ class ConnectionHandler:
                 break
 
             url = _build_url("https", host, port, target)
+            headers, tool_source = pop_tool_marker(headers)
 
             # Apply match-and-replace to the request
             if self._rules:
@@ -208,7 +210,8 @@ class ConnectionHandler:
                 wrote, response = await self._upstream.stream_sse(
                     method, url, headers, body, writer,
                 )
-                self._traffic.capture(host, method, url, headers, body, response)
+                self._traffic.capture(host, method, url, headers, body, response,
+                                      tool_source=tool_source)
                 if not wrote:
                     try:
                         writer.write(build_response(
@@ -232,7 +235,8 @@ class ConnectionHandler:
                     response.http_version, resp_headers, resp_body,
                 )
 
-            self._traffic.capture(host, method, url, headers, body, response)
+            self._traffic.capture(host, method, url, headers, body, response,
+                                  tool_source=tool_source)
 
             try:
                 writer.write(build_response(
@@ -260,6 +264,7 @@ class ConnectionHandler:
             hmap = header_map(headers)
             host = hmap.get("host", "")
             url  = target if "://" in target else f"http://{host}{target}"
+            headers, tool_source = pop_tool_marker(headers)
 
             # Apply match-and-replace to the request
             if self._rules:
@@ -287,7 +292,8 @@ class ConnectionHandler:
                 wrote, response = await self._upstream.stream_sse(
                     method, url, headers, body, self._writer,
                 )
-                self._traffic.capture(host, method, url, headers, body, response)
+                self._traffic.capture(host, method, url, headers, body, response,
+                                      tool_source=tool_source)
                 if not wrote:
                     try:
                         self._writer.write(build_response(
@@ -311,7 +317,8 @@ class ConnectionHandler:
                     response.http_version, resp_headers, resp_body,
                 )
 
-            self._traffic.capture(host, method, url, headers, body, response)
+            self._traffic.capture(host, method, url, headers, body, response,
+                                  tool_source=tool_source)
 
             try:
                 self._writer.write(build_response(
@@ -344,6 +351,7 @@ class ConnectionHandler:
         body: bytes,
     ) -> None:
         log.debug("WebSocket intercept: %s:%d%s", host, port, path)
+        headers, tool_source = pop_tool_marker(headers)
         up_ctx = ssl.create_default_context()
         up_ctx.check_hostname = False
         up_ctx.verify_mode    = ssl.CERT_NONE
@@ -372,7 +380,7 @@ class ConnectionHandler:
 
         conn_id = ""
         if self._ws_store is not None:
-            conn_id = self._ws_store.create_connection(host, path)
+            conn_id = self._ws_store.create_connection(host, path, tool_source=tool_source)
 
         try:
             await _ws_frame_relay(

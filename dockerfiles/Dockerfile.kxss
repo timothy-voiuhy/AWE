@@ -1,6 +1,8 @@
 FROM golang:1.24-alpine AS builder
 RUN apk add --no-cache git
-RUN go install github.com/tomnomnom/kxss@latest
+RUN git clone --depth 1 https://github.com/tomnomnom/kxss.git /kxss
+WORKDIR /kxss
+RUN go build -o /go/bin/kxss .
 
 FROM alpine:3.19
 RUN apk add --no-cache ca-certificates

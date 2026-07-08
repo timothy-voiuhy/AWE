@@ -1,3 +1,4 @@
+import json
 import logging
 import os
 from pathlib import Path
@@ -19,8 +20,19 @@ _BROWSER_UA = {
     "Firefox": "Mozilla/5.0 (X11; Linux x86_64; rv:128.0) Gecko/20100101 Firefox/128.0",
 }
 
+# Persists the set of currently-open browser windows' URLs so they can be
+# restored the next time a BrowserWindow is opened after a fresh app launch —
+# QtWebEngine has no built-in multi-window session restore of its own.
+_SESSION_FILE = Path(os.path.expanduser("~")) / ".config" / "awe" / "browser_session.json"
+
 
 class BrowserWindow(QMainWindow):
+    # Strong refs so windows spawned during session restore aren't GC'd, and
+    # so we can enumerate open windows to persist their URLs.
+    _instances: list = []
+    _session_restore_attempted = False
+    _pending_restore_links: list = []
+
     def __init__(self, link=None) -> None:
         super().__init__()
         self.certificate_file = CERTIFICATE_FILE
@@ -29,6 +41,11 @@ class BrowserWindow(QMainWindow):
         if not Path(self.downloadPath).exists():
             os.makedirs(self.downloadPath)
         self.init_link = link
+        # Only the first BrowserWindow opened in this process attempts a
+        # restore, and only fills in this window's link if none was requested.
+        restored_links = self._take_restorable_session()
+        if restored_links and self.init_link is None:
+            self.init_link = restored_links.pop(0)
         # Hold strong references so PySide6 GC doesn't collect them before
         # Qt processes acceptCertificate() — without this the call is a silent no-op.
         self._pending_cert_errors: list = []
@@ -62,6 +79,49 @@ class BrowserWindow(QMainWindow):
             self.browser.setUrl(QUrl("http://google.com/"))
         else:
             self.searchUrlOnBrowser(self.init_link)
+
+        BrowserWindow._instances.append(self)
+        # Any remaining restored URLs (beyond the one this window took) are
+        # left for the caller to pop via pop_pending_restore_links() and open
+        # as proper sibling tabs — spawning them as unparented windows here
+        # would leave them invisible (never added to a tab widget or shown).
+        BrowserWindow._pending_restore_links = restored_links
+
+    @classmethod
+    def _take_restorable_session(cls) -> list:
+        # Only the first window opened in the process should trigger a restore.
+        if cls._session_restore_attempted:
+            return []
+        cls._session_restore_attempted = True
+        try:
+            data = json.loads(_SESSION_FILE.read_text())
+            return [u for u in data.get("open_urls", []) if u]
+        except Exception:
+            return []
+
+    @classmethod
+    def pop_pending_restore_links(cls) -> list:
+        """Return and clear any restored URLs not claimed by the first window."""
+        links, cls._pending_restore_links = cls._pending_restore_links, []
+        return links
+
+    @classmethod
+    def _save_session(cls) -> None:
+        try:
+            urls = [w.browser.url().toString() for w in cls._instances
+                    if w.browser.url().isValid()]
+            _SESSION_FILE.parent.mkdir(parents=True, exist_ok=True)
+            _SESSION_FILE.write_text(json.dumps({"open_urls": urls}))
+        except Exception:
+            pass
+
+    def closeEvent(self, event) -> None:
+        try:
+            BrowserWindow._instances.remove(self)
+        except ValueError:
+            pass
+        BrowserWindow._save_session()
+        super().closeEvent(event)
 
     def trust_certificate(self):
         with open(self.certificate_file, "rb") as cert_file:
@@ -128,6 +188,7 @@ class BrowserWindow(QMainWindow):
         _Qurl = self.browser.url()
         str_Url = _Qurl.url()
         self.urlText.setText(str_Url)
+        BrowserWindow._save_session()
 
     def AddUrlHandler(self):
         self.urlLabel = QLabel()

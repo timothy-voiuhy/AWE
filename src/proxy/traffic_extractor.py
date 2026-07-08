@@ -8,6 +8,15 @@ Reads from awe_proxy_traffic.traffic and extracts:
   - ParamResult:      query string and request body parameters
   - CdnResult:        CDN/proxy layer detection with role classification
                        (CDN | Reverse Proxy | CDN/Reverse Proxy)
+  - VulnFinding:      passive misconfiguration findings — insecure cookie flags,
+                       missing security response headers, CORS misconfiguration,
+                       secrets spotted in response bodies (see proxy.passive_detect)
+
+`extract()` also returns a second dict of *review candidates* — JWTs and
+GraphQL-shaped requests spotted in traffic. These aren't results (there's
+nothing to "discover" about them, they just need a human to look at them), so
+they're queued for review on the JWT/GraphQL pages instead of landing in the
+Results table — see AweRepository.create_review_item.
 
 CDN role classification:
   The role is determined per (host, provider) pair by analysing the *kinds*
@@ -41,9 +50,17 @@ from PySide6.QtCore import QThread, Signal
 
 from containers.results.models import (
     SubdomainResult, LiveHost, EndpointResult, ParamResult, CdnResult,
-    BaseResult,
+    VulnFinding, BaseResult,
 )
 from database.scope import ScopeConfig
+from proxy.passive_detect import (
+    check_cors_misconfig,
+    check_security_headers,
+    detect_graphql_request,
+    extract_cookie_flags,
+    find_jwts_in_headers,
+    find_secrets_in_text,
+)
 
 log = logging.getLogger(__name__)
 
@@ -119,18 +136,23 @@ class TrafficExtractor:
         self,
         col,                          # pymongo Collection
         scope: ScopeConfig | None = None,
-    ) -> dict[str, list[BaseResult]]:
+    ) -> tuple[dict[str, list[BaseResult]], dict[str, list[dict]]]:
+        """Returns (results, review_candidates):
+          results           — {category: [BaseResult, ...]} for the Results page
+          review_candidates — {"jwt": [...], "graphql": [...]} for the review queue
+        """
         results: dict[str, list[BaseResult]] = {
-            "subdomain": [], "http": [], "crawl": [], "params": [], "cdn": []
+            "subdomain": [], "http": [], "crawl": [], "params": [], "cdn": [], "vuln": []
         }
+        review_candidates: dict[str, list[dict]] = {"jwt": [], "graphql": []}
         if col is None:
-            return results
+            return results, review_candidates
 
         try:
             all_hosts = col.distinct("host")
         except Exception as exc:
             log.warning("TrafficExtractor: cannot query hosts: %s", exc)
-            return results
+            return results, review_candidates
 
         in_scope = [h for h in all_hosts if not scope or scope.matches(h)]
 
@@ -141,13 +163,17 @@ class TrafficExtractor:
                 )
 
         if not in_scope:
-            return results
+            return results, review_candidates
 
         try:
-            cursor = col.find({"host": {"$in": in_scope}})
+            # tool_source: None matches both docs missing the field and docs
+            # explicitly tagged None — excludes traffic AWE's own testing
+            # panels (GraphQL/WebSocket/etc.) generated about themselves so
+            # it never re-enters Results or the review queues. See proxy._markers.
+            cursor = col.find({"host": {"$in": in_scope}, "tool_source": None})
         except Exception as exc:
             log.warning("TrafficExtractor: cursor failed: %s", exc)
-            return results
+            return results, review_candidates
 
         # Accumulate CDN evidence across ALL documents before classifying.
         # Key: (host, provider)  →  _CdnStats
@@ -155,7 +181,7 @@ class TrafficExtractor:
 
         for doc in cursor:
             try:
-                self._process_doc(doc, results, cdn_stats)
+                self._process_doc(doc, results, cdn_stats, review_candidates)
             except Exception as exc:
                 log.debug("skip doc %s: %s", doc.get("_id"), exc)
 
@@ -170,7 +196,7 @@ class TrafficExtractor:
                 sources=[_SOURCE],
             ))
 
-        return results
+        return results, review_candidates
 
     # ── Per-document processing ───────────────────────────────────────────────
 
@@ -179,6 +205,7 @@ class TrafficExtractor:
         doc: dict,
         results: dict[str, list[BaseResult]],
         cdn_stats: dict[tuple[str, str], _CdnStats],
+        review_candidates: dict[str, list[dict]],
     ) -> None:
         req    = doc.get("request", {}) or {}
         resp   = doc.get("response", {}) or {}
@@ -192,14 +219,73 @@ class TrafficExtractor:
 
         parsed = urlsplit(url)
         query  = parsed.query or ""
+        is_https = parsed.scheme == "https"
 
         ext       = PurePosixPath(path).suffix.lower()
         is_static = ext in _STATIC_EXTS
 
         base_url = f"{parsed.scheme}://{parsed.netloc}{path}".rstrip("/") or url
+        # Host-root URL (no path) — LiveHost represents one row per live host,
+        # like httpx's output, not one row per endpoint. Using base_url here
+        # would create a separate "Live Host" row for every distinct path hit
+        # on the same host.
+        host_url = f"{parsed.scheme}://{parsed.netloc}" if parsed.netloc else url
 
         # ── Tech detection from response headers ──────────────────────────────
         resp_headers: dict = resp.get("headers", {}) or {}
+        req_headers:  dict = req.get("headers", {}) or {}
+
+        # ── JWT candidates (review queue, not a result) ────────────────────────
+        for jwt_hit in find_jwts_in_headers(req_headers):
+            review_candidates["jwt"].append({
+                "token": jwt_hit["token"],
+                "header_name": jwt_hit["header_name"],
+                "source_url": base_url,
+            })
+
+        # ── Passive misconfiguration findings (cookies / security headers / CORS) ──
+        for flag in extract_cookie_flags(resp_headers):
+            issues = []
+            if not flag["secure"] and is_https:
+                issues.append(("insecure_cookie_no_secure", "low", "Cookie missing Secure flag"))
+            if not flag["httponly"]:
+                issues.append(("insecure_cookie_no_httponly", "low", "Cookie missing HttpOnly flag"))
+            if not flag["samesite"]:
+                issues.append(("insecure_cookie_no_samesite", "info", "Cookie missing SameSite attribute"))
+            for template_id, severity, desc in issues:
+                results["vuln"].append(VulnFinding(
+                    template_id=f"{template_id}:{flag['name']}",
+                    name=f"{desc} ({flag['name']})",
+                    severity=severity,
+                    url=base_url,
+                    description=f"Cookie '{flag['name']}' observed on {base_url} — {desc.lower()}.",
+                    tags=["passive", "cookie"],
+                    sources=[_SOURCE],
+                ))
+
+        for issue_code in check_security_headers(resp_headers, is_https):
+            results["vuln"].append(VulnFinding(
+                template_id=issue_code,
+                name=f"Missing security header ({issue_code.replace('missing_', '').upper()})",
+                severity="info",
+                url=base_url,
+                description=f"Response from {base_url} is missing the {issue_code.replace('missing_', '')} header.",
+                tags=["passive", "security_misconfig"],
+                sources=[_SOURCE],
+            ))
+
+        cors_issue = check_cors_misconfig(resp_headers)
+        if cors_issue:
+            results["vuln"].append(VulnFinding(
+                template_id=cors_issue,
+                name="CORS misconfiguration",
+                severity="medium",
+                url=base_url,
+                description=f"{base_url} reflects credentialed CORS access ({cors_issue}).",
+                tags=["passive", "cors"],
+                sources=[_SOURCE],
+            ))
+
         techs: list[str] = []
         for hdr in _TECH_HEADERS:
             val = resp_headers.get(hdr) or resp_headers.get(hdr.title()) or ""
@@ -250,7 +336,8 @@ class TrafficExtractor:
         # ── LiveHost for 2xx/3xx ──────────────────────────────────────────────
         if 200 <= status < 400:
             results["http"].append(LiveHost(
-                url=base_url,
+                url=host_url,
+                host=host,
                 status_code=status,
                 technologies=techs,
                 sources=[_SOURCE],
@@ -260,9 +347,33 @@ class TrafficExtractor:
             return
 
         # ── Request content-type ──────────────────────────────────────────────
-        req_headers: dict = req.get("headers", {}) or {}
         req_ct  = _hdr_str(req_headers,  "content-type").split(";")[0].strip()
         resp_ct = _hdr_str(resp_headers, "content-type").split(";")[0].strip()
+
+        body = req.get("body", "") or ""
+
+        # ── GraphQL candidates (review queue, not a result) ────────────────────
+        graphql_hit = detect_graphql_request(method, req_ct, body, path)
+        if graphql_hit:
+            review_candidates["graphql"].append({
+                "endpoint": base_url,
+                "query": graphql_hit["query"],
+                "variables": graphql_hit["variables"],
+            })
+
+        # ── Secrets spotted in the response body ───────────────────────────────
+        resp_body = resp.get("body", "") or ""
+        for secret_hit in find_secrets_in_text(resp_body):
+            results["vuln"].append(VulnFinding(
+                template_id=f"secret:{secret_hit['kind']}",
+                name=f"Possible {secret_hit['kind'].replace('_', ' ')} in response",
+                severity="high",
+                url=base_url,
+                matched=secret_hit["match"],
+                description=f"Response body from {base_url} contains a pattern matching {secret_hit['kind']}.",
+                tags=["passive", "secret"],
+                sources=[_SOURCE],
+            ))
 
         q_params = list(parse_qs(query).keys())
 
@@ -288,7 +399,6 @@ class TrafficExtractor:
             ))
 
         # ── Body parameters ───────────────────────────────────────────────────
-        body = req.get("body", "") or ""
         if body:
             if req_ct == "application/json":
                 try:
@@ -328,7 +438,7 @@ def _hdr_str(headers: dict, key: str) -> str:
 
 
 class _ExtractWorker(QThread):
-    done  = Signal(dict)
+    done  = Signal(dict, dict)   # (results, review_candidates)
     error = Signal(str)
 
     def __init__(self, col, scope: ScopeConfig | None = None, parent=None) -> None:
@@ -338,8 +448,8 @@ class _ExtractWorker(QThread):
 
     def run(self) -> None:
         try:
-            results = TrafficExtractor().extract(self._col, self._scope)
-            self.done.emit(results)
+            results, review_candidates = TrafficExtractor().extract(self._col, self._scope)
+            self.done.emit(results, review_candidates)
         except Exception as exc:
             log.exception("TrafficExtractor failed")
             self.error.emit(str(exc))

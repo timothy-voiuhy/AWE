@@ -8,7 +8,7 @@ read by the SiteMap, the pipeline executor, and the proxy traffic filter.
 Entry types
 -----------
 domain   : "example.com"         — exact hostname match (+ subdomains if include_subdomains)
-wildcard : "*.example.com"        — any direct subdomain, NOT the apex itself
+wildcard : "*.example.com"        — any subdomain at any depth, plus the apex
 url      : "https://example.com/api" — host + path-prefix match
 regex    : ".*\\.example\\.com"   — raw regex applied to the full host string
 
@@ -49,10 +49,12 @@ class ScopeEntry:
             return re.compile(v, re.IGNORECASE)
 
         if t == "wildcard":
-            # "*.example.com" → matches "example.com" AND "sub.example.com"
+            # "*.example.com" → matches "example.com" AND any subdomain at any
+            # depth ("sub.example.com", "a.b.c.example.com", …) — a single
+            # label (`[^.]+`) would wrongly stop matching past one level deep.
             apex = v.lstrip("*").lstrip(".")
             escaped = re.escape(apex)
-            return re.compile(rf"^({escaped}|[^.]+\.{escaped})$", re.IGNORECASE)
+            return re.compile(rf"^({escaped}|.+\.{escaped})$", re.IGNORECASE)
 
         if t == "url":
             parsed = urlsplit(v if "://" in v else "https://" + v)
@@ -96,28 +98,44 @@ class ScopeConfig:
 
         An empty scope config matches everything (open scope).
         """
-        host = _extract_host(host_or_url)
         if not self.entries:
             return True
 
-        in_patterns  = self._compiled(in_scope=True)
-        out_patterns = self._compiled(in_scope=False)
+        host = _extract_host(host_or_url)
+
+        # url-type entries carry a path (e.g. "https://target.com/api") that
+        # must be matched against the original string — reducing everything
+        # to a bare hostname first (as domain/wildcard/regex entries want)
+        # would make such an entry's path suffix unmatchable forever.
+        def _subject(entry: ScopeEntry) -> str:
+            return host_or_url if entry.entry_type == "url" else host
+
+        in_entries  = [e for e in self.entries if e.in_scope]
+        out_entries = [e for e in self.entries if not e.in_scope]
 
         # Out-of-scope exclusions win
-        if any(p.search(host) for p in out_patterns):
-            return False
+        for entry in out_entries:
+            try:
+                if entry.to_pattern().search(_subject(entry)):
+                    return False
+            except re.error:
+                continue
 
-        if not in_patterns:
+        if not in_entries:
             return True  # no explicit in-scope list → everything is in scope
 
         # Direct match
-        if any(p.search(host) for p in in_patterns):
-            return True
+        for entry in in_entries:
+            try:
+                if entry.to_pattern().search(_subject(entry)):
+                    return True
+            except re.error:
+                continue
 
         # Subdomain expansion for domain-type entries when include_subdomains=True
         if self.include_subdomains:
-            for entry in self.entries:
-                if entry.in_scope and entry.entry_type == "domain":
+            for entry in in_entries:
+                if entry.entry_type == "domain":
                     apex = re.escape(entry.value.strip())
                     if re.search(rf"(^|\.){apex}$", host, re.IGNORECASE):
                         return True

@@ -34,6 +34,7 @@ class NetworkGraphScene(QGraphicsScene):
         self._expanded_nodes: set[str] = set()   # nodes whose hidden children are shown
         self._focused_id:    str | None = None    # node being focused (None = show all)
         self._search_query:  str = ""             # active search (empty = inactive)
+        self._node_filter = None   # optional callable(GraphNode) -> bool, from GraphFilterPanel
         self._lane_deco_items:      list[_LaneDecorationItem] = []
         self._lane_virtual_items:   list = []           # cloned NodeItem/EdgeItem per row
         self._lane_hidden_items:    list = []           # real items hidden while lane is active
@@ -203,6 +204,8 @@ class NetworkGraphScene(QGraphicsScene):
             else:
                 base_vis = True
             visible = base_vis if focus_ids is None else (nid in focus_ids)
+            if visible and self._node_filter is not None and not self._node_filter(item.node()):
+                visible = False
             # Lane suppression always wins — these nodes are replaced by clones
             if nid in self._lane_hidden_node_ids:
                 visible = False
@@ -223,11 +226,14 @@ class NetworkGraphScene(QGraphicsScene):
         for item in self._lane_virtual_items:
             if isinstance(item, NodeItem):
                 if focus_ids is None:
-                    item.setVisible(True)
+                    visible = True
                 else:
                     nid = item.node().id
                     rid = item.node().data.get("_real_id", nid)
-                    item.setVisible(nid in focus_ids or rid in focus_ids)
+                    visible = nid in focus_ids or rid in focus_ids
+                if visible and self._node_filter is not None and not self._node_filter(item.node()):
+                    visible = False
+                item.setVisible(visible)
             elif isinstance(item, EdgeItem):
                 item.setVisible(item._src.isVisible() and item._tgt.isVisible())
 
@@ -255,6 +261,14 @@ class NetworkGraphScene(QGraphicsScene):
         self._refresh_visibility()
         self.focusChanged.emit(False)
 
+    def set_node_filter(self, predicate) -> None:
+        """Set/clear the GraphFilterPanel predicate: callable(GraphNode) -> bool.
+
+        Nodes it rejects are hidden everywhere (normal, focus and lane views).
+        Pass None to remove the filter."""
+        self._node_filter = predicate
+        self._refresh_visibility()
+
     # ── Graph search ──────────────────────────────────────────────────────────
 
     def set_search(self, query: str) -> None:
@@ -267,18 +281,20 @@ class NetworkGraphScene(QGraphicsScene):
                 item.update()
             self._refresh_visibility()
             return
-        # Search mode: override visibility — show ALL nodes, apply opacity
+        # Search mode: override visibility for filter-allowed nodes, apply opacity
         for nid, item in self._node_items.items():
             match = self._node_matches(item.node(), self._search_query)
             item._search_match = match
-            item.setVisible(True)
+            allowed = self._node_filter is None or self._node_filter(item.node())
+            item.setVisible(allowed)
             item.setOpacity(1.0 if match else 0.08)
             item.update()
         for ei in self._edge_items:
             sm = self._node_items.get(ei._src.node().id)
             tm = self._node_items.get(ei._tgt.node().id)
             ei.setVisible(
-                bool(sm and sm._search_match) and bool(tm and tm._search_match)
+                bool(sm and sm._search_match and sm.isVisible())
+                and bool(tm and tm._search_match and tm.isVisible())
             )
         self.update()
 
@@ -495,7 +511,6 @@ class NetworkGraphScene(QGraphicsScene):
         target = targets[0]
 
         sub_ids_all = [c for c, k in children.get(target.id, []) if k == "has_subdomain"]
-        osint_ids   = [c for c, k in children.get(target.id, []) if k == "is_osint"]
 
         def _kids(nid: str, *kinds) -> list[str]:
             seen: set[str] = set()
@@ -532,9 +547,9 @@ class NetworkGraphScene(QGraphicsScene):
                 continue
             cdn_ids   = _kids(sub_id, "proxied_by", "routes_through")
             vuln_ids  = _kids(sub_id, "has_vuln")
+            osint_ids = _kids(sub_id, "is_osint")
             note_ids  = _kids(sub_id, "linked_to", "annotates")
-            extra_ids = vuln_ids + note_ids
-            sub_osint = osint_ids if sub_idx == 0 else []
+            extra_ids = vuln_ids + osint_ids + note_ids
             cname_ids = _cname_chain(sub_id)
             ip_ids    = _kids(sub_id, "resolves_to")
             dir_ports = _kids(sub_id, "has_port")
@@ -560,7 +575,7 @@ class NetworkGraphScene(QGraphicsScene):
                     "origins":   origins,
                     "endpoints": sub_endpoints if first else [],
                     "params":    sub_params    if first else [],
-                    "finds":     (extra_ids + sub_osint) if first else [],
+                    "finds":     extra_ids if first else [],
                 })
 
             if ip_ids:
@@ -578,10 +593,6 @@ class NetworkGraphScene(QGraphicsScene):
             else:
                 _row(None, None, [], True)
 
-        if not chain_rows and osint_ids:
-            chain_rows.append({"sub": None, "cnames": [], "ip": None, "port": None,
-                               "techs": [], "origins": [], "endpoints": [],
-                               "params": [], "finds": osint_ids})
         if not chain_rows:
             item = self._node_items.get(target.id)
             if item:

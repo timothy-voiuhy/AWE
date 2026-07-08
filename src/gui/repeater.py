@@ -28,6 +28,7 @@ from gui.guiUtilities import (
     paste_headers, has_copied_headers,
     ResponseRenderView,
 )
+from proxy._markers import TOOL_MARKER_HEADER
 from gui.utilities.session_utils import apply_session_to_request
 
 log = logging.getLogger(__name__)
@@ -113,6 +114,7 @@ class _SendWorker(QThread):
             k: v for k, v in headers.items()
             if k.lower() not in self._SKIP_HEADERS
         }
+        self._headers[TOOL_MARKER_HEADER] = "repeater"
 
     def run(self) -> None:
         try:

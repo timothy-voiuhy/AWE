@@ -48,6 +48,7 @@ from config.config import RUNDIR
 from gui.guiUtilities import SyntaxHighlighter, ResponseRenderView
 from gui.repeater import _CodeEdit, _PaneWrapper, _parse_raw_request, _parse_resp_for_render
 from gui.utilities.session_utils import apply_session_to_request
+from proxy._markers import TOOL_MARKER_HEADER
 
 log = logging.getLogger(__name__)
 
@@ -465,6 +466,7 @@ class _AttackWorker(QThread):
                     method, url, headers, body = _parse_raw_request(req_text)
                     clean_headers = {k: v for k, v in headers.items()
                                      if k.lower() not in _SKIP_HEADERS}
+                    clean_headers[TOOL_MARKER_HEADER] = "intruder"
                     t0 = datetime.now(timezone.utc)
                     try:
                         r = client.request(
