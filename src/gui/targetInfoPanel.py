@@ -515,10 +515,13 @@ class TargetInfoPanel(QObject):
             top_parent=self.topParent,
             server_name=self.main_window.main_server_name,
             project_dir_path=self.projectDirPath,
+            thread_owner=self.main_window,
         )
         self.whois_runner.start()
 
     def display_whois_results(self, parent, objectName):
+        if parent is not self.main_window:
+            return
         if self.whois_displaying is False:
             self.whois_results_filename = os.path.join(self.projectDirPath, "whois_results")
             if objectName == "whois runner":
@@ -548,7 +551,9 @@ class TargetInfoPanel(QObject):
             self.subdomainsModel.dataChanged.emit(QModelIndex(), QModelIndex())
             self.updateModel()
 
-    def updateModel(self, **args):
+    def updateModel(self, parent=None, objectName=None, **args):
+        if parent is not None and parent is not self.main_window:
+            return
         self.subdomainsModel.clear()
         self.subdomainsModel.setHorizontalHeaderLabels(["Subdomain:UrlsMapping"])
         for subdomain, urls in self.SubdomainUrlDict.items():

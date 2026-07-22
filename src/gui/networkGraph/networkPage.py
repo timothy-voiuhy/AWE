@@ -7,6 +7,7 @@ from PySide6.QtWidgets import (
 )
 
 from gui.appearance import load_ui_settings, save_ui_settings
+from gui.threadrunners import register_monitored_thread
 from .networkGraphScene import NetworkGraphScene
 from .networkGraphView import NetworkGraphView
 from .detailPanel import DetailPanel
@@ -325,6 +326,7 @@ class NetworkPage(QWidget):
         )
         self._loader.loaded.connect(self._on_loaded)
         self._loader.error.connect(lambda m: self._status.setText(f"Error: {m}"))
+        register_monitored_thread(self._loader, self, "Network Graph Loader")
         self._loader.start()
 
     def _on_loaded(self, data: GraphData):

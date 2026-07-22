@@ -16,6 +16,7 @@ from gui.utilities.decode_dialog import decode_text, DecodeDialog
 from gui.utilities.message_box import MessageBox
 from gui.utilities.body_formatter import format_http_body
 from gui.utilities.response_render_view import ResponseRenderView
+from gui.utilities.virtual_text_view import VirtualTextEdit
 from gui.utilities.transforms import apply_transform, transform_directions, TRANSFORM_LABELS
 from gui.utilities.session_utils import apply_session_to_request
 
@@ -38,6 +39,7 @@ __all__ = [
     "MessageBox",
     "format_http_body",
     "ResponseRenderView",
+    "VirtualTextEdit",
     "apply_transform",
     "transform_directions",
     "TRANSFORM_LABELS",

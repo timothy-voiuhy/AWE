@@ -9,6 +9,7 @@ import time
 from pathlib import Path
 import shutil
 from datetime import datetime
+from typing import Callable
 
 from PySide6 import QtCore, QtGui
 from PySide6.QtCore import QThread
@@ -24,6 +25,11 @@ from gui.actionsWidget import ActionsWidget
 from gui.guiUtilities import GuiProxyClient, HoverButton, TextEditor, SyntaxHighlighter, MessageBox
 from gui.threadrunners import AtomProxy
 from utilities import red, cyan
+
+try:
+    import psutil
+except ImportError:
+    psutil = None
 
 # Written by proxy.server on startup, deleted on shutdown
 _PROXY_CONTROL_FILE = Path(RUNDIR) / "tmp" / "proxy_control.txt"
@@ -145,32 +151,172 @@ class ProxyInterceptWindow(QMainWindow):
         self.setCentralWidget(self.MainWidget)
 
 
-class ThreadMon(QWidget):
-    def __init__(self, thread, top_parent):
+class ThreadMon(QFrame):
+    def __init__(
+        self,
+        thread,
+        top_parent,
+        window_instance=None,
+        on_changed: Callable | None = None,
+    ):
         super().__init__()
         self.topParent = top_parent
-        self.formLayout = QFormLayout()
         self.thread = thread
-        self.nameLabel = QLabel()
-        self.nameLabel.setText(thread.objectName())
-        self.formLayout.addRow("Thread Name: ", self.nameLabel)
-        self.status = self.getStatus()
-        self.label = QLabel()
-        self.label.setText(self.status)
-        self.formLayout.addRow("Status: ", self.label)
-        self.threadStopButton = HoverButton("stop thread", "stop the thread from running")
-        self.threadStopButton.clicked.connect(self.exitThread)
-        self.formLayout.addRow("Stop Thread: ", self.threadStopButton)
+        self.window_instance = window_instance
+        self.on_changed = on_changed
+        self.started_at = getattr(thread, "_awe_started_at", None) or time.time()
+        thread._awe_started_at = self.started_at
         self.process = 0
-        self.setLayout(self.formLayout)
+        self._ps_process = None
+        self._last_cpu = None
+        self._last_ram = None
+        self._last_pid = None
+        self._last_source = ""
+
+        self.setFrameShape(QFrame.StyledPanel)
+        self.setStyleSheet(
+            "QFrame{background:#1E1E2E;border:1px solid #45475A;border-radius:6px;}"
+            "QLabel{background:transparent;border:none;color:#CDD6F4;}"
+            "QLabel#muted{color:#A6ADC8;font-size:10px;}"
+            "QLabel#metric{color:#89B4FA;font-size:11px;font-weight:700;}"
+            "QLabel#danger{color:#F38BA8;font-size:11px;font-weight:700;}"
+        )
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(12, 10, 12, 10)
+        layout.setSpacing(8)
+
+        top_row = QHBoxLayout()
+        self.nameLabel = QLabel(thread.objectName())
+        self.nameLabel.setStyleSheet("font-size:13px;font-weight:700;color:#CDD6F4;")
+        top_row.addWidget(self.nameLabel)
+        top_row.addStretch()
+        self.statusPill = QLabel("")
+        self.statusPill.setObjectName("metric")
+        top_row.addWidget(self.statusPill)
+        layout.addLayout(top_row)
+
+        metrics = QHBoxLayout()
+        metrics.setSpacing(14)
+        self.runtimeLabel = self._metric_label("Runtime", "0s")
+        self.pidLabel = self._metric_label("PID", "in-process")
+        self.cpuLabel = self._metric_label("CPU", "n/a")
+        self.ramLabel = self._metric_label("RAM", "n/a")
+        self.kindLabel = self._metric_label("Kind", self.thread.__class__.__name__)
+        for widget in (self.runtimeLabel, self.pidLabel, self.cpuLabel, self.ramLabel, self.kindLabel):
+            metrics.addWidget(widget)
+        metrics.addStretch()
+        layout.addLayout(metrics)
+
+        bottom_row = QHBoxLayout()
+        self.noteLabel = QLabel("Waiting for resource sample")
+        self.noteLabel.setObjectName("muted")
+        bottom_row.addWidget(self.noteLabel)
+        bottom_row.addStretch()
+        self.threadStopButton = HoverButton("Stop", "Stop this worker or subprocess")
+        self.threadStopButton.clicked.connect(self.exitThread)
+        self.threadStopButton.setFixedWidth(74)
+        self.threadStopButton.setStyleSheet(
+            "QPushButton{background:#313244;color:#F38BA8;border:1px solid #45475A;"
+            "border-radius:4px;padding:5px 10px;font-weight:700;}"
+            "QPushButton:hover{background:#45475A;border-color:#F38BA8;}"
+        )
+        bottom_row.addWidget(self.threadStopButton)
+        layout.addLayout(bottom_row)
+
         self.topParent.socketIpc.processFinishedExecution.connect(self.closeWidget)
+        self._timer = QtCore.QTimer(self)
+        self._timer.setInterval(1500)
+        self._timer.timeout.connect(self.refresh)
+        self._timer.start()
+        self.refresh()
+
+    def _metric_label(self, title, value):
+        label = QLabel(f"{title}\n{value}")
+        label.setObjectName("metric")
+        label.setMinimumWidth(88)
+        return label
 
     def closeWidget(self, window_instance, object_name):
-        if object_name == self.thread.objectName():
+        if object_name == self.thread.objectName() and (
+            self.window_instance is None or window_instance is self.window_instance
+        ):
             for thread in window_instance.threads:
-                if thread.objectName() == object_name:
+                if thread is self.thread or thread.objectName() == object_name:
                     window_instance.threads.remove(thread)
+                    break
+            self._timer.stop()
+            if callable(self.on_changed):
+                self.on_changed(window_instance)
             self.close()
+
+    def _resource_process(self):
+        if psutil is None:
+            return None, "Install psutil for CPU/RAM"
+        try:
+            proc = getattr(self.thread, "process", None)
+            pid = getattr(proc, "pid", None)
+            if pid:
+                if self._ps_process is None or self._ps_process.pid != pid:
+                    self._ps_process = psutil.Process(pid)
+                return self._ps_process, "subprocess"
+            if self._ps_process is None:
+                self._ps_process = psutil.Process(os.getpid())
+            return self._ps_process, "app process"
+        except Exception:
+            return None, "process unavailable"
+
+    def _format_runtime(self):
+        seconds = max(0, int(time.time() - self.started_at))
+        mins, secs = divmod(seconds, 60)
+        hours, mins = divmod(mins, 60)
+        if hours:
+            return f"{hours}h {mins}m"
+        if mins:
+            return f"{mins}m {secs}s"
+        return f"{secs}s"
+
+    def refresh(self):
+        status = self.getStatus()
+        running = status == "Running"
+        self.statusPill.setText("RUNNING" if running else "STOPPED")
+        self.statusPill.setStyleSheet(
+            f"color:{'#A6E3A1' if running else '#F38BA8'};font-size:11px;font-weight:800;"
+        )
+        self.runtimeLabel.setText(f"Runtime\n{self._format_runtime()}")
+
+        proc, source = self._resource_process()
+        pid = getattr(proc, "pid", None)
+        self.pidLabel.setText(f"PID\n{pid or 'in-process'}")
+        self.kindLabel.setText(f"Kind\n{self.thread.__class__.__name__}")
+        if proc is not None:
+            try:
+                cpu = proc.cpu_percent(interval=None)
+                ram = proc.memory_info().rss / (1024 * 1024)
+                self._last_cpu = cpu
+                self._last_ram = ram
+                self._last_pid = proc.pid
+                self._last_source = source
+                self.cpuLabel.setText(f"CPU\n{cpu:.1f}%")
+                self.ramLabel.setText(f"RAM\n{ram:.1f} MB")
+                self.noteLabel.setText(f"Resource source: {source}")
+            except Exception:
+                self._last_cpu = None
+                self._last_ram = None
+                self._last_pid = None
+                self.cpuLabel.setText("CPU\nn/a")
+                self.ramLabel.setText("RAM\nn/a")
+                self.noteLabel.setText("Resource sample unavailable")
+        else:
+            self._last_cpu = None
+            self._last_ram = None
+            self._last_pid = None
+            self._last_source = ""
+            self.cpuLabel.setText("CPU\nn/a")
+            self.ramLabel.setText("RAM\nn/a")
+            self.noteLabel.setText(source)
+        if callable(self.on_changed):
+            self.on_changed(self.window_instance)
 
     def getStatus(self):
         try:
@@ -194,11 +340,17 @@ class ThreadMon(QWidget):
             if proc.process_name == "atomProxy":
                 self.topParent.isProxyRunning = False
             logging.info(f"Terminating subprocess with pid {self.pid}")
+            self.threadStopButton.setEnabled(False)
         except AttributeError:
             # handle thread closure
             logging.info(f"Terminating thread {self.thread}")
-            self.thread.terminate()
+            stop = getattr(self.thread, "stop", None)
+            if callable(stop):
+                stop()
+            else:
+                self.thread.terminate()
             self.thread.quit()
+            self.threadStopButton.setEnabled(False)
             # todo : there is a problem when closing a thread
             if self.thread.isRunning():
                 logging.error(f"Failed to terminate thread {self.thread}")
@@ -214,47 +366,170 @@ class ThreadMonitor(QMainWindow):
         self.setCentralWidget(self.central_widget)
         self.threadMonLayout = QVBoxLayout()
         self.central_widget.setLayout(self.threadMonLayout)
+        self.header = QWidget()
+        header_layout = QHBoxLayout(self.header)
+        header_layout.setContentsMargins(10, 8, 10, 4)
+        self.totalLabel = QLabel("Threads: 0 running")
+        self.totalLabel.setStyleSheet("color:#CDD6F4;font-size:14px;font-weight:800;")
+        self.resourceLabel = QLabel("CPU/RAM: waiting for samples")
+        self.resourceLabel.setStyleSheet("color:#A6ADC8;font-size:11px;")
+        header_layout.addWidget(self.totalLabel)
+        header_layout.addStretch()
+        header_layout.addWidget(self.resourceLabel)
+        self.threadMonLayout.addWidget(self.header)
         self.tabManager = QTabWidget()
         self.threadMonLayout.addWidget(self.tabManager)
         self.windowInstancesLayouts = []
+        self._layouts_by_window = {}
+        self._tabs_by_window = {}
+        self._summaries_by_window = {}
+        self._thread_widgets_by_window = {}
         self.top_parent.newProjectCreated.connect(self.addTab)
         self.top_parent.projectClosed.connect(self.closeTab)
         self.top_parent.ThreadStarted.connect(self.addThreadMon)
+        for window_instance in self.windowInstances:
+            self.addTab(window_instance)
+        self._summary_timer = QtCore.QTimer(self)
+        self._summary_timer.setInterval(2000)
+        self._summary_timer.timeout.connect(self.refreshSummaries)
+        self._summary_timer.start()
+        self.refreshSummaries()
 
     def closeTab(self, windowInstance, index):
-        self.tabManager.removeTab(index)
+        window_key = windowInstance.objectName()
+        tab = self._tabs_by_window.pop(window_key, None)
+        layout = self._layouts_by_window.pop(window_key, None)
+        self._summaries_by_window.pop(window_key, None)
+        self._thread_widgets_by_window.pop(window_key, None)
+        if layout in self.windowInstancesLayouts:
+            self.windowInstancesLayouts.remove(layout)
+        if tab is not None:
+            tab_index = self.tabManager.indexOf(tab)
+            if tab_index != -1:
+                self.tabManager.removeTab(tab_index)
 
     def addThreadMon(self, window_instance, threadName):
+        window_key = window_instance.objectName()
+        if window_key not in self._layouts_by_window:
+            self.addTab(window_instance)
         for thread in window_instance.threads:
             if thread.objectName() == threadName:
-                for layout in self.windowInstancesLayouts:
-                    if layout.objectName() == window_instance.objectName():
-                        threadMonWidget = ThreadMon(thread, self.top_parent)
-                        layout.addWidget(threadMonWidget)
+                layout = self._layouts_by_window.get(window_key)
+                if layout is not None:
+                    threadMonWidget = ThreadMon(
+                        thread,
+                        self.top_parent,
+                        window_instance=window_instance,
+                        on_changed=self.refreshSummaries,
+                    )
+                    self._thread_widgets_by_window.setdefault(window_key, []).append(threadMonWidget)
+                    layout.insertWidget(max(0, layout.count() - 1), threadMonWidget)
+                    self.refreshSummaries(window_instance)
+                break
 
     def addTab(self, window_instance):
+        window_key = window_instance.objectName()
+        if window_key in self._tabs_by_window:
+            return
         threads = window_instance.threads
-        tabname = window_instance.objectName().split("/")[-1]
+        tabname = window_key.split("/")[-1]
 
         newTabWidget = QWidget()
         centralWidgetLayout = QVBoxLayout()
+        centralWidgetLayout.setContentsMargins(8, 8, 8, 8)
+        centralWidgetLayout.setSpacing(8)
         newTabWidget.setLayout(centralWidgetLayout)
 
+        summaryLabel = QLabel("")
+        summaryLabel.setStyleSheet(
+            "QLabel{background:#181825;color:#CDD6F4;border:1px solid #313244;"
+            "border-radius:6px;padding:8px 10px;font-size:12px;font-weight:700;}"
+        )
+        centralWidgetLayout.addWidget(summaryLabel)
+
         newTabScrollArea = QScrollArea()
+        newTabScrollArea.setStyleSheet("QScrollArea{border:none;background:#11111B;}")
         centralWidgetLayout.addWidget(newTabScrollArea)
 
         scrollAreaWidget = QWidget()
         newTabLayout = QVBoxLayout()
-        newTabLayout.setObjectName(window_instance.objectName())
+        newTabLayout.setContentsMargins(0, 0, 0, 0)
+        newTabLayout.setSpacing(8)
+        newTabLayout.setObjectName(window_key)
         scrollAreaWidget.setLayout(newTabLayout)
         newTabScrollArea.setWidget(scrollAreaWidget)
         newTabScrollArea.setWidgetResizable(True)
-        newTabWidget.setObjectName(window_instance.objectName())
+        newTabWidget.setObjectName(window_key)
         for thread in threads:
-            threadMonWidget = ThreadMon(thread, top_parent=self.top_parent)
+            threadMonWidget = ThreadMon(
+                thread,
+                top_parent=self.top_parent,
+                window_instance=window_instance,
+                on_changed=self.refreshSummaries,
+            )
+            self._thread_widgets_by_window.setdefault(window_key, []).append(threadMonWidget)
             newTabLayout.addWidget(threadMonWidget)
+        newTabLayout.addStretch()
         self.tabManager.addTab(newTabWidget, tabname)
         self.windowInstancesLayouts.append(newTabLayout)
+        self._layouts_by_window[window_key] = newTabLayout
+        self._tabs_by_window[window_key] = newTabWidget
+        self._summaries_by_window[window_key] = summaryLabel
+        self.refreshSummaries(window_instance)
+
+    def refreshSummaries(self, window_instance=None):
+        total_running = 0
+        total_threads = 0
+        total_cpu = 0.0
+        total_ram = 0.0
+        sampled = 0
+        for window in self.top_parent.openMainWindows:
+            window_key = window.objectName()
+            widgets = [
+                w for w in self._thread_widgets_by_window.get(window_key, [])
+                if w is not None and not w.isHidden()
+            ]
+            running = sum(1 for w in widgets if w.thread.isRunning())
+            total = len(widgets)
+            cpu = 0.0
+            ram = 0.0
+            sampled_processes = set()
+            for widget in widgets:
+                pid = getattr(widget, "_last_pid", None)
+                source = getattr(widget, "_last_source", "")
+                last_cpu = getattr(widget, "_last_cpu", None)
+                last_ram = getattr(widget, "_last_ram", None)
+                if pid is None or last_cpu is None or last_ram is None:
+                    continue
+                sample_key = (source, pid)
+                if sample_key in sampled_processes:
+                    continue
+                sampled_processes.add(sample_key)
+                cpu += last_cpu
+                ram += last_ram
+            total_running += running
+            total_threads += total
+            total_cpu += cpu
+            total_ram += ram
+            sampled += len(sampled_processes)
+            summary = self._summaries_by_window.get(window_key)
+            if summary is not None:
+                label = "application" if window is self.top_parent else window_key.split("/")[-1]
+                stats = f"{label}: {running}/{total} running"
+                if sampled_processes:
+                    stats += f"  |  sampled CPU {cpu:.1f}%  |  sampled RAM {ram:.1f} MB"
+                elif psutil is None:
+                    stats += "  |  install psutil for CPU/RAM"
+                else:
+                    stats += "  |  no resource sample yet"
+                summary.setText(stats)
+        self.totalLabel.setText(f"Threads: {total_running}/{total_threads} running")
+        if sampled:
+            self.resourceLabel.setText(f"Sampled CPU {total_cpu:.1f}%  |  Sampled RAM {total_ram:.1f} MB")
+        elif psutil is None:
+            self.resourceLabel.setText("CPU/RAM unavailable: psutil is not installed")
+        else:
+            self.resourceLabel.setText("CPU/RAM: waiting for samples")
     # def stopRunningThread()
 
 

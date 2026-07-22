@@ -43,6 +43,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from pathlib import PurePosixPath
 from urllib.parse import urlsplit, parse_qs
 
@@ -75,6 +76,11 @@ _STATIC_EXTS: frozenset[str] = frozenset({
 _WRITE_METHODS: frozenset[str] = frozenset({"POST", "PUT", "PATCH", "DELETE"})
 
 _SOURCE = "proxy_traffic"
+
+_DEFAULT_BATCH_SIZE = 100
+_DEFAULT_BATCH_PAUSE_MS = 15
+_MAX_REQUEST_BODY_SCAN_CHARS = 250_000
+_MAX_SECRET_SCAN_CHARS = 250_000
 
 _TECH_HEADERS = (
     "server", "x-powered-by", "x-generator",
@@ -136,6 +142,12 @@ class TrafficExtractor:
         self,
         col,                          # pymongo Collection
         scope: ScopeConfig | None = None,
+        *,
+        should_stop=None,
+        batch_size: int = _DEFAULT_BATCH_SIZE,
+        batch_pause_ms: int = _DEFAULT_BATCH_PAUSE_MS,
+        max_request_body_scan_chars: int = _MAX_REQUEST_BODY_SCAN_CHARS,
+        max_secret_scan_chars: int = _MAX_SECRET_SCAN_CHARS,
     ) -> tuple[dict[str, list[BaseResult]], dict[str, list[dict]]]:
         """Returns (results, review_candidates):
           results           — {category: [BaseResult, ...]} for the Results page
@@ -170,7 +182,37 @@ class TrafficExtractor:
             # explicitly tagged None — excludes traffic AWE's own testing
             # panels (GraphQL/WebSocket/etc.) generated about themselves so
             # it never re-enters Results or the review queues. See proxy._markers.
-            cursor = col.find({"host": {"$in": in_scope}, "tool_source": None})
+            cursor = col.aggregate(
+                [
+                    {"$match": {"host": {"$in": in_scope}, "tool_source": None}},
+                    {"$project": {
+                        "host": 1,
+                        "method": 1,
+                        "path": 1,
+                        "status_code": 1,
+                        "request.method": 1,
+                        "request.url": 1,
+                        "request.headers": 1,
+                        "request.body": {
+                            "$substrCP": [
+                                {"$ifNull": ["$request.body", ""]},
+                                0,
+                                max(0, max_request_body_scan_chars),
+                            ]
+                        },
+                        "response.status_code": 1,
+                        "response.headers": 1,
+                        "response.body": {
+                            "$substrCP": [
+                                {"$ifNull": ["$response.body", ""]},
+                                0,
+                                max(0, max_secret_scan_chars),
+                            ]
+                        },
+                    }},
+                ],
+                batchSize=max(1, batch_size),
+            )
         except Exception as exc:
             log.warning("TrafficExtractor: cursor failed: %s", exc)
             return results, review_candidates
@@ -179,11 +221,21 @@ class TrafficExtractor:
         # Key: (host, provider)  →  _CdnStats
         cdn_stats: dict[tuple[str, str], _CdnStats] = {}
 
-        for doc in cursor:
+        for index, doc in enumerate(cursor, start=1):
+            if should_stop and should_stop():
+                break
             try:
-                self._process_doc(doc, results, cdn_stats, review_candidates)
+                self._process_doc(
+                    doc,
+                    results,
+                    cdn_stats,
+                    review_candidates,
+                    max_secret_scan_chars=max_secret_scan_chars,
+                )
             except Exception as exc:
                 log.debug("skip doc %s: %s", doc.get("_id"), exc)
+            if batch_pause_ms > 0 and index % max(1, batch_size) == 0:
+                time.sleep(batch_pause_ms / 1000)
 
         # Convert accumulated evidence into classified CdnResult objects.
         # One result per (host, provider) pair.
@@ -206,6 +258,8 @@ class TrafficExtractor:
         results: dict[str, list[BaseResult]],
         cdn_stats: dict[tuple[str, str], _CdnStats],
         review_candidates: dict[str, list[dict]],
+        *,
+        max_secret_scan_chars: int = _MAX_SECRET_SCAN_CHARS,
     ) -> None:
         req    = doc.get("request", {}) or {}
         resp   = doc.get("response", {}) or {}
@@ -363,6 +417,8 @@ class TrafficExtractor:
 
         # ── Secrets spotted in the response body ───────────────────────────────
         resp_body = resp.get("body", "") or ""
+        if max_secret_scan_chars > 0 and len(resp_body) > max_secret_scan_chars:
+            resp_body = resp_body[:max_secret_scan_chars]
         for secret_hit in find_secrets_in_text(resp_body):
             results["vuln"].append(VulnFinding(
                 template_id=f"secret:{secret_hit['kind']}",
@@ -445,10 +501,24 @@ class _ExtractWorker(QThread):
         super().__init__(parent)
         self._col   = col
         self._scope = scope
+        self._stop_requested = False
+
+    def stop(self) -> None:
+        self._stop_requested = True
+        self.requestInterruption()
+
+    def _should_stop(self) -> bool:
+        return self._stop_requested or self.isInterruptionRequested()
 
     def run(self) -> None:
         try:
-            results, review_candidates = TrafficExtractor().extract(self._col, self._scope)
+            results, review_candidates = TrafficExtractor().extract(
+                self._col,
+                self._scope,
+                should_stop=self._should_stop,
+            )
+            if self._should_stop():
+                return
             self.done.emit(results, review_candidates)
         except Exception as exc:
             log.exception("TrafficExtractor failed")

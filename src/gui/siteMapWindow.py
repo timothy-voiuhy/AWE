@@ -19,11 +19,11 @@ import re as _re
 from pathlib import Path
 
 from bson import ObjectId
-from PySide6.QtCore import Qt, QModelIndex, QTimer, QPoint, Signal, QEvent
+from PySide6.QtCore import Qt, QModelIndex, QTimer, QPoint, Signal, QEvent, QThread
 from PySide6.QtGui import QStandardItem, QStandardItemModel, QColor, QFont, QPainter, QPolygon
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QSplitter, QFrame,
-    QPushButton, QLabel, QTreeView, QTabWidget, QTextEdit,
+    QPushButton, QLabel, QTreeView, QTabWidget,
     QProxyStyle, QStyle, QMenu, QToolTip, QDialog, QApplication,
 )
 
@@ -36,6 +36,8 @@ from gui.guiUtilities import (
     parse_http_headers, set_header_clipboard, HeaderSelectorDialog,
     ResponseRenderView,
 )
+from gui.threadrunners import register_monitored_thread
+from gui.utilities.virtual_text_view import VirtualTextEdit
 
 log = logging.getLogger(__name__)
 
@@ -52,6 +54,8 @@ _HTTP_METHODS = frozenset({
 
 # Default hidden types on first launch (no saved settings)
 _SITEMAP_DEFAULT_HIDDEN = ["images", "css", "fonts", "media"]
+_LARGE_MESSAGE_PREVIEW_CHARS = 250_000
+_MAX_RENDER_BYTES = 2_000_000
 
 
 class _PathNode:
@@ -62,6 +66,28 @@ class _PathNode:
         self.children: dict[str, _PathNode] = {}
         # Each entry: (doc_id_str, method, status_code)
         self.entries: list[tuple[str, str, int]] = []
+
+
+class _TrafficDocLoader(QThread):
+    loaded = Signal(str, dict, str, str)
+    error = Signal(str, str)
+
+    def __init__(self, col, doc_id: str, parent=None):
+        super().__init__(parent)
+        self._col = col
+        self._doc_id = doc_id
+
+    def run(self):
+        try:
+            doc = self._col.find_one({"_id": ObjectId(self._doc_id)})
+            if not doc:
+                self.error.emit(self._doc_id, "Traffic document not found")
+                return
+            req_text = _fmt_request(doc.get("request", {}))
+            resp_text = _fmt_response(doc.get("response", {}))
+            self.loaded.emit(self._doc_id, doc, req_text, resp_text)
+        except Exception as exc:
+            self.error.emit(self._doc_id, str(exc))
 
 
 class _TreeStyle(QProxyStyle):
@@ -275,9 +301,9 @@ class SiteMapPage(QWidget):
         self._req_view.send_to_graphql.connect(self.send_to_graphql)
         self._req_view.send_to_ai.connect(self.send_to_ai)
         self._resp_view.send_to_repeater.connect(
-            lambda _: self.send_to_repeater.emit(self._req_view.toPlainText()))
+            lambda _: self.send_to_repeater.emit(self._req_view.full_text()))
         self._resp_view.send_to_intruder.connect(
-            lambda _: self.send_to_intruder.emit(self._req_view.toPlainText()))
+            lambda _: self.send_to_intruder.emit(self._req_view.full_text()))
         self._resp_view.send_to_decoder.connect(self.send_to_decoder)
         self._resp_view.send_to_comparer_left.connect(self.send_to_comparer_left)
         self._resp_view.send_to_comparer_right.connect(self.send_to_comparer_right)
@@ -291,6 +317,12 @@ class SiteMapPage(QWidget):
         rr_vb.addWidget(self._search_bar)
 
         self._current_doc: dict | None = None
+        self._current_request_text = ""
+        self._current_response_text = ""
+        self._pending_doc_id = ""
+        self._pending_send_target = ""
+        self._doc_loader: _TrafficDocLoader | None = None
+        self._doc_loaders: list[_TrafficDocLoader] = []
 
         def _on_tab_changed(idx: int) -> None:
             current = self._tabs.widget(idx)
@@ -469,29 +501,62 @@ class SiteMapPage(QWidget):
 
     # ── interactions ──────────────────────────────────────────────────────────
 
-    def _load_doc(self, doc_id: str) -> dict | None:
-        if not doc_id or self._col is None:
-            return None
-        try:
-            return self._col.find_one({"_id": ObjectId(doc_id)})
-        except Exception as exc:
-            log.warning("Failed to load doc %s: %s", doc_id, exc)
-            return None
-
     def _on_item_clicked(self, index: QModelIndex) -> None:
         item   = self._model.itemFromIndex(index)
         doc_id = item.data(_DOC_ID_ROLE) if item else ""
         if not doc_id:
             return
-        doc = self._load_doc(doc_id)
-        if doc:
-            self._current_doc = doc
-            self._req_view.setText(_fmt_request(doc.get("request", {})))
-            self._resp_view.setText(_fmt_response(doc.get("response", {})))
-            if self._tabs.currentWidget() is self._render_view:
-                self._render_current_response()
-            else:
-                self._tabs.setCurrentIndex(0)
+        self._pending_doc_id = doc_id
+        if not getattr(self, "_preserve_pending_send", False):
+            self._pending_send_target = ""
+        self._current_doc = None
+        self._current_request_text = ""
+        self._current_response_text = ""
+        self._req_view.set_http_text("Loading request...")
+        self._resp_view.set_http_text("Loading response...")
+        self._render_view.clear()
+        if self._doc_loader and self._doc_loader.isRunning():
+            self._doc_loader.requestInterruption()
+        self._doc_loader = _TrafficDocLoader(self._col, doc_id, parent=self)
+        self._doc_loader.loaded.connect(self._on_doc_loaded)
+        self._doc_loader.error.connect(self._on_doc_load_error)
+        self._doc_loader.finished.connect(
+            lambda loader=self._doc_loader: self._doc_loaders.remove(loader)
+            if loader in self._doc_loaders else None
+        )
+        self._doc_loaders.append(self._doc_loader)
+        register_monitored_thread(self._doc_loader, self, "SiteMap Transaction Loader")
+        self._doc_loader.start()
+
+    def _on_doc_loaded(self, doc_id: str, doc: dict, req_text: str, resp_text: str) -> None:
+        if doc_id != self._pending_doc_id:
+            return
+        self._current_doc = doc
+        self._current_request_text = req_text
+        self._current_response_text = resp_text
+        self._req_view.set_http_text(req_text)
+        self._resp_view.set_http_text(resp_text)
+        if self._tabs.currentWidget() is self._render_view:
+            self._render_current_response()
+        else:
+            self._tabs.setCurrentIndex(0)
+        if self._pending_send_target == "repeater":
+            self.send_to_repeater.emit(req_text)
+            self._pending_send_target = ""
+        elif self._pending_send_target == "intruder":
+            self.send_to_intruder.emit(req_text)
+            self._pending_send_target = ""
+
+    def _on_doc_load_error(self, doc_id: str, message: str) -> None:
+        if doc_id != self._pending_doc_id:
+            return
+        self._current_doc = None
+        self._current_request_text = ""
+        self._current_response_text = ""
+        self._pending_send_target = ""
+        self._req_view.set_http_text("")
+        self._resp_view.set_http_text(f"Failed to load transaction:\n{message}")
+        self._render_view.clear()
 
     def _render_current_response(self) -> None:
         doc = self._current_doc
@@ -501,6 +566,9 @@ class SiteMapPage(QWidget):
         resp = doc.get("response") or {}
         body_str = resp.get("body", "") or ""
         body_bytes = body_str.encode("utf-8", errors="replace")
+        if len(body_bytes) > _MAX_RENDER_BYTES:
+            self._render_view.clear()
+            return
         hdrs = resp.get("headers") or {}
         ct_val = hdrs.get("content-type") or hdrs.get("Content-Type") or ""
         if isinstance(ct_val, list):
@@ -569,13 +637,18 @@ class SiteMapPage(QWidget):
         elif chosen is excl_scope_act:
             self._modify_scope(item, in_scope=False)
         elif doc_id and chosen in (rep_act, int_act):
-            doc = self._load_doc(doc_id)
-            if doc:
-                raw = _fmt_request(doc.get("request", {}))
+            if doc_id == self._pending_doc_id and self._current_request_text:
                 if chosen is rep_act:
-                    self.send_to_repeater.emit(raw)
+                    self.send_to_repeater.emit(self._current_request_text)
                 else:
-                    self.send_to_intruder.emit(raw)
+                    self.send_to_intruder.emit(self._current_request_text)
+            else:
+                self._pending_send_target = "repeater" if chosen is rep_act else "intruder"
+                self._preserve_pending_send = True
+                try:
+                    self._on_item_clicked(index)
+                finally:
+                    self._preserve_pending_send = False
 
     # ── tree node helpers ─────────────────────────────────────────────────────
 
@@ -855,7 +928,7 @@ _BTN_SS = (
 
 # ── code viewer ───────────────────────────────────────────────────────────────
 
-class _CodeView(QTextEdit):
+class _CodeView(VirtualTextEdit):
     send_to_repeater       = Signal(str)
     send_to_intruder       = Signal(str)
     send_to_decoder        = Signal(str)
@@ -866,20 +939,27 @@ class _CodeView(QTextEdit):
     send_to_ai             = Signal(dict)
 
     def __init__(self, parent=None):
-        super().__init__(parent)
+        super().__init__(
+            parent,
+            virtual_threshold_chars=_LARGE_MESSAGE_PREVIEW_CHARS,
+            highlighter_factory=SyntaxHighlighter,
+        )
         self.setReadOnly(True)
         self.setFont(QFont("Cascadia Code", 9))
         self.setStyleSheet(
             "QTextEdit{background:#11111B; color:#CDD6F4; border:none; padding:8px;}"
         )
-        self._hl = SyntaxHighlighter(self.document())
+
+    def set_http_text(self, text: str) -> None:
+        self.set_virtual_text(text)
 
     def contextMenuEvent(self, event):
         menu      = self.createStandardContextMenu()
-        txt       = self.toPlainText()
+        visible_txt = self.toPlainText()
+        txt       = self.full_text()
         selected  = self.textCursor().selectedText().strip()
         has_text  = bool(txt.strip())
-        has_body  = has_text and '\n\n' in txt and bool(txt.split('\n\n', 1)[-1].strip())
+        has_body  = has_text and '\n\n' in visible_txt and bool(visible_txt.split('\n\n', 1)[-1].strip())
         has_sel   = bool(selected)
 
         menu.addSeparator()
@@ -901,8 +981,8 @@ class _CodeView(QTextEdit):
         jwt_act.setEnabled(has_sel and selected.count('.') == 2)
 
         gql_act = menu.addAction("Send to GraphQL")
-        _is_gql = ('"query"' in txt or '"mutation"' in txt
-                   or txt.lstrip().startswith(('query ', 'mutation ', 'subscription ', '{')))
+        _is_gql = ('"query"' in visible_txt or '"mutation"' in visible_txt
+                   or visible_txt.lstrip().startswith(('query ', 'mutation ', 'subscription ', '{')))
         gql_act.setEnabled(has_text and _is_gql)
 
         ai_act = menu.addAction("Send to AI")
@@ -910,7 +990,7 @@ class _CodeView(QTextEdit):
 
         menu.addSeparator()
         fmt_menu = menu.addMenu("Format Body")
-        fmt_menu.setEnabled(has_body)
+        fmt_menu.setEnabled(has_body and not self.is_virtualized())
         json_act = fmt_menu.addAction("JSON")
         xml_act  = fmt_menu.addAction("XML")
         html_act = fmt_menu.addAction("HTML")
@@ -963,9 +1043,9 @@ class _CodeView(QTextEdit):
                 "meta": {},
             })
         elif chosen in fmt_map:
-            result = format_http_body(txt, fmt_map[chosen])
+            result = format_http_body(visible_txt, fmt_map[chosen])
             if result is not None:
-                self.setPlainText(result)
+                self.set_http_text(result)
         elif chosen in dec_map and has_sel:
             result, used = decode_text(selected, dec_map[chosen])
             if result is None:
@@ -973,12 +1053,12 @@ class _CodeView(QTextEdit):
             else:
                 DecodeDialog(result, used, parent=self.window()).show()
         elif chosen is copy_all_act:
-            hdrs = parse_http_headers(txt)
+            hdrs = parse_http_headers(visible_txt)
             set_header_clipboard(hdrs)
             QToolTip.showText(event.globalPos(),
                               f"Copied {len(hdrs)} header{'s' if len(hdrs) != 1 else ''}")
         elif chosen is copy_sel_act:
-            hdrs = parse_http_headers(txt)
+            hdrs = parse_http_headers(visible_txt)
             if not hdrs:
                 QToolTip.showText(event.globalPos(), "No headers found")
             else:

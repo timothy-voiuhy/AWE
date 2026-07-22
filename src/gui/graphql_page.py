@@ -24,6 +24,7 @@ from PySide6.QtWidgets import (
 
 from gui.guiUtilities import SyntaxHighlighter, ResponseRenderView
 from gui.repeater import _CodeEdit
+from gui.threadrunners import register_monitored_thread
 from proxy._markers import TOOL_MARKER_HEADER
 
 log = logging.getLogger(__name__)
@@ -1333,6 +1334,7 @@ class GraphqlPage(QWidget):
         self._worker.result.connect(self._on_worker_result)
         self._worker.error.connect(self._on_worker_error)
         self._worker.done.connect(self._on_worker_done)
+        register_monitored_thread(self._worker, self, "GraphQL Request")
         self._worker.start()
 
     def _on_worker_result(self, body: str) -> None:
@@ -1480,6 +1482,7 @@ class GraphqlPage(QWidget):
         self._fuzz_worker.found.connect(self._on_fuzz_found)
         self._fuzz_worker.progress.connect(self._on_fuzz_progress)
         self._fuzz_worker.done.connect(self._on_fuzz_done)
+        register_monitored_thread(self._fuzz_worker, self, "GraphQL Field Fuzz")
         self._fuzz_worker.start()
 
     def _on_stop_fuzz(self) -> None:

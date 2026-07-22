@@ -45,6 +45,7 @@ from containers.results.models import (
 from containers.tool_registry import TOOL_CATEGORIES, TOOL_REGISTRY
 from database.scope import ScopeConfig
 from gui.filterPanel import FilterPanel
+from gui.threadrunners import register_monitored_thread
 
 
 # ── Background loader ─────────────────────────────────────────────────────────
@@ -944,6 +945,7 @@ class ResultsWindow(QMainWindow):
         )
         self._loader.done.connect(self._on_loaded)
         self._loader.error.connect(lambda e: self._statusLabel.setText(f"Error: {e}"))
+        register_monitored_thread(self._loader, self, "Results Loader")
         self._loader.start()
 
     def _on_loaded(self, all_results: dict):

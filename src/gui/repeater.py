@@ -28,6 +28,7 @@ from gui.guiUtilities import (
     paste_headers, has_copied_headers,
     ResponseRenderView,
 )
+from gui.threadrunners import register_monitored_thread
 from proxy._markers import TOOL_MARKER_HEADER
 from gui.utilities.session_utils import apply_session_to_request
 
@@ -340,6 +341,7 @@ class _TabPane(QWidget):
 
         self._worker = _SendWorker(method, url, headers, body, self._proxy_port)
         self._worker.done.connect(self._on_done)
+        register_monitored_thread(self._worker, self, "Repeater Send")
         self._worker.start()
 
     def _on_done(self, response: str, error: str) -> None:

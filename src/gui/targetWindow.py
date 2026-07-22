@@ -22,6 +22,7 @@ from gui.dockerManagerWindow import DockerManagerWindow
 from gui.pipelineWindow import PipelineWindow
 from gui.resultsWindow import ResultsWindow
 from gui.targetInfoPanel import TargetInfoPanel
+from gui.threadrunners import register_monitored_thread
 from gui.networkGraph import NetworkPage
 from gui.httpHistory import HttpHistoryPage
 from gui.interceptPage import InterceptPage
@@ -37,7 +38,7 @@ from gui.graphql_page import GraphqlPage
 from gui.session_manager import SessionManagerWidget
 from gui.testing_methodology import TestingMethodologyWidget
 from gui.vault import VaultPage
-from proxy.traffic_extractor import _ExtractWorker
+from workers.process_runner import ProxyExtractorServiceRunner
 from gui.appearance import load_ui_settings, apply_appearance
 from gui.palette import (
     BASE, MANTLE, CRUST, SURFACE0, SURFACE1, OVERLAY0, OVERLAY2,
@@ -744,76 +745,89 @@ class TargetWindow(QtWidgets.QMainWindow):
         """Extract data from proxy traffic DB and upsert into project results."""
         if not self._repo:
             return
-        col    = self._get_proxy_col()
-        scope  = self._scopeEditor.current_config() if hasattr(self, "_scopeEditor") else None
-        target = self.main_server_name or ""
-        self._extractWorker = _ExtractWorker(col, scope, parent=self)
-        self._extractWorker.done.connect(
-            lambda results, review_candidates: self._on_extract_done(results, review_candidates, target)
-        )
-        self._extractWorker.error.connect(
-            lambda msg: __import__("logging").getLogger(__name__).warning(
-                "proxy traffic extraction error: %s", msg
-            )
-        )
-        self._extractWorker.start()
+        payload = {
+            "project_dir": self.projectDirPath,
+            "target": self.main_server_name or "",
+            "mongo_uri": "mongodb://localhost:27017",
+            "scope": (
+                self._scopeEditor.current_config().to_dict()
+                if hasattr(self, "_scopeEditor") else {}
+            ),
+            "batch_size": 100,
+            "batch_pause_ms": 15,
+            "max_request_body_scan_chars": 250_000,
+            "max_secret_scan_chars": 250_000,
+        }
+        if getattr(self, "_proxy_extract_active", False):
+            self._proxy_extract_pending_payload = payload
+            log.info("Proxy extraction already running; queued one follow-up sync for %s", self.projectDirPath)
+            return
+        runner = self._ensure_proxy_extractor_service()
+        if not getattr(self, "_proxy_extractor_ready", False):
+            self._proxy_extract_pending_payload = payload
+            return
+        self._start_proxy_extraction(payload)
 
-    def _on_extract_done(self, results: dict, review_candidates: dict, target: str) -> None:
-        if not self._repo:
-            return
+    def _ensure_proxy_extractor_service(self) -> ProxyExtractorServiceRunner:
+        runner = getattr(self, "_proxyExtractorService", None)
+        if runner is not None and runner.isRunning():
+            return runner
+
+        self._proxy_extractor_ready = False
+        self._proxy_extract_active = False
+        self._proxy_extract_current_job = ""
+        self._proxy_extract_pending_payload = None
+        runner = ProxyExtractorServiceRunner(parent=self)
+        runner.ready.connect(self._on_proxy_extractor_ready)
+        runner.started_job.connect(lambda job_id: log.info("Proxy extractor job started: %s", job_id))
+        runner.job_done.connect(self._on_proxy_extract_done)
+        runner.job_error.connect(self._on_proxy_extract_error)
+        runner.worker_log.connect(lambda line: log.info("proxy extractor service: %s", line))
+        self._proxyExtractorService = runner
+        register_monitored_thread(runner, self, "Proxy Extractor Service")
+        runner.start()
+        return runner
+
+    def _on_proxy_extractor_ready(self) -> None:
+        self._proxy_extractor_ready = True
+        payload = getattr(self, "_proxy_extract_pending_payload", None)
+        if payload and not getattr(self, "_proxy_extract_active", False):
+            self._proxy_extract_pending_payload = None
+            self._start_proxy_extraction(payload)
+
+    def _start_proxy_extraction(self, payload: dict) -> None:
+        runner = self._ensure_proxy_extractor_service()
         try:
-            session_id = self._repo.get_or_create_proxy_session(target)
-            run_id     = self._repo.get_proxy_tool_run_id(session_id)
-            for category, items in results.items():
-                if items:
-                    self._repo.upsert_results(session_id, run_id, category, items)
-        except Exception:
-            import logging
-            logging.getLogger(__name__).exception("upsert proxy results failed")
+            self._proxy_extract_current_job = runner.start_extraction(**payload)
+            self._proxy_extract_active = True
+        except Exception as exc:
+            self._proxy_extract_active = False
+            log.warning("failed to start proxy extractor service job: %s", exc)
+
+    def _on_proxy_extract_done(self, job_id: str, summary: dict) -> None:
+        if job_id != getattr(self, "_proxy_extract_current_job", ""):
             return
+        self._proxy_extract_active = False
+        log.info("Proxy extraction finished for %s: %s", self.projectDirPath, summary)
         if hasattr(self, "_networkPage"):
             self._networkPage.refresh()
         if hasattr(self, "_resultsWindow"):
             self._resultsWindow.refresh()
-        self._enqueue_review_candidates(review_candidates)
-
-    def _enqueue_review_candidates(self, review_candidates: dict) -> None:
-        import hashlib
-
-        for jwt_hit in review_candidates.get("jwt", []):
-            token = jwt_hit["token"]
-            dedup_key = hashlib.sha256(token.encode()).hexdigest()
-            self._repo.create_review_item(
-                queue_name="jwt",
-                kind="jwt_header" if jwt_hit["header_name"] == "Authorization" else "jwt_cookie",
-                summary=f"{jwt_hit['header_name']} — {jwt_hit['source_url']}",
-                payload={"token": token, "source_url": jwt_hit["source_url"]},
-                dedup_key=dedup_key,
-            )
-
-        for gql_hit in review_candidates.get("graphql", []):
-            dedup_key = hashlib.sha256(
-                f"{gql_hit['endpoint']}|{gql_hit['query']}".encode()
-            ).hexdigest()
-            summary = gql_hit["query"].strip().splitlines()[0][:80]
-            self._repo.create_review_item(
-                queue_name="graphql",
-                kind="graphql_request",
-                summary=f"{gql_hit['endpoint']} — {summary}",
-                payload={
-                    "endpoint": gql_hit["endpoint"],
-                    "query": gql_hit["query"],
-                    "variables": gql_hit["variables"],
-                },
-                dedup_key=dedup_key,
-            )
-
         if hasattr(self, "_jwtPage"):
             self._jwtPage.refresh_review_queue()
         if hasattr(self, "_graphqlPage"):
             self._graphqlPage.refresh_review_queue()
         self._refresh_review_badge("jwt", Page.JWT)
         self._refresh_review_badge("graphql", Page.GRAPHQL)
+        payload = getattr(self, "_proxy_extract_pending_payload", None)
+        if payload:
+            self._proxy_extract_pending_payload = None
+            self._start_proxy_extraction(payload)
+
+    def _on_proxy_extract_error(self, job_id: str, message: str) -> None:
+        if not job_id or job_id == getattr(self, "_proxy_extract_current_job", ""):
+            self._proxy_extract_active = False
+        log.warning("proxy extractor service error: %s", message)
 
     def _build_notes_widget(self) -> QWidget:
         page = QWidget()
@@ -1057,6 +1071,16 @@ class TargetWindow(QtWidgets.QMainWindow):
         self.target_url = ""
 
     def closeEvent(self, event: QtGui.QCloseEvent) -> None:
+        runner = getattr(self, "_proxyExtractorService", None)
+        if runner is not None and runner.isRunning():
+            try:
+                runner.shutdown()
+                runner.wait(1500)
+                if runner.isRunning():
+                    runner.stop()
+                    runner.wait(1500)
+            except Exception:
+                log.warning("Failed to stop proxy extractor service", exc_info=True)
         self.topParent.projectClosed.emit(self, self.projectIndex)
         return super().closeEvent(event)
 

@@ -2,6 +2,7 @@ import logging
 import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -11,6 +12,71 @@ from config.config import RUNDIR
 from containers.docker_manager import manager as _docker_mgr, DockerUnavailableError
 from containers.tool_registry import TOOL_REGISTRY
 from utilities import OpenProcess, runWhoisOnTarget
+
+
+def _parent_chain(obj):
+    current = obj
+    seen = set()
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        yield current
+        parent = getattr(current, "parent", None)
+        current = parent() if callable(parent) else None
+
+
+def _monitor_hub(obj):
+    for current in _parent_chain(obj):
+        if hasattr(current, "ThreadStarted") and hasattr(current, "socketIpc"):
+            return current
+        top_parent = getattr(current, "topParent", None) or getattr(current, "top_parent", None)
+        if top_parent is not None and hasattr(top_parent, "ThreadStarted"):
+            return top_parent
+    return obj if hasattr(obj, "ThreadStarted") else None
+
+
+def _thread_owner(obj):
+    for current in _parent_chain(obj):
+        if hasattr(current, "threads"):
+            return current
+    hub = _monitor_hub(obj)
+    return hub if hub is not None and hasattr(hub, "threads") else None
+
+
+def register_monitored_thread(thread: QThread, owner, name: str | None = None) -> QThread:
+    """Register a QThread with AWE's app-level monitor under its owning window."""
+    thread_owner = _thread_owner(owner)
+    hub = _monitor_hub(owner)
+    if thread_owner is None or hub is None:
+        return thread
+
+    base_name = name or thread.objectName() or thread.__class__.__name__
+    thread_name = base_name
+    sibling_names = {
+        t.objectName() for t in getattr(thread_owner, "threads", [])
+        if t is not thread
+    }
+    index = 2
+    while thread_name in sibling_names:
+        thread_name = f"{base_name} #{index}"
+        index += 1
+    thread.setObjectName(thread_name)
+
+    if thread not in thread_owner.threads:
+        thread_owner.threads.append(thread)
+
+    thread._awe_started_at = time.time()
+    thread._awe_thread_owner = thread_owner
+    thread._awe_thread_hub = hub
+    hub.ThreadStarted.emit(thread_owner, thread.objectName())
+
+    def _finished():
+        try:
+            hub.socketIpc.processFinishedExecution.emit(thread_owner, thread.objectName())
+        except RuntimeError:
+            pass
+
+    thread.finished.connect(_finished)
+    return thread
 
 
 # ── Docker-backed tool runner ─────────────────────────────────────────────────
@@ -67,22 +133,27 @@ class DockerToolRunner(QThread):
             self.finished_err.emit(str(exc))
 
 class WhoisThreadRunner(QThread):
-    def __init__(self,top_parent= None, server_name = None, project_dir_path = None) -> None:
+    def __init__(
+        self,
+        top_parent=None,
+        server_name=None,
+        project_dir_path=None,
+        thread_owner=None,
+    ) -> None:
         super().__init__()
         self.project_dir_path = project_dir_path
         self.whois_results_filename = os.path.join(self.project_dir_path, "whois_results")
         self.server_name = server_name
         self.topParent = top_parent
+        self.thread_owner = thread_owner or top_parent
         self.setObjectName("whois runner")
         self.whois_results = ""
-        self.topParent.threads.append(self)
-        self.topParent.ThreadStarted.emit(self.topParent, self.objectName())
+        register_monitored_thread(self, self.thread_owner)
 
     def run(self):
         self.whois_results = runWhoisOnTarget(self.server_name, self.project_dir_path)
         with open(self.whois_results_filename, "wb") as file:
             file.write(self.whois_results)
-        self.topParent.socketIpc.processFinishedExecution.emit(self.topParent, self.objectName())
 
 class AtomProxy(QThread, QObject):
     def __init__(self, proxy_port, top_parent, upstream_proxy: str | None = None):
@@ -123,4 +194,3 @@ class SessionHandlerRunner(QThread, QObject):
         self.process = OpenProcess(process_name="sessionHandler", shell=True, args=self.command)
         self.process.wait()
         self.top_parent.socketIpc.processFinishedExecution.emit(self.top_parent, self.objectName())
-

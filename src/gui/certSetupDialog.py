@@ -12,6 +12,7 @@ from PySide6.QtWidgets import (
 )
 
 from config.config import CERT_CACHE_DIR, CERT_KEYS_DIR, CERTIFICATE_FILE, HOST_CERTS_DIR, ROOT_CERT_FILE
+from gui.threadrunners import register_monitored_thread
 
 
 # ── background worker ────────────────────────────────────────────────────────
@@ -366,6 +367,7 @@ class CertSetupWidget(QWidget):
         self._worker = _CertWorker(action)
         self._worker.log.connect(self.logView.append)
         self._worker.done.connect(self._on_done)
+        register_monitored_thread(self._worker, self, "Certificate Setup")
         self._worker.start()
 
     def _on_done(self, success: bool, msg: str):

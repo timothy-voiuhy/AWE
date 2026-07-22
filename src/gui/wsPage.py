@@ -31,6 +31,7 @@ from PySide6.QtWidgets import (
 
 from database.scope import ScopeConfig
 from gui.repeater import _CodeEdit
+from gui.threadrunners import register_monitored_thread
 from proxy._markers import TOOL_MARKER_HEADER
 from proxy._ws_store import WSStore
 
@@ -659,6 +660,7 @@ class WebSocketPage(QWidget):
         self._worker = _WSClientWorker(url, self._proxy_port, parent=self)
         self._worker.frame_received.connect(self._on_live_frame)
         self._worker.connection_status.connect(self._on_connection_status)
+        register_monitored_thread(self._worker, self, "WebSocket Client")
         self._worker.start()
 
     def _on_disconnect(self) -> None:

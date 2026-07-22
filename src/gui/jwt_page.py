@@ -34,6 +34,7 @@ from PySide6.QtWidgets import (
     QTableWidget, QTableWidgetItem, QTextEdit, QVBoxLayout, QWidget,
 )
 
+from gui.threadrunners import register_monitored_thread
 from gui.utilities.syntax_highlighter import SyntaxHighlighter
 
 log = logging.getLogger(__name__)
@@ -1064,6 +1065,7 @@ class JwtPage(QWidget):
         self._brute.found.connect(_on_found)
         self._brute.progress.connect(self._log)
         self._brute.done.connect(self._on_brute_done)
+        register_monitored_thread(self._brute, self, "JWT Brute Force")
         self._brute.start()
 
     def _stop_brute(self) -> None:
@@ -1113,6 +1115,7 @@ class JwtPage(QWidget):
         self._jt_worker = _JwtToolWorker(args, parent=self)
         self._jt_worker.output.connect(self._log)
         self._jt_worker.done.connect(self._on_jt_done)
+        register_monitored_thread(self._jt_worker, self, "jwt_tool")
         self._jt_worker.start()
 
     def _stop_jwt_tool(self) -> None:

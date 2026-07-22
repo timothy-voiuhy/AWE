@@ -27,6 +27,7 @@ from gui.pipelineEditorDialog import (
 )
 from gui.resultsWindow import ResultsWindow
 from gui.settingsWindow import SettingsWindow
+from gui.threadrunners import register_monitored_thread
 from gui.utilities.syntax_highlighter import SyntaxHighlighter
 from pipeline.definitions import PIPELINE_REGISTRY
 from pipeline.executor import PipelineExecutor
@@ -1291,6 +1292,7 @@ class PipelineWindow(QMainWindow):
         self._executor.step_done.connect(self._on_step_done)
         self._executor.stage_done.connect(lambda n: self._stageLabel.setText(f"Stage {n} done"))
         self._executor.pipeline_done.connect(self._on_pipeline_done)
+        register_monitored_thread(self._executor, self, "Pipeline Executor")
         self._executor.start()
 
         self._runBtn.setEnabled(False)
@@ -2147,6 +2149,7 @@ class PipelineWindow(QMainWindow):
         self._mongoStatus.setStyleSheet("color: #F9E2AF;")
         self._mongoThread = _MongoStarter(self)
         self._mongoThread.done.connect(self._on_mongo_ready)
+        register_monitored_thread(self._mongoThread, self, "Pipeline Mongo Starter")
         self._mongoThread.start()
 
     def _on_mongo_ready(self, ok: bool, msg: str):

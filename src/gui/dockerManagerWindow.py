@@ -41,6 +41,7 @@ from containers.custom_tools import (
 from containers.docker_manager import DockerManager, DockerUnavailableError, manager as _mgr
 from containers.results.models import CATEGORY_MODEL
 from containers.tool_registry import TOOL_REGISTRY, TOOL_CATEGORIES
+from gui.threadrunners import register_monitored_thread
 
 
 # ── background threads ────────────────────────────────────────────────────────
@@ -481,6 +482,7 @@ class _BatchProgressDialog(QDialog):
         self._worker.image_progress.connect(self._on_progress)
         self._worker.image_done.connect(self._on_done)
         self._worker.all_done.connect(self._on_all_done)
+        register_monitored_thread(self._worker, self, "Docker Batch Image Setup")
         self._worker.start()
 
     def _on_started(self, tool_key: str):
@@ -1331,6 +1333,7 @@ class DockerManagerWindow(QMainWindow):
         w.done.connect(lambda ok, msg, k=tool_key: self._on_image_op_done(ok, msg, k))
         self._image_workers[tool_key] = w
         self._workers.append(w)
+        register_monitored_thread(w, self, f"Docker Image {tool_key}")
         w.start()
         self._refresh_images(scroll_to_key=tool_key)   # immediately show ⟳
 
@@ -1536,6 +1539,7 @@ class DockerManagerWindow(QMainWindow):
         self.logHeader.setText(f"Logs: {c.name}  [{c.short_id}]  ({c.status})")
         self._log_streamer = _LogStreamer(container_id, self._mgr)
         self._log_streamer.line.connect(self._append_log_line)
+        register_monitored_thread(self._log_streamer, self, f"Docker Logs {c.name}")
         self._log_streamer.start()
 
     def _append_log_line(self, text: str):
@@ -1670,6 +1674,7 @@ class DockerManagerWindow(QMainWindow):
             self._refresh_containers()
         ))
         self._workers.append(w)
+        register_monitored_thread(w, self, f"Docker Tool {key}")
         w.start()
 
     # ── docker status ─────────────────────────────────────────────────────────

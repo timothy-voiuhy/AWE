@@ -47,6 +47,7 @@ from PySide6.QtWidgets import (
 from config.config import RUNDIR
 from gui.guiUtilities import SyntaxHighlighter, ResponseRenderView
 from gui.repeater import _CodeEdit, _PaneWrapper, _parse_raw_request, _parse_resp_for_render
+from gui.threadrunners import register_monitored_thread
 from gui.utilities.session_utils import apply_session_to_request
 from proxy._markers import TOOL_MARKER_HEADER
 
@@ -1143,6 +1144,7 @@ class IntruderPage(QWidget):
         self._worker.result.connect(self._on_result)
         self._worker.progress.connect(self._on_progress)
         self._worker.finished.connect(self._on_finished)
+        register_monitored_thread(self._worker, self, "Intruder Attack")
         self._worker.start()
 
     def _stop_attack(self):
