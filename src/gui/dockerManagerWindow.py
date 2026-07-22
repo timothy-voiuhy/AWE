@@ -12,22 +12,34 @@ Layout
   │    QTableWidget: tag│size│[Remove]     │ │  Tool selector (QComboBox)        │
   │    Pull: QLineEdit + [Pull]            │ │  Dynamic param form               │
   │    Build: tool selector + [Build]      │ │  Output dir field                 │
-  └────────────────────────────────────────┘ │  [Run in Docker]                  │
-                                             └───────────────────────────────────┘
+  │  Custom Tools tab                      │ │  [Run in Docker]                  │
+  │    QTableWidget: tool│cat│image│status │ └───────────────────────────────────┘
+  │    [+ Add Custom Tool] → dialog with Dockerfile / parser.py / param form
+  └────────────────────────────────────────┘
 """
+import json
 import os
+import re
 from datetime import datetime
+from pathlib import Path
 
 from PySide6.QtCore import QThread, Signal, Qt, QTimer
 from PySide6.QtGui import QColor, QFont, QTextCursor
 from PySide6.QtWidgets import (
-    QApplication, QCheckBox, QComboBox, QDialog, QFormLayout, QFrame,
-    QHBoxLayout, QHeaderView, QLabel, QLineEdit, QMainWindow, QMessageBox,
-    QProgressBar, QPushButton, QSizePolicy, QSplitter, QTabWidget, QTableWidget,
-    QTableWidgetItem, QTextEdit, QVBoxLayout, QWidget,
+    QApplication, QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFileDialog,
+    QFormLayout, QFrame, QHBoxLayout, QHeaderView, QLabel, QLineEdit, QMainWindow,
+    QMenu, QMessageBox, QPlainTextEdit, QProgressBar, QPushButton, QScrollArea,
+    QSizePolicy, QSplitter, QTabWidget, QTableWidget, QTableWidgetItem, QTextEdit,
+    QVBoxLayout, QWidget,
 )
 
+from config.config import CUSTOM_TOOLS_DIR
+from containers.custom_tools import (
+    CustomToolConfig, list_custom_tools, register_custom_tool,
+    remove_custom_tool, slugify_key,
+)
 from containers.docker_manager import DockerManager, DockerUnavailableError, manager as _mgr
+from containers.results.models import CATEGORY_MODEL
 from containers.tool_registry import TOOL_REGISTRY, TOOL_CATEGORIES
 
 
@@ -170,6 +182,57 @@ def _action_btn(label: str, tooltip: str, color: str) -> QPushButton:
     b.setFixedHeight(24)
     b.setStyleSheet(_ACTION_BTN.format(c=color))
     return b
+
+
+# ── custom tools helpers ───────────────────────────────────────────────────────
+
+_KEY_RE = re.compile(r"^[a-z0-9_]+$")
+
+_DOCKERFILE_TEMPLATES = {
+    "Python / pip": (
+        "FROM python:3.11-slim\n"
+        "RUN pip install --no-cache-dir <package>\n"
+        "RUN mkdir /output\n"
+        "ENTRYPOINT [\"<command>\"]\n"
+    ),
+    "Go": (
+        "FROM golang:1.24-alpine AS builder\n"
+        "RUN go install <module>@latest\n"
+        "\n"
+        "FROM alpine:3.19\n"
+        "RUN apk add --no-cache ca-certificates\n"
+        "COPY --from=builder /go/bin/<binary> /usr/local/bin/<binary>\n"
+        "RUN mkdir -p /output\n"
+        "ENTRYPOINT [\"<binary>\"]\n"
+    ),
+    "Blank": "FROM alpine:3.19\nRUN mkdir /output\n",
+}
+
+
+def _parser_template(category: str) -> str:
+    model_cls = CATEGORY_MODEL.get(category)
+    model_name = model_cls.__name__ if model_cls else "BaseResult"
+    return (
+        f"import json\n"
+        f"import os\n"
+        f"\n"
+        f"from containers.results.models import {model_name}\n"
+        f"\n"
+        f"\n"
+        f"def parse(output_dir: str) -> list:\n"
+        f"    \"\"\"Read this tool's output from output_dir, return a list of {model_name}.\"\"\"\n"
+        f"    results = []\n"
+        f"    path = os.path.join(output_dir, \"results.json\")\n"
+        f"    if not os.path.exists(path):\n"
+        f"        return results\n"
+        f"    with open(path) as f:\n"
+        f"        data = json.load(f)\n"
+        f"    # TODO: map `data` into {model_name}(...) instances, e.g.:\n"
+        f"    # r = {model_name}(...)\n"
+        f"    # r.add_source(\"<tool_key>\")\n"
+        f"    # results.append(r)\n"
+        f"    return results\n"
+    )
 
 
 # ── batch image operation ─────────────────────────────────────────────────────
@@ -483,6 +546,378 @@ class _BatchProgressDialog(QDialog):
         super().closeEvent(event)
 
 
+# ── add / edit custom tool dialog ───────────────────────────────────────────────
+
+class _AddCustomToolDialog(QDialog):
+    """Register (or edit) a user-defined tool: a Dockerfile, a parser.py, a
+    command template + param form, and which result category it produces."""
+
+    def __init__(self, parent=None, edit_key: str | None = None):
+        super().__init__(parent)
+        self._edit_key = edit_key
+        self._key_manually_edited = bool(edit_key)
+        self._image_manually_edited = bool(edit_key)
+
+        self.setWindowTitle("Edit Custom Tool" if edit_key else "Add Custom Tool")
+        self.resize(720, 720)
+        self.setStyleSheet("QDialog{background:#181825;} QLabel{color:#CDD6F4;}")
+
+        outer = QVBoxLayout(self)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        body = QWidget()
+        vb = QVBoxLayout(body)
+        vb.setSpacing(10)
+
+        form = QFormLayout()
+        self._keyEdit = QLineEdit()
+        self._keyEdit.setPlaceholderText("e.g. my_scanner")
+        self._keyEdit.textEdited.connect(self._on_key_edited)
+        form.addRow("Key:", self._keyEdit)
+
+        self._displayNameEdit = QLineEdit()
+        self._displayNameEdit.textEdited.connect(self._on_display_name_edited)
+        form.addRow("Display name:", self._displayNameEdit)
+
+        self._descEdit = QLineEdit()
+        form.addRow("Description:", self._descEdit)
+
+        self._categoryCombo = QComboBox()
+        for cat in sorted(CATEGORY_MODEL.keys()):
+            self._categoryCombo.addItem(cat, cat)
+        self._categoryCombo.currentIndexChanged.connect(self._validate)
+        form.addRow("Result category:", self._categoryCombo)
+
+        self._imageEdit = QLineEdit()
+        self._imageEdit.textEdited.connect(self._on_image_edited)
+        form.addRow("Image tag:", self._imageEdit)
+
+        self._commandEdit = QLineEdit()
+        self._commandEdit.setPlaceholderText(
+            "mytool -u {url} -o /output/results.json"
+        )
+        self._commandEdit.textEdited.connect(self._validate)
+        form.addRow("Command template:", self._commandEdit)
+        vb.addLayout(form)
+
+        vb.addWidget(_hint_label(
+            "Use {param_key} placeholders matching the keys in the param table "
+            "below. Missing placeholders render as empty string, not an error."
+        ))
+
+        # ── param spec table ─────────────────────────────────────────────────
+        vb.addWidget(QLabel("Parameters (auto-generates the Launch tab's form):"))
+        self._paramTable = QTableWidget(0, 5)
+        self._paramTable.setHorizontalHeaderLabels(
+            ["Key", "Label", "Type", "Default", "Options (combo, csv)"]
+        )
+        self._paramTable.verticalHeader().setVisible(False)
+        self._paramTable.horizontalHeader().setStretchLastSection(True)
+        self._paramTable.setEditTriggers(QTableWidget.NoEditTriggers)
+        self._paramTable.setMinimumHeight(110)
+        self._paramTable.setContextMenuPolicy(Qt.CustomContextMenu)
+        self._paramTable.customContextMenuRequested.connect(self._param_row_context_menu)
+        vb.addWidget(self._paramTable)
+
+        prow = QHBoxLayout(); prow.setSpacing(6)
+        self._paramKeyEdit = QLineEdit(); self._paramKeyEdit.setPlaceholderText("key")
+        self._paramLabelEdit = QLineEdit(); self._paramLabelEdit.setPlaceholderText("Label")
+        self._paramTypeCombo = QComboBox(); self._paramTypeCombo.addItems(["text", "check", "combo"])
+        self._paramDefaultEdit = QLineEdit(); self._paramDefaultEdit.setPlaceholderText("Default")
+        self._paramOptionsEdit = QLineEdit(); self._paramOptionsEdit.setPlaceholderText("Options (combo only)")
+        param_add_btn = QPushButton("+ Add")
+        param_add_btn.clicked.connect(self._add_param_row)
+        prow.addWidget(self._paramKeyEdit, stretch=1)
+        prow.addWidget(self._paramLabelEdit, stretch=1)
+        prow.addWidget(self._paramTypeCombo)
+        prow.addWidget(self._paramDefaultEdit, stretch=1)
+        prow.addWidget(self._paramOptionsEdit, stretch=1)
+        prow.addWidget(param_add_btn)
+        vb.addLayout(prow)
+
+        # ── Dockerfile ────────────────────────────────────────────────────────
+        vb.addWidget(_hline())
+        dhdr = QHBoxLayout()
+        dhdr.addWidget(QLabel("Dockerfile:"))
+        dhdr.addStretch()
+        self._dockerfileTemplateCombo = QComboBox()
+        self._dockerfileTemplateCombo.addItems(list(_DOCKERFILE_TEMPLATES.keys()))
+        dhdr.addWidget(self._dockerfileTemplateCombo)
+        useTemplateBtn = QPushButton("Use template")
+        useTemplateBtn.clicked.connect(self._apply_dockerfile_template)
+        dhdr.addWidget(useTemplateBtn)
+        browseDockerBtn = QPushButton("Browse…")
+        browseDockerBtn.clicked.connect(self._browse_dockerfile)
+        dhdr.addWidget(browseDockerBtn)
+        vb.addLayout(dhdr)
+
+        self._dockerfileEdit = QPlainTextEdit()
+        self._dockerfileEdit.setFont(QFont("Cascadia Code", 9))
+        self._dockerfileEdit.setMinimumHeight(120)
+        self._dockerfileEdit.textChanged.connect(self._validate)
+        vb.addWidget(self._dockerfileEdit)
+
+        # ── parser.py ─────────────────────────────────────────────────────────
+        vb.addWidget(_hline())
+        phdr = QHBoxLayout()
+        phdr.addWidget(QLabel("parser.py:"))
+        phdr.addStretch()
+        useParserTemplateBtn = QPushButton("Use template")
+        useParserTemplateBtn.clicked.connect(self._apply_parser_template)
+        phdr.addWidget(useParserTemplateBtn)
+        browseParserBtn = QPushButton("Browse…")
+        browseParserBtn.clicked.connect(self._browse_parser)
+        phdr.addWidget(browseParserBtn)
+        vb.addLayout(phdr)
+
+        vb.addWidget(_hint_label(
+            "Must define a top-level parse(output_dir: str) -> list function "
+            "that returns instances of the result model for the chosen category."
+        ))
+
+        self._parserEdit = QPlainTextEdit()
+        self._parserEdit.setFont(QFont("Cascadia Code", 9))
+        self._parserEdit.setMinimumHeight(160)
+        self._parserEdit.textChanged.connect(self._validate)
+        vb.addWidget(self._parserEdit)
+
+        scroll.setWidget(body)
+        outer.addWidget(scroll, stretch=1)
+
+        self._errorLabel = QLabel("")
+        self._errorLabel.setStyleSheet("color:#F38BA8;")
+        self._errorLabel.setWordWrap(True)
+        self._errorLabel.setVisible(False)
+        outer.addWidget(self._errorLabel)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        self._okBtn = buttons.button(QDialogButtonBox.Ok)
+        buttons.accepted.connect(self._on_ok)
+        buttons.rejected.connect(self.reject)
+        outer.addWidget(buttons)
+
+        if edit_key:
+            self._load_existing(edit_key)
+        self._validate()
+
+    # ── key/image auto-sync ──────────────────────────────────────────────────
+
+    def _on_display_name_edited(self, text: str):
+        if not self._key_manually_edited:
+            self._keyEdit.setText(slugify_key(text))
+            self._sync_image_field()
+        self._validate()
+
+    def _on_key_edited(self, _text: str):
+        self._key_manually_edited = True
+        self._sync_image_field()
+        self._validate()
+
+    def _on_image_edited(self, _text: str):
+        self._image_manually_edited = True
+        self._validate()
+
+    def _sync_image_field(self):
+        if not self._image_manually_edited:
+            key = self._keyEdit.text().strip() or "tool"
+            self._imageEdit.setText(f"awe/custom_{key}")
+
+    # ── param table ───────────────────────────────────────────────────────────
+
+    def _add_param_row(self):
+        key = self._paramKeyEdit.text().strip()
+        if not key:
+            return
+        label = self._paramLabelEdit.text().strip() or key
+        ptype = self._paramTypeCombo.currentText()
+        default = self._paramDefaultEdit.text()
+        options = [o.strip() for o in self._paramOptionsEdit.text().split(",") if o.strip()]
+        self._append_param_row(key, label, ptype, default, options)
+        self._paramKeyEdit.clear()
+        self._paramLabelEdit.clear()
+        self._paramDefaultEdit.clear()
+        self._paramOptionsEdit.clear()
+
+    def _append_param_row(self, key, label, ptype, default, options):
+        r = self._paramTable.rowCount()
+        self._paramTable.insertRow(r)
+        self._paramTable.setItem(r, 0, QTableWidgetItem(key))
+        self._paramTable.setItem(r, 1, QTableWidgetItem(label))
+        self._paramTable.setItem(r, 2, QTableWidgetItem(ptype))
+        self._paramTable.setItem(r, 3, QTableWidgetItem(str(default)))
+        self._paramTable.setItem(r, 4, QTableWidgetItem(",".join(options or [])))
+
+    def _param_row_context_menu(self, pos):
+        row = self._paramTable.rowAt(pos.y())
+        if row < 0:
+            return
+        menu = QMenu(self)
+        rm = menu.addAction("Remove Row")
+        if menu.exec(self._paramTable.mapToGlobal(pos)) is rm:
+            self._paramTable.removeRow(row)
+
+    def _collect_param_specs(self) -> list[dict]:
+        specs = []
+        for r in range(self._paramTable.rowCount()):
+            key = self._paramTable.item(r, 0).text().strip()
+            if not key:
+                continue
+            label = self._paramTable.item(r, 1).text().strip() or key
+            ptype = self._paramTable.item(r, 2).text().strip() or "text"
+            default_raw = self._paramTable.item(r, 3).text()
+            options_raw = self._paramTable.item(r, 4).text()
+            spec = {"key": key, "label": label, "type": ptype}
+            if ptype == "check":
+                spec["default"] = default_raw.strip().lower() in ("1", "true", "yes", "on")
+            else:
+                spec["default"] = default_raw
+            if ptype == "combo":
+                spec["options"] = [o.strip() for o in options_raw.split(",") if o.strip()]
+            specs.append(spec)
+        return specs
+
+    # ── Dockerfile / parser template + browse ────────────────────────────────
+
+    def _apply_dockerfile_template(self):
+        choice = self._dockerfileTemplateCombo.currentText()
+        self._dockerfileEdit.setPlainText(_DOCKERFILE_TEMPLATES.get(choice, ""))
+
+    def _apply_parser_template(self):
+        category = self._categoryCombo.currentData() or "custom"
+        self._parserEdit.setPlainText(_parser_template(category))
+
+    def _browse_dockerfile(self):
+        path, _ = QFileDialog.getOpenFileName(self, "Select Dockerfile", "", "All files (*)")
+        if not path:
+            return
+        try:
+            self._dockerfileEdit.setPlainText(Path(path).read_text(errors="replace"))
+        except OSError as exc:
+            QMessageBox.warning(self, "Import", f"Could not read file:\n{exc}")
+
+    def _browse_parser(self):
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Select parser.py", "", "Python files (*.py);;All files (*)"
+        )
+        if not path:
+            return
+        try:
+            self._parserEdit.setPlainText(Path(path).read_text(errors="replace"))
+        except OSError as exc:
+            QMessageBox.warning(self, "Import", f"Could not read file:\n{exc}")
+
+    # ── edit pre-fill ─────────────────────────────────────────────────────────
+
+    def _load_existing(self, key: str):
+        cfg = TOOL_REGISTRY.get(key)
+        if not isinstance(cfg, CustomToolConfig):
+            return
+        self.setWindowTitle(f"Edit Custom Tool — {cfg.display_name}")
+        self._keyEdit.setText(cfg.key)
+        self._keyEdit.setEnabled(False)
+        self._keyEdit.setToolTip("Key can't be changed once created — remove and re-add to rename.")
+        self._displayNameEdit.setText(cfg.display_name)
+        self._descEdit.setText(cfg.description)
+        idx = self._categoryCombo.findData(cfg.category)
+        if idx >= 0:
+            self._categoryCombo.setCurrentIndex(idx)
+        self._imageEdit.setText(cfg.image)
+        self._commandEdit.setText(cfg.command_template)
+        for spec in cfg.param_specs:
+            self._append_param_row(
+                spec.get("key", ""), spec.get("label", ""), spec.get("type", "text"),
+                spec.get("default", ""), spec.get("options", []),
+            )
+        if cfg.dockerfile and os.path.exists(cfg.dockerfile):
+            try:
+                self._dockerfileEdit.setPlainText(Path(cfg.dockerfile).read_text(errors="replace"))
+            except OSError:
+                pass
+        if cfg.parser_path and os.path.exists(cfg.parser_path):
+            try:
+                self._parserEdit.setPlainText(Path(cfg.parser_path).read_text(errors="replace"))
+            except OSError:
+                pass
+
+    # ── validation + save ─────────────────────────────────────────────────────
+
+    def _validate(self):
+        key = self._keyEdit.text().strip()
+        msg = ""
+        if not _KEY_RE.match(key):
+            msg = "Key must be lowercase letters, digits, underscore only."
+        elif key in TOOL_REGISTRY and key != self._edit_key:
+            msg = f"Tool key '{key}' is already registered."
+        elif not self._displayNameEdit.text().strip():
+            msg = "Display name is required."
+        elif not self._commandEdit.text().strip():
+            msg = "Command template is required."
+        elif not self._dockerfileEdit.toPlainText().strip():
+            msg = "Dockerfile content is required."
+        elif not self._parserEdit.toPlainText().strip():
+            msg = "parser.py content is required."
+        self._errorLabel.setText(msg)
+        self._errorLabel.setVisible(bool(msg))
+        self._okBtn.setEnabled(not msg)
+
+    def _on_ok(self):
+        key = self._keyEdit.text().strip()
+        display_name = self._displayNameEdit.text().strip()
+        description = self._descEdit.text().strip()
+        category = self._categoryCombo.currentData()
+        image = self._imageEdit.text().strip() or f"awe/custom_{key}"
+        command_template = self._commandEdit.text().strip()
+        param_specs = self._collect_param_specs()
+        dockerfile_content = self._dockerfileEdit.toPlainText()
+        parser_content = self._parserEdit.toPlainText()
+
+        tool_dir = os.path.join(CUSTOM_TOOLS_DIR, key)
+        try:
+            os.makedirs(tool_dir, exist_ok=True)
+            with open(os.path.join(tool_dir, "Dockerfile"), "w") as f:
+                f.write(dockerfile_content)
+            with open(os.path.join(tool_dir, "parser.py"), "w") as f:
+                f.write(parser_content)
+            meta = {
+                "key": key, "display_name": display_name, "description": description,
+                "category": category, "image": image,
+                "dockerfile": "Dockerfile", "parser_file": "parser.py",
+                "command_template": command_template, "param_specs": param_specs,
+                "enabled": True, "schema_version": 1,
+            }
+            with open(os.path.join(tool_dir, "tool.json"), "w") as f:
+                json.dump(meta, f, indent=2)
+
+            if self._edit_key and self._edit_key != key:
+                try:
+                    remove_custom_tool(self._edit_key)
+                except Exception:
+                    pass
+
+            register_custom_tool(tool_dir)
+        except Exception as exc:
+            self._errorLabel.setText(f"Failed to save: {exc}")
+            self._errorLabel.setVisible(True)
+            return
+        self.accept()
+
+
+def _hint_label(text: str) -> QLabel:
+    lbl = QLabel(text)
+    lbl.setWordWrap(True)
+    lbl.setStyleSheet("color:#6C7086; font-size:10px;")
+    return lbl
+
+
+def _hline() -> QFrame:
+    line = QFrame()
+    line.setFrameShape(QFrame.HLine)
+    line.setStyleSheet("background:#313244; border:none;")
+    line.setFixedHeight(1)
+    return line
+
+
 # ── main window ───────────────────────────────────────────────────────────────
 
 class DockerManagerWindow(QMainWindow):
@@ -526,6 +961,7 @@ class DockerManagerWindow(QMainWindow):
         left_tabs.setObjectName("dockerLeftTabs")
         left_tabs.addTab(self._build_containers_tab(), "Containers")
         left_tabs.addTab(self._build_images_tab(), "Images")
+        left_tabs.addTab(self._build_custom_tools_tab(), "Custom Tools")
         splitter.addWidget(left_tabs)
 
         # right: logs + launcher tabs
@@ -942,6 +1378,123 @@ class DockerManagerWindow(QMainWindow):
             self._refresh_images()
         except Exception as exc:
             self._img_log(f"Remove failed: {exc}")
+
+    # ── custom tools tab ──────────────────────────────────────────────────────
+
+    def _build_custom_tools_tab(self) -> QWidget:
+        w = QWidget()
+        vb = QVBoxLayout(w)
+        vb.setContentsMargins(6, 6, 6, 6)
+        vb.setSpacing(6)
+
+        hdr = QHBoxLayout()
+        title = QLabel("Custom Tools")
+        title.setStyleSheet("color:#CDD6F4; font-weight:bold; font-size:11px;")
+        hdr.addWidget(title)
+        hdr.addStretch()
+        add_btn = QPushButton("+  Add Custom Tool")
+        add_btn.setFixedHeight(26)
+        add_btn.setStyleSheet(
+            "QPushButton{background:#313244;color:#A6E3A1;border:1px solid #45475A;"
+            "border-radius:4px;padding:1px 10px;font-size:9px;min-height:24px;}"
+            "QPushButton:hover{background:#45475A;}"
+        )
+        add_btn.clicked.connect(self._add_custom_tool)
+        hdr.addWidget(add_btn)
+        vb.addLayout(hdr)
+
+        vb.addWidget(_hint_label(
+            "Register your own tool: a Dockerfile, a parser.py, a command "
+            "template, and the result category it produces. Registered tools "
+            "immediately show up in the Images and Launch Tool tabs."
+        ))
+
+        self.customToolsTable = QTableWidget(0, 5)
+        self.customToolsTable.setHorizontalHeaderLabels(
+            ["Tool", "Category", "Image", "Status", "Actions"]
+        )
+        hh = self.customToolsTable.horizontalHeader()
+        hh.setSectionResizeMode(0, QHeaderView.Fixed);   self.customToolsTable.setColumnWidth(0, 140)
+        hh.setSectionResizeMode(1, QHeaderView.Fixed);   self.customToolsTable.setColumnWidth(1, 90)
+        hh.setSectionResizeMode(2, QHeaderView.Stretch)
+        hh.setSectionResizeMode(3, QHeaderView.Fixed);   self.customToolsTable.setColumnWidth(3, 120)
+        hh.setSectionResizeMode(4, QHeaderView.ResizeToContents)
+        self.customToolsTable.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.customToolsTable.verticalHeader().setVisible(False)
+        self.customToolsTable.setAlternatingRowColors(True)
+        vb.addWidget(self.customToolsTable, stretch=1)
+
+        self._refresh_custom_tools()
+        return w
+
+    def _refresh_custom_tools(self):
+        rows = list_custom_tools()
+        self.customToolsTable.setRowCount(len(rows))
+        for i, row in enumerate(rows):
+            self.customToolsTable.setRowHeight(i, 34)
+            self.customToolsTable.setItem(i, 0, _colored_item(row["display_name"] or row["key"]))
+            self.customToolsTable.setItem(i, 1, _colored_item(row["category"] or "—"))
+            self.customToolsTable.setItem(i, 2, _colored_item(row["image"] or "—"))
+            if row["status"] == "ok":
+                color = "#A6E3A1"
+            elif row["status"] == "no parser":
+                color = "#FAB387"
+            else:
+                color = "#F38BA8"
+            self.customToolsTable.setItem(i, 3, _colored_item(row["status"], color))
+            self.customToolsTable.setCellWidget(i, 4, self._custom_tool_action_cell(row))
+
+    def _custom_tool_action_cell(self, row: dict) -> QWidget:
+        cell = QWidget()
+        hl = QHBoxLayout(cell)
+        hl.setContentsMargins(4, 2, 4, 2)
+        hl.setSpacing(4)
+
+        edit_btn = _action_btn("✎ Edit", "Edit this custom tool", "#89B4FA")
+        edit_btn.setEnabled(bool(row["category"]))
+        edit_btn.clicked.connect(lambda _, r=row: self._edit_custom_tool(r))
+        hl.addWidget(edit_btn)
+
+        rm_btn = _action_btn("✕ Remove", "Remove this custom tool", "#F38BA8")
+        rm_btn.clicked.connect(lambda _, r=row: self._remove_custom_tool_row(r))
+        hl.addWidget(rm_btn)
+
+        return cell
+
+    def _custom_tools_changed(self):
+        self._refresh_custom_tools()
+        self._refresh_images()
+        if hasattr(self, "categoryCombo"):
+            self._populate_tool_combo(self.categoryCombo.currentData() or "all")
+
+    def _add_custom_tool(self):
+        dlg = _AddCustomToolDialog(parent=self)
+        if dlg.exec():
+            self._custom_tools_changed()
+
+    def _edit_custom_tool(self, row: dict):
+        dlg = _AddCustomToolDialog(parent=self, edit_key=row["key"])
+        if dlg.exec():
+            self._custom_tools_changed()
+
+    def _remove_custom_tool_row(self, row: dict):
+        confirm = QMessageBox.question(
+            self, "Remove Custom Tool",
+            f"Remove '{row['display_name'] or row['key']}'? This deletes its "
+            f"Dockerfile, parser, and metadata from disk and cannot be undone.",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
+        )
+        if confirm != QMessageBox.Yes:
+            return
+        try:
+            remove_custom_tool(row["key"])
+        except Exception:
+            # Directory never fully loaded into TOOL_REGISTRY (e.g. bad
+            # tool.json) — just delete it from disk directly.
+            import shutil
+            if row["tool_dir"] and os.path.isdir(row["tool_dir"]):
+                shutil.rmtree(row["tool_dir"])
+        self._custom_tools_changed()
 
     # ── logs tab ──────────────────────────────────────────────────────────────
 

@@ -990,6 +990,12 @@ if __name__ == "__main__":
 
     App = QApplication()
 
+    # Scan ~/AWE/CustomTools/ and merge any user-registered tools into
+    # TOOL_REGISTRY/TOOL_CATEGORIES/PARSERS before any window (Docker Manager,
+    # pipeline executor) needs that data. Best-effort — never raises.
+    from containers.custom_tools import load_custom_tools
+    load_custom_tools()
+
     # qasync installs its event loop on the Qt main thread — it does not compete
     # with AWE's existing QThread workers (PipelineExecutor, _JwtToolWorker, ...),
     # which keep running exactly as before. Must be installed before any AgentBridge

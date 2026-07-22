@@ -65,6 +65,11 @@ class GraphDataLoader(QThread):
                 for src in (data.get("sources") or []):
                     if src and src not in ex_src:
                         ex_src.append(src)
+                # "live" (confirmed via an HTTP probe) only ever upgrades —
+                # a subdomain seen live in one session stays live even if a
+                # later merge call doesn't carry the flag.
+                if data.get("live"):
+                    ex.data["live"] = True
 
         _CDN_EDGE_KINDS = {"proxied_by", "routes_through"}
 
@@ -162,6 +167,10 @@ class GraphDataLoader(QThread):
                     "domain": host,
                     "status": d.get("status_code", ""),
                     "title":  d.get("title", ""),
+                    # Only "http" (LiveHost) results confirm the subdomain
+                    # actually responded to an HTTP(S) probe — that's the
+                    # signal the graph's "live only" filter keys off of.
+                    "live":   True,
                 })
                 _edge(root_id, sub_id, "has_subdomain")
 

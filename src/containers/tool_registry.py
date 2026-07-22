@@ -967,7 +967,7 @@ class _Subzy(ToolConfig):
         targets = f"--targets {input_file}" if input_file else f"--target {domain}"
         return (
             f"subzy run {targets} --timeout {timeout}"
-            f" --concurrency {concurrency} --hide-fails"
+            f" --concurrency {concurrency} --hide_fails"
             f" --output /output/subzy_results.json"
         )
 

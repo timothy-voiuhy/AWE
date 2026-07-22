@@ -36,12 +36,13 @@ from gui.jwt_page import JwtPage
 from gui.graphql_page import GraphqlPage
 from gui.session_manager import SessionManagerWidget
 from gui.testing_methodology import TestingMethodologyWidget
+from gui.vault import VaultPage
 from proxy.traffic_extractor import _ExtractWorker
 from gui.appearance import load_ui_settings, apply_appearance
 from gui.palette import (
     BASE, MANTLE, CRUST, SURFACE0, SURFACE1, OVERLAY0, OVERLAY2,
     TEXT, SUBTEXT1, BLUE, MAUVE, GREEN, RED, YELLOW, PEACH, TEAL, SKY, PINK,
-    SCROLLBAR_V, SCROLLBAR_V_THIN, TAB_BAR,
+    LAVENDER, SCROLLBAR_V, SCROLLBAR_V_THIN, TAB_BAR,
 )
 
 log = logging.getLogger(__name__)
@@ -101,6 +102,7 @@ _NAV = [
     ("⬡",  "GraphQL",    TEAL,     f"{_ICONS}/graphql.png"),     # Page.GRAPHQL
     ("⚙",  "Settings",   OVERLAY2, f"{_ICONS}/settings-512.png"),# Page.SETTINGS
     ("✦",  "AI Chat",    MAUVE,    None),                       # Page.AI_CHAT
+    ("⛁",  "Vault",      LAVENDER, None),                       # Page.VAULT
 ]
 
 _NAV_W = 58
@@ -125,6 +127,7 @@ class Page(IntEnum):
     GRAPHQL    = 15
     SETTINGS   = 16
     AI_CHAT    = 17
+    VAULT      = 18
 
 
 # ── Activity-bar button ───────────────────────────────────────────────────────
@@ -320,6 +323,7 @@ class TargetWindow(QtWidgets.QMainWindow):
         _add("GraphQL",    self._build_graphql_page)    # 15
         _add("Settings",   self._build_settings_page)   # 16
         _add("AI Chat",    self._build_ai_chat_page)    # 17
+        _add("Vault",      self._build_vault_page)      # 18
 
         # Wire scope_changed → all consumer pages now that every page exists.
         # Also push the already-loaded scope into pages so their first render
@@ -858,6 +862,10 @@ class TargetWindow(QtWidgets.QMainWindow):
         self._aiChatPage.receive_context(payload)
         self._switch_page(Page.AI_CHAT)
 
+    def _build_vault_page(self) -> QWidget:
+        self._vaultPage = VaultPage(open_in_browser=self.openNewBrowserTab, parent=self)
+        return self._vaultPage
+
     # ── Browser tab context menu ──────────────────────────────────────────────
 
     def _browser_tab_context_menu(self, pos: QPoint):
@@ -933,14 +941,14 @@ class TargetWindow(QtWidgets.QMainWindow):
         bw = None
         try:
             if isinstance(link, bool) or link is None:
-                # Pass no link through so BrowserWindow can restore a saved
-                # session URL for this tab; it falls back to google.com itself
-                # when there's nothing to restore.
-                bw = BrowserWindow()
+                # Pass no link through so BrowserWindow can restore this
+                # project's saved session URL for this tab; it falls back to
+                # google.com itself when there's nothing to restore.
+                bw = BrowserWindow(session_key=self.projectDirPath)
             else:
-                bw = BrowserWindow(link)
+                bw = BrowserWindow(link, session_key=self.projectDirPath)
         except Exception:
-            bw = BrowserWindow("google.com")
+            bw = BrowserWindow("google.com", session_key=self.projectDirPath)
         if bw:
             shown_url = bw.init_link or bw.browser.url().toString()
             if shown_url:
@@ -955,7 +963,17 @@ class TargetWindow(QtWidgets.QMainWindow):
 
     def _close_browser_tab_by_index(self, index: int):
         if index > 0:
+            w = self.browserTabWidget.widget(index)
             self.browserTabWidget.removeTab(index)
+            # Drop the closed tab so it isn't persisted/restored, then re-save
+            # this project's now-current tab set.
+            if isinstance(w, BrowserWindow):
+                try:
+                    BrowserWindow._instances.remove(w)
+                except ValueError:
+                    pass
+                w.deleteLater()
+                BrowserWindow._save_session()
 
     def closeBrowserTab(self):
         self._close_browser_tab_by_index(self.browserTabWidget.currentIndex())

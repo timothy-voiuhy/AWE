@@ -1,16 +1,20 @@
 """
 Pipeline Runner Window — configuration, execution, session history.
 """
+import json
 import os
 import subprocess
 from datetime import datetime, timezone
+from pathlib import Path
 
-from PySide6.QtCore import Qt, QThread, Signal
-from PySide6.QtGui import QColor, QFont
+from PySide6.QtCore import Qt, QThread, QTimer, Signal
+from PySide6.QtGui import (
+    QColor, QFont, QKeySequence, QPixmap, QShortcut, QTextCharFormat, QTextCursor,
+)
 from PySide6.QtWidgets import (
-    QCheckBox, QComboBox, QDialog, QFileDialog, QFrame, QHBoxLayout, QLabel,
-    QLineEdit, QListWidget, QListWidgetItem, QMainWindow, QMessageBox,
-    QPushButton, QScrollArea, QSplitter, QTabWidget,
+    QApplication, QCheckBox, QComboBox, QDialog, QFileDialog, QFrame, QHBoxLayout,
+    QLabel, QLineEdit, QListWidget, QListWidgetItem, QMainWindow, QMenu, QMessageBox,
+    QPlainTextEdit, QPushButton, QScrollArea, QSizePolicy, QSplitter, QTabWidget,
     QTextEdit, QVBoxLayout, QWidget, QFormLayout,
 )
 
@@ -23,6 +27,7 @@ from gui.pipelineEditorDialog import (
 )
 from gui.resultsWindow import ResultsWindow
 from gui.settingsWindow import SettingsWindow
+from gui.utilities.syntax_highlighter import SyntaxHighlighter
 from pipeline.definitions import PIPELINE_REGISTRY
 from pipeline.executor import PipelineExecutor
 from pipeline.models import PipelineTemplate
@@ -78,6 +83,8 @@ class _StepRow(QWidget):
     selected                 = Signal(str)   # tool_key — emitted on click
     rerun_requested          = Signal(str)   # tool_key — emitted on rerun button / context menu
     rerun_parser_requested   = Signal(str)   # tool_key — emitted from context menu
+    view_output_requested    = Signal(str)   # tool_key — emitted from context menu
+    view_screenshots_requested = Signal(str)   # tool_key — emitted from context menu
     stop_requested           = Signal(str)   # tool_key — emitted on stop button
     check_toggled            = Signal(str, bool)   # tool_key, checked — batch-select checkbox
 
@@ -184,13 +191,19 @@ class _StepRow(QWidget):
     def contextMenuEvent(self, ev):
         from PySide6.QtWidgets import QMenu
         menu = QMenu(self)
-        a_rerun        = menu.addAction("↺  Rerun this tool")
-        a_rerun_parser = menu.addAction("⟳  Rerun parser only")
+        a_rerun         = menu.addAction("↺  Rerun this tool")
+        a_rerun_parser  = menu.addAction("⟳  Rerun parser only")
+        a_view_output   = menu.addAction("📄  View Raw Output")
+        a_view_shots    = menu.addAction("🖼  View Screenshots")
         chosen = menu.exec(ev.globalPos())
         if chosen == a_rerun:
             self.rerun_requested.emit(self.tool_key)
         elif chosen == a_rerun_parser:
             self.rerun_parser_requested.emit(self.tool_key)
+        elif chosen == a_view_output:
+            self.view_output_requested.emit(self.tool_key)
+        elif chosen == a_view_shots:
+            self.view_screenshots_requested.emit(self.tool_key)
 
     # ── status/log ────────────────────────────────────────────────────────────
 
@@ -236,6 +249,8 @@ class _MonitorPanel(QWidget):
     rerun_stage        = Signal(int)   # stage_num
     rerun_tool         = Signal(str)   # tool_key
     rerun_tool_parser  = Signal(str)   # tool_key
+    view_tool_output   = Signal(str)   # tool_key
+    view_screenshots   = Signal(str)   # tool_key
     rerun_selected     = Signal(object)   # set[str] of tool_key — batch rerun of checked rows
     stop_tool          = Signal(str)   # tool_key
     stop_stage         = Signal(int)   # stage_num
@@ -441,6 +456,8 @@ class _MonitorPanel(QWidget):
                 r.selected.connect(self._on_row_selected)
                 r.rerun_requested.connect(self.rerun_tool)
                 r.rerun_parser_requested.connect(self.rerun_tool_parser)
+                r.view_output_requested.connect(self.view_tool_output)
+                r.view_screenshots_requested.connect(self.view_screenshots)
                 r.stop_requested.connect(self.stop_tool)
                 r.check_toggled.connect(self._on_row_checked)
                 self._vbox.addWidget(r)
@@ -592,6 +609,326 @@ class _MonitorPanel(QWidget):
         self._tool_log.setTextCursor(c)
 
 
+# ── Raw output viewer ────────────────────────────────────────────────────────
+
+class _FindEdit(QLineEdit):
+    """QLineEdit that clears itself on Escape."""
+    def keyPressEvent(self, ev):
+        if ev.key() == Qt.Key_Escape:
+            self.clear()
+        else:
+            super().keyPressEvent(ev)
+
+
+class _RawOutputViewer(QDialog):
+    """Read-only viewer for a tool's raw output file — pretty-printed and
+    syntax-highlighted for JSON/JSONL, plain monospace otherwise. Includes a
+    Ctrl+F search bar: highlights every match, distinguishes the current one,
+    and steps through with Enter / Shift+Enter or the ◀/▶ buttons."""
+
+    def __init__(self, title: str, content: str, is_json: bool, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle(title)
+        self.setModal(False)
+        self.resize(820, 640)
+        self.setStyleSheet("QDialog{background:#181825;} QLabel{color:#6C7086;font-size:9px;}")
+
+        self._matches: list[QTextCursor] = []
+        self._match_index = -1
+
+        self._match_fmt = QTextCharFormat()
+        self._match_fmt.setBackground(QColor("#45475A"))
+        self._current_fmt = QTextCharFormat()
+        self._current_fmt.setBackground(QColor("#89B4FA"))
+        self._current_fmt.setForeground(QColor("#1E1E2E"))
+
+        vb = QVBoxLayout(self)
+        vb.setContentsMargins(10, 10, 10, 10)
+        vb.setSpacing(6)
+
+        hdr = QLabel(title)
+        hdr.setStyleSheet("color:#CDD6F4; font-weight:bold; font-size:11px;")
+        vb.addWidget(hdr)
+
+        # ── search bar ───────────────────────────────────────────────────────
+        search_row = QHBoxLayout()
+        search_row.setSpacing(4)
+        search_lbl = QLabel("⌕")
+        search_lbl.setStyleSheet("color:#6C7086; font-size:12px;")
+        search_row.addWidget(search_lbl)
+
+        self._search_edit = _FindEdit()
+        self._search_edit.setPlaceholderText("Search output…  (Ctrl+F)")
+        self._search_edit.setFixedHeight(24)
+        self._search_edit.setStyleSheet(
+            "QLineEdit{background:#11111B;color:#CDD6F4;border:1px solid #313244;"
+            "border-radius:3px;padding:0 6px;font-size:10px;}"
+            "QLineEdit:focus{border-color:#89B4FA;}"
+        )
+        self._search_edit.textChanged.connect(self._on_search_changed)
+        self._search_edit.returnPressed.connect(self._find_next)
+        search_row.addWidget(self._search_edit, stretch=1)
+
+        _nav_ss = (
+            "QPushButton{background:#313244;color:#CDD6F4;border:1px solid #45475A;"
+            "border-radius:3px;font-size:10px;min-width:22px;max-width:22px;min-height:24px;}"
+            "QPushButton:hover{background:#45475A;}"
+            "QPushButton:disabled{color:#45475A;}"
+        )
+        self._prev_btn = QPushButton("▲")
+        self._prev_btn.setStyleSheet(_nav_ss)
+        self._prev_btn.setToolTip("Previous match (Shift+Enter)")
+        self._prev_btn.clicked.connect(self._find_prev)
+        search_row.addWidget(self._prev_btn)
+
+        self._next_btn = QPushButton("▼")
+        self._next_btn.setStyleSheet(_nav_ss)
+        self._next_btn.setToolTip("Next match (Enter)")
+        self._next_btn.clicked.connect(self._find_next)
+        search_row.addWidget(self._next_btn)
+
+        self._match_lbl = QLabel("")
+        self._match_lbl.setFixedWidth(50)
+        self._match_lbl.setStyleSheet("color:#6C7086; font-size:9px;")
+        search_row.addWidget(self._match_lbl)
+        vb.addLayout(search_row)
+
+        # Shift+Enter → previous match (returnPressed alone can't see modifiers)
+        shift_enter = QShortcut(QKeySequence("Shift+Return"), self._search_edit)
+        shift_enter.activated.connect(self._find_prev)
+        # Ctrl+F anywhere in the dialog focuses the search field
+        focus_search = QShortcut(QKeySequence("Ctrl+F"), self)
+        focus_search.activated.connect(
+            lambda: (self._search_edit.setFocus(), self._search_edit.selectAll())
+        )
+
+        self._text = QPlainTextEdit()
+        self._text.setReadOnly(True)
+        self._text.setFont(QFont("Cascadia Code", 9))
+        self._text.setStyleSheet(
+            "QPlainTextEdit{background:#11111B;color:#CDD6F4;border:1px solid #313244;"
+            "border-radius:4px;padding:6px;}"
+        )
+        self._text.setPlainText(content)
+        if is_json:
+            self._highlighter = SyntaxHighlighter(self._text.document())
+        vb.addWidget(self._text, stretch=1)
+
+        btn_row = QHBoxLayout()
+        copy_btn = QPushButton("Copy All")
+        copy_btn.clicked.connect(lambda: QApplication.clipboard().setText(self._text.toPlainText()))
+        btn_row.addWidget(copy_btn)
+        btn_row.addStretch()
+        close_btn = QPushButton("Close")
+        close_btn.clicked.connect(self.accept)
+        btn_row.addWidget(close_btn)
+        vb.addLayout(btn_row)
+
+    # ── search ────────────────────────────────────────────────────────────────
+
+    def _on_search_changed(self, text: str) -> None:
+        self._matches = []
+        self._match_index = -1
+        if text:
+            doc = self._text.document()
+            cursor = QTextCursor(doc)
+            while True:
+                cursor = doc.find(text, cursor)
+                if cursor.isNull():
+                    break
+                self._matches.append(QTextCursor(cursor))
+            if self._matches:
+                self._match_index = 0
+        self._prev_btn.setEnabled(bool(self._matches))
+        self._next_btn.setEnabled(bool(self._matches))
+        if self._matches:
+            self._goto_match(0)
+        else:
+            self._apply_highlights()
+            self._update_match_label()
+
+    def _goto_match(self, index: int) -> None:
+        if not self._matches:
+            return
+        self._match_index = index % len(self._matches)
+        cur = self._matches[self._match_index]
+        self._text.setTextCursor(cur)
+        self._text.ensureCursorVisible()
+        self._apply_highlights()
+        self._update_match_label()
+
+    def _find_next(self) -> None:
+        if self._matches:
+            self._goto_match(self._match_index + 1)
+
+    def _find_prev(self) -> None:
+        if self._matches:
+            self._goto_match(self._match_index - 1)
+
+    def _apply_highlights(self) -> None:
+        selections = []
+        for i, cur in enumerate(self._matches):
+            sel = QTextEdit.ExtraSelection()
+            sel.cursor = cur
+            sel.format = self._current_fmt if i == self._match_index else self._match_fmt
+            selections.append(sel)
+        self._text.setExtraSelections(selections)
+
+    def _update_match_label(self) -> None:
+        if not self._matches:
+            self._match_lbl.setText("0/0" if self._search_edit.text() else "")
+        else:
+            self._match_lbl.setText(f"{self._match_index + 1}/{len(self._matches)}")
+
+
+# ── Screenshot gallery viewer ────────────────────────────────────────────────
+
+class _ImageGalleryViewer(QDialog):
+    """Non-modal image gallery for a tool's screenshot output. Navigate with
+    the Prev/Next buttons, Left/Right arrow keys, or the mouse wheel."""
+
+    def __init__(self, title: str, paths: list[Path], parent=None):
+        super().__init__(parent)
+        self.setWindowTitle(title)
+        self.setModal(False)
+        self.resize(900, 700)
+        self.setStyleSheet("QDialog{background:#181825;} QLabel{color:#6C7086;font-size:9px;}")
+        self.setFocusPolicy(Qt.StrongFocus)
+
+        self._paths = paths
+        self._index = 0
+        self._current_pixmap: QPixmap | None = None
+
+        self._wheel_locked = False
+        self._wheel_cooldown = QTimer(self)
+        self._wheel_cooldown.setSingleShot(True)
+        self._wheel_cooldown.setInterval(180)
+        self._wheel_cooldown.timeout.connect(lambda: setattr(self, "_wheel_locked", False))
+
+        vb = QVBoxLayout(self)
+        vb.setContentsMargins(10, 10, 10, 10)
+        vb.setSpacing(6)
+
+        hdr_row = QHBoxLayout()
+        self._name_lbl = QLabel("")
+        self._name_lbl.setStyleSheet("color:#CDD6F4; font-weight:bold; font-size:11px;")
+        hdr_row.addWidget(self._name_lbl, stretch=1)
+        self._count_lbl = QLabel("")
+        self._count_lbl.setStyleSheet("color:#6C7086; font-size:9px;")
+        hdr_row.addWidget(self._count_lbl)
+        vb.addLayout(hdr_row)
+
+        self._image_label = QLabel()
+        self._image_label.setAlignment(Qt.AlignCenter)
+        # Ignored size policy + 1px minimum: the (scaled) pixmap must not feed
+        # its own size back into the layout, or each resize scales the image up
+        # again and it zooms without bound.
+        self._image_label.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Ignored)
+        self._image_label.setMinimumSize(1, 1)
+        self._image_label.setStyleSheet(
+            "background:#11111B; border:1px solid #313244; border-radius:4px;"
+        )
+        vb.addWidget(self._image_label, stretch=1)
+
+        _nav_ss = (
+            "QPushButton{background:#313244;color:#CDD6F4;border:1px solid #45475A;"
+            "border-radius:4px;padding:4px 14px;font-size:11px;}"
+            "QPushButton:hover{background:#45475A;}"
+            "QPushButton:disabled{color:#45475A;}"
+        )
+        nav_row = QHBoxLayout()
+        self._prev_btn = QPushButton("◀  Prev")
+        self._prev_btn.setStyleSheet(_nav_ss)
+        self._prev_btn.clicked.connect(self._show_prev)
+        nav_row.addWidget(self._prev_btn)
+        nav_row.addStretch()
+        copy_btn = QPushButton("Copy Path")
+        copy_btn.setStyleSheet(_nav_ss)
+        copy_btn.clicked.connect(self._copy_path)
+        nav_row.addWidget(copy_btn)
+        close_btn = QPushButton("Close")
+        close_btn.setStyleSheet(_nav_ss)
+        close_btn.clicked.connect(self.accept)
+        nav_row.addWidget(close_btn)
+        nav_row.addStretch()
+        self._next_btn = QPushButton("Next  ▶")
+        self._next_btn.setStyleSheet(_nav_ss)
+        self._next_btn.clicked.connect(self._show_next)
+        nav_row.addWidget(self._next_btn)
+        vb.addLayout(nav_row)
+
+        self._show_index(0)
+
+    # ── navigation ────────────────────────────────────────────────────────────
+
+    def _show_index(self, index: int) -> None:
+        self._index = index % len(self._paths)
+        path = self._paths[self._index]
+        pix = QPixmap(str(path))
+        if pix.isNull():
+            self._current_pixmap = None
+            self._image_label.setPixmap(QPixmap())
+            self._image_label.setText(f"Could not load image:\n{path.name}")
+            self._image_label.setStyleSheet(
+                "color:#F38BA8; font-size:11px; background:#11111B;"
+                "border:1px solid #313244; border-radius:4px;"
+            )
+        else:
+            self._image_label.setStyleSheet(
+                "background:#11111B; border:1px solid #313244; border-radius:4px;"
+            )
+            self._render_pixmap(pix)
+        self._name_lbl.setText(path.name)
+        self._count_lbl.setText(f"{self._index + 1} / {len(self._paths)}")
+        self._prev_btn.setEnabled(len(self._paths) > 1)
+        self._next_btn.setEnabled(len(self._paths) > 1)
+
+    def _render_pixmap(self, pix: QPixmap) -> None:
+        self._current_pixmap = pix
+        target = self._image_label.size()
+        if target.width() > 10 and target.height() > 10:
+            scaled = pix.scaled(target, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+        else:
+            scaled = pix
+        self._image_label.setPixmap(scaled)
+
+    def resizeEvent(self, ev) -> None:
+        super().resizeEvent(ev)
+        if self._current_pixmap is not None and not self._current_pixmap.isNull():
+            self._render_pixmap(self._current_pixmap)
+
+    def _show_next(self) -> None:
+        self._show_index(self._index + 1)
+
+    def _show_prev(self) -> None:
+        self._show_index(self._index - 1)
+
+    def _copy_path(self) -> None:
+        QApplication.clipboard().setText(str(self._paths[self._index]))
+
+    # ── input ─────────────────────────────────────────────────────────────────
+
+    def keyPressEvent(self, ev) -> None:
+        if ev.key() in (Qt.Key_Right, Qt.Key_Down, Qt.Key_Space):
+            self._show_next()
+        elif ev.key() in (Qt.Key_Left, Qt.Key_Up):
+            self._show_prev()
+        elif ev.key() == Qt.Key_Escape:
+            self.close()
+        else:
+            super().keyPressEvent(ev)
+
+    def wheelEvent(self, ev) -> None:
+        if self._wheel_locked or len(self._paths) <= 1:
+            return
+        self._wheel_locked = True
+        self._wheel_cooldown.start()
+        if ev.angleDelta().y() < 0:
+            self._show_next()
+        else:
+            self._show_prev()
+
+
 # ── Main window ───────────────────────────────────────────────────────────────
 
 class PipelineWindow(QMainWindow):
@@ -607,6 +944,7 @@ class PipelineWindow(QMainWindow):
         self._custom_templates: dict[str, PipelineTemplate] = {}
 
         self._stale_session_ids: set[str] = set()
+        self._output_viewers: list = []   # strong refs so non-modal viewers aren't GC'd
         self._build_ui()
         if target:
             self._targetEdit.setText(target)
@@ -798,6 +1136,8 @@ class PipelineWindow(QMainWindow):
         self._monitor.rerun_stage.connect(self._rerun_stage)
         self._monitor.rerun_tool.connect(self._rerun_tool)
         self._monitor.rerun_tool_parser.connect(self._rerun_parser)
+        self._monitor.view_tool_output.connect(self._view_tool_output)
+        self._monitor.view_screenshots.connect(self._view_screenshots)
         self._monitor.rerun_selected.connect(self._rerun_selected)
         self._monitor.stop_tool.connect(self._stop_tool)
         self._monitor.stop_stage.connect(self._stop_stage)
@@ -1098,7 +1438,7 @@ class PipelineWindow(QMainWindow):
         if not session_doc:
             return
 
-        from containers.results.parsers import PARSERS
+        from containers.parsers import PARSERS
         parser = PARSERS.get(tool_key)
         if not parser:
             self._log(f"  [{tool_key}] No parser registered for this tool")
@@ -1131,6 +1471,148 @@ class PipelineWindow(QMainWindow):
         except Exception as exc:
             self._log(f"  [{tool_key}] ✗ Parser error: {exc}")
             self._monitor.on_done(tool_key, "failed", 0)
+
+    # ── raw output viewer ────────────────────────────────────────────────────
+
+    _BINARY_EXTS = frozenset({
+        ".png", ".jpg", ".jpeg", ".gif", ".ico", ".webp", ".bmp",
+        ".ttf", ".woff", ".woff2", ".eot", ".zip", ".gz", ".db", ".sqlite",
+    })
+    _MAX_VIEW_BYTES = 5 * 1024 * 1024   # 5 MB safety cap for the viewer
+    _IMAGE_EXTS = frozenset({".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp"})
+
+    def _view_tool_output(self, tool_key: str) -> None:
+        """Locate the file(s) a tool wrote to the session's output_dir and
+        open them in a syntax-highlighted (JSON) or plain-text viewer."""
+        sid = self._current_session_id
+        if not sid:
+            self._log("[!] Select a session first")
+            return
+        session_doc = self._repo.get_session(sid)
+        if not session_doc:
+            return
+        output_dir = session_doc.get("output_dir", "")
+        if not output_dir or not os.path.isdir(output_dir):
+            self._log(f"  [{tool_key}] Session has no output_dir")
+            return
+
+        all_files = sorted(
+            p for p in Path(output_dir).rglob("*")
+            if p.is_file() and not p.name.startswith(".")
+            and p.suffix.lower() not in self._BINARY_EXTS
+        )
+        if not all_files:
+            self._log(f"  [{tool_key}] No output files found")
+            return
+
+        # Match by tool key against the filename, ignoring separators/case —
+        # covers the "<tool>_results.<ext>" convention most tools follow.
+        # Falls back to every file in the session's output dir for outliers
+        # (e.g. sqlmap writes a bare "log" file with no tool name in it).
+        norm_key = tool_key.lower().replace("_", "").replace("-", "")
+        matches = [
+            p for p in all_files
+            if norm_key in p.name.lower().replace("_", "").replace("-", "")
+        ]
+        candidates = matches or all_files
+
+        if len(candidates) == 1:
+            self._open_output_viewer(tool_key, candidates[0])
+            return
+
+        menu = QMenu(self)
+        actions = {}
+        for p in candidates:
+            rel = p.relative_to(output_dir)
+            actions[menu.addAction(str(rel))] = p
+        chosen = menu.exec(self.cursor().pos())
+        if chosen in actions:
+            self._open_output_viewer(tool_key, actions[chosen])
+
+    def _open_output_viewer(self, tool_key: str, path: Path) -> None:
+        tool = TOOL_REGISTRY.get(tool_key)
+        name = tool.display_name if tool else tool_key
+
+        try:
+            size = path.stat().st_size
+            truncated = size > self._MAX_VIEW_BYTES
+            with open(path, "rb") as f:
+                raw = f.read(self._MAX_VIEW_BYTES if truncated else size).decode(
+                    "utf-8", errors="replace"
+                )
+        except OSError as exc:
+            self._log(f"  [{tool_key}] Could not read {path.name}: {exc}")
+            return
+
+        ext = path.suffix.lower()
+        is_json = ext in (".json", ".jsonl")
+        content = raw
+        if not truncated:
+            if ext == ".json":
+                try:
+                    content = json.dumps(json.loads(raw), indent=2)
+                except (json.JSONDecodeError, ValueError):
+                    pass
+            elif ext == ".jsonl":
+                pretty = []
+                for line in raw.splitlines():
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        pretty.append(json.dumps(json.loads(line), indent=2))
+                    except (json.JSONDecodeError, ValueError):
+                        pretty.append(line)
+                content = "\n\n".join(pretty)
+            else:
+                stripped = raw.strip()
+                is_json = stripped.startswith(("{", "[")) and stripped.endswith(("}", "]"))
+        if truncated:
+            content += (
+                f"\n\n… [truncated — showing first "
+                f"{self._MAX_VIEW_BYTES // (1024 * 1024)} MB of {size / (1024 * 1024):.1f} MB]"
+            )
+
+        viewer = _RawOutputViewer(f"{name} — {path.name}", content, is_json, parent=self)
+        self._output_viewers.append(viewer)
+        viewer.finished.connect(
+            lambda _=None, v=viewer: self._output_viewers.remove(v) if v in self._output_viewers else None
+        )
+        viewer.show()
+
+    def _view_screenshots(self, tool_key: str) -> None:
+        """Open every image found under the session's output_dir in a
+        scrollable gallery viewer. Not tied to a specific tool's naming
+        convention — screenshots (e.g. gowitness) are named after their
+        target URL, not the tool, so this just shows whatever images exist."""
+        sid = self._current_session_id
+        if not sid:
+            self._log("[!] Select a session first")
+            return
+        session_doc = self._repo.get_session(sid)
+        if not session_doc:
+            return
+        output_dir = session_doc.get("output_dir", "")
+        if not output_dir or not os.path.isdir(output_dir):
+            self._log(f"  [{tool_key}] Session has no output_dir")
+            return
+
+        images = sorted(
+            p for p in Path(output_dir).rglob("*")
+            if p.is_file() and p.suffix.lower() in self._IMAGE_EXTS
+        )
+        if not images:
+            self._log(f"  [{tool_key}] No screenshots found for this tool")
+            return
+
+        tool = TOOL_REGISTRY.get(tool_key)
+        name = tool.display_name if tool else tool_key
+        viewer = _ImageGalleryViewer(f"{name} — Screenshots", images, parent=self)
+        self._output_viewers.append(viewer)
+        viewer.finished.connect(
+            lambda _=None, v=viewer: self._output_viewers.remove(v) if v in self._output_viewers else None
+        )
+        viewer.show()
 
     def _stop_tool(self, tool_key: str):
         if self._executor and self._executor.isRunning():

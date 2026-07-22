@@ -139,6 +139,26 @@ class NetworkPage(QWidget):
                             "border:1px solid #FE640B;border-radius:4px;"
                             "padding:2px 10px;font-size:10px;min-height:26px;}"
                             "QPushButton:hover{background:#4D3B2F;}")
+        _live_ss_on  = ("QPushButton{background:#1A2E1A;color:#A6E3A1;"
+                        "border:1px solid #A6E3A1;border-radius:4px;"
+                        "padding:2px 10px;font-size:10px;min-height:26px;}"
+                        "QPushButton:hover{background:#2A3E2A;}")
+        _live_ss_off = _btn_ss
+
+        # ── Live-only toggle ──────────────────────────────────────────────────
+        self._live_only_btn = QPushButton("●  Live Only")
+        self._live_only_btn.setCheckable(True)
+        self._live_only_btn.setChecked(True)
+        self._live_only_btn.setFixedHeight(26)
+        self._live_only_btn.setStyleSheet(_live_ss_on)
+        self._live_only_btn.setToolTip(
+            "Only show subdomains confirmed alive via an HTTP probe.\n"
+            "Toggle off to reveal every discovered subdomain."
+        )
+        self._live_only_btn._ss_on  = _live_ss_on
+        self._live_only_btn._ss_off = _live_ss_off
+        self._live_only_btn.toggled.connect(self._on_live_only_toggled)
+        hl.addWidget(self._live_only_btn)
 
         # ── Findings / endpoints filter toggle ───────────────────────────────────
         self._filter_btn = QPushButton("Filters ▾")
@@ -324,10 +344,11 @@ class NetworkPage(QWidget):
 
         n = data.nodes
         counts = {k: sum(1 for nd in n if nd.kind == k) for k in _NS}
+        live_subs = sum(1 for nd in n if nd.kind == "subdomain" and nd.data.get("live"))
         proxy_count = counts["cdn"] + counts["reverse_proxy"]
         cdn_s = f"  ·  {proxy_count} CDN/proxies" if proxy_count else ""
         self._status.setText(
-            f"{counts['subdomain']} subdomains  ·  {counts['ip']} IPs  ·  "
+            f"{live_subs} live / {counts['subdomain']} subdomains  ·  {counts['ip']} IPs  ·  "
             f"{counts['port']} ports  ·  {counts['tech']} technologies  ·  "
             f"{counts['vuln']} vulns  ·  {counts['osint']} OSINT{cdn_s}"
         )
@@ -351,6 +372,18 @@ class NetworkPage(QWidget):
         win = self.window()
         if hasattr(win, "openNewBrowserTab"):
             win.openNewBrowserTab(url)
+
+    # ── Live-only toggle ──────────────────────────────────────────────────────
+
+    def _on_live_only_toggled(self, checked: bool) -> None:
+        self._live_only_btn.setStyleSheet(
+            self._live_only_btn._ss_on if checked else self._live_only_btn._ss_off
+        )
+        self._scene.set_live_only(checked)
+        if self._lane_mode and self._data:
+            # Row generation itself depends on which subdomains are eligible,
+            # not just their visibility, so lane mode needs a full re-layout.
+            self._scene.lane_layout(self._data)
 
     # ── Findings / endpoints filter panel ────────────────────────────────────────
 

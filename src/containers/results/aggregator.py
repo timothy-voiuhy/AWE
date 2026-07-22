@@ -24,7 +24,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from containers.results.models import BaseResult
-from containers.results.parsers import PARSERS
+from containers.parsers import PARSERS
 from containers.tool_registry import TOOL_CATEGORIES
 
 logger = logging.getLogger(__name__)

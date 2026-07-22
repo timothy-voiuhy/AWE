@@ -35,6 +35,7 @@ class NetworkGraphScene(QGraphicsScene):
         self._focused_id:    str | None = None    # node being focused (None = show all)
         self._search_query:  str = ""             # active search (empty = inactive)
         self._node_filter = None   # optional callable(GraphNode) -> bool, from GraphFilterPanel
+        self._live_only:     bool = True   # only show subdomains confirmed via an HTTP probe
         self._lane_deco_items:      list[_LaneDecorationItem] = []
         self._lane_virtual_items:   list = []           # cloned NodeItem/EdgeItem per row
         self._lane_hidden_items:    list = []           # real items hidden while lane is active
@@ -163,10 +164,16 @@ class NetworkGraphScene(QGraphicsScene):
 
         Rules (applied in order):
           1. hidden-by-default: endpoint/param only visible when parent expanded.
-          2. focus: if _focused_id is set, only nodes in the focused row(s) are
+          2. live-only: subdomains without a confirmed HTTP-probe hit are hidden
+             unless _live_only is off.
+          3. reachability: a node is only shown if there's a path from the
+             target root through other currently-eligible nodes — this stops
+             e.g. an IP that only resolves from a hidden subdomain from being
+             drawn as a disconnected floating dot.
+          4. focus: if _focused_id is set, only nodes in the focused row(s) are
              visible (lane mode) or 1-hop neighbours (free-graph mode).
-          3. lane suppression: real nodes replaced by per-row clones stay hidden.
-          4. virtual lane items: shown/hidden to match the focus set.
+          5. lane suppression: real nodes replaced by per-row clones stay hidden.
+          6. virtual lane items: shown/hidden to match the focus set.
         """
         parent_of: dict[str, str] = {}
         for ei in self._edge_items:
@@ -196,13 +203,40 @@ class NetworkGraphScene(QGraphicsScene):
                 focus_ids = (self._neighbor_ids(fid)
                              if fid in self._node_items else None)
 
+        # ── Per-node eligibility (kind-based rules, ignoring reachability) ─────
+        eligible: dict[str, bool] = {}
+        for nid, item in self._node_items.items():
+            node = item.node()
+            kind = node.kind
+            if kind in _HIDDEN_BY_DEFAULT:
+                eligible[nid] = parent_of.get(nid) in self._expanded_nodes
+            elif kind == "subdomain" and self._live_only and not node.data.get("live"):
+                eligible[nid] = False
+            else:
+                eligible[nid] = True
+
+        # ── Reachability from the target root through eligible nodes only ──────
+        # An interior node being hidden (e.g. a non-live subdomain) must also
+        # hide anything only reachable through it, so its descendants don't end
+        # up floating disconnected elsewhere in the scene.
+        adjacency: dict[str, list[str]] = defaultdict(list)
+        for ei in self._edge_items:
+            adjacency[ei._src.node().id].append(ei._tgt.node().id)
+        reachable: set[str] = {
+            nid for nid, item in self._node_items.items() if item.node().kind == "target"
+        }
+        stack = list(reachable)
+        while stack:
+            nid = stack.pop()
+            for c in adjacency.get(nid, []):
+                if c in reachable or not eligible.get(c, True):
+                    continue
+                reachable.add(c)
+                stack.append(c)
+
         # ── Real nodes ────────────────────────────────────────────────────────
         for nid, item in self._node_items.items():
-            kind = item.node().kind
-            if kind in _HIDDEN_BY_DEFAULT:
-                base_vis = parent_of.get(nid) in self._expanded_nodes
-            else:
-                base_vis = True
+            base_vis = eligible.get(nid, True) and nid in reachable
             visible = base_vis if focus_ids is None else (nid in focus_ids)
             if visible and self._node_filter is not None and not self._node_filter(item.node()):
                 visible = False
@@ -267,6 +301,14 @@ class NetworkGraphScene(QGraphicsScene):
         Nodes it rejects are hidden everywhere (normal, focus and lane views).
         Pass None to remove the filter."""
         self._node_filter = predicate
+        self._refresh_visibility()
+
+    def set_live_only(self, value: bool) -> None:
+        """Toggle whether non-live subdomains (and anything only reachable
+        through them) are hidden. Only updates visibility for the current
+        layout — callers in lane mode must also re-run lane_layout() so
+        non-live subdomains stop reserving their own row band."""
+        self._live_only = value
         self._refresh_visibility()
 
     # ── Graph search ──────────────────────────────────────────────────────────
@@ -491,7 +533,14 @@ class NetworkGraphScene(QGraphicsScene):
         """
         self._clear_lane_decorations()
 
-        nmap = {n.id: n for n in data.nodes if n.kind not in _HIDDEN_BY_DEFAULT}
+        def _row_eligible(n: GraphNode) -> bool:
+            if n.kind in _HIDDEN_BY_DEFAULT:
+                return False
+            if n.kind == "subdomain" and self._live_only and not n.data.get("live"):
+                return False
+            return True
+
+        nmap = {n.id: n for n in data.nodes if _row_eligible(n)}
         # Full map including hidden-by-default kinds (needed for endpoint/param columns)
         all_nmap = {n.id: n for n in data.nodes}
 

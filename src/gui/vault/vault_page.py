@@ -1,0 +1,1063 @@
+"""
+VaultPage — the Vault UI.
+
+Left rail of clickable category cards; right panel showing the selected category's
+items in a responsive grid. Items open in type-appropriate viewers:
+
+    image → lightbox gallery (reuses gui.pipelineWindow._ImageGalleryViewer)
+    pdf   → embedded QPdfView reader (falls back to the inbuilt browser)
+    link  → opens a tab in the inbuilt AWE browser (open_in_browser callback)
+    note  → inline text editor dialog
+    file  → opens with the system default application
+
+Files can also be added by dragging them onto the content panel.
+
+Styling uses the shared Catppuccin Mocha tokens in gui.palette.
+"""
+from __future__ import annotations
+
+import json
+import logging
+import os
+import re
+
+from PySide6.QtCore import Qt, Signal, QObject, QSize, QRect, QPoint, QUrl, QBuffer, QByteArray
+from PySide6.QtGui import QPixmap, QDesktopServices, QShortcut, QKeySequence
+from PySide6.QtWidgets import (
+    QWidget, QFrame, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
+    QScrollArea, QStackedWidget, QLayout, QMenu, QDialog, QLineEdit,
+    QTextEdit, QTextBrowser, QComboBox, QTabWidget, QDialogButtonBox,
+    QFileDialog, QMessageBox, QApplication,
+)
+
+from gui.palette import (
+    BASE, MANTLE, CRUST, SURFACE0, SURFACE1, OVERLAY0, OVERLAY2, TEXT, SUBTEXT1,
+    BLUE, MAUVE, GREEN, RED, YELLOW, PEACH, TEAL, SKY, PINK, LAVENDER, MAROON,
+    SAPPHIRE, SCROLLBAR_V_THIN,
+)
+from gui.vault.vault_store import VaultStore, IMAGE, PDF, FILE, LINK, NOTE
+
+log = logging.getLogger(__name__)
+
+# Curated accent choices offered when creating / recolouring a category.
+_ACCENTS = [BLUE, MAUVE, GREEN, RED, YELLOW, PEACH, TEAL, SKY, PINK, LAVENDER,
+            MAROON, SAPPHIRE]
+
+# Glyph shown on non-image item tiles, by type.
+_TYPE_GLYPH = {PDF: "▤", FILE: "⛃", LINK: "🔗", NOTE: "✎"}
+
+# Languages offered for a note, and which get special rendering.
+_NOTE_LANGS = ["txt", "md", "json", "js", "py", "html", "css", "sql", "yaml",
+               "xml", "sh", "http", "c", "cpp", "go", "rust", "php", "ruby"]
+
+_URL_RE = re.compile(r"^(https?://|www\.)\S+$", re.IGNORECASE)
+
+
+def _looks_like_url(text: str) -> bool:
+    t = text.strip()
+    return " " not in t and "\n" not in t and bool(_URL_RE.match(t))
+
+
+def _qimage_png_bytes(img) -> bytes:
+    ba = QByteArray()
+    buf = QBuffer(ba)
+    buf.open(QBuffer.OpenModeFlag.WriteOnly)
+    img.save(buf, "PNG")
+    return bytes(ba)
+
+
+def _render_note(browser: "QTextBrowser", text: str, lang: str) -> None:
+    """Render note ``text`` into ``browser`` according to ``lang``."""
+    lang = (lang or "txt").lower()
+    browser.setStyleSheet(
+        f"QTextBrowser {{ background:{BASE}; color:{TEXT}; border:none; padding:8px;"
+        f" font-size:12px; }}" + SCROLLBAR_V_THIN)
+    if lang == "md":
+        browser.setMarkdown(text)
+        return
+    if lang == "html":
+        browser.setHtml(text)
+        return
+    if lang == "json":
+        try:
+            text = json.dumps(json.loads(text), indent=2, ensure_ascii=False)
+        except Exception:
+            pass  # show as-is (likely invalid JSON) but still syntax-highlight
+    html = _highlight_html(text, lang)
+    if html is not None:
+        browser.setHtml(html)
+    else:
+        browser.setStyleSheet(
+            f"QTextBrowser {{ background:{CRUST}; color:{TEXT}; border:none; padding:8px;"
+            f" font-family:monospace; font-size:12px; }}" + SCROLLBAR_V_THIN)
+        browser.setPlainText(text)
+
+
+def _highlight_html(text: str, lang: str):
+    """Return a syntax-highlighted HTML fragment via Pygments, or None."""
+    try:
+        from pygments import highlight
+        from pygments.lexers import get_lexer_by_name
+        from pygments.lexers.special import TextLexer
+        from pygments.formatters import HtmlFormatter
+        try:
+            lexer = get_lexer_by_name(lang)
+        except Exception:
+            lexer = TextLexer()
+        formatter = HtmlFormatter(noclasses=True, style="monokai")
+        body = highlight(text, lexer, formatter)
+        return (f"<div style='background:{CRUST}; padding:6px; font-size:12px;'>"
+                f"{body}</div>")
+    except Exception:
+        return None
+
+_TILE_W = 172
+_TILE_H = 150
+
+
+class _VaultHub(QObject):
+    """Process-wide notifier. The vault is a single global store, so every open
+    VaultPage (one per project window) listens here and refreshes when any of
+    them mutates the vault, keeping all windows in sync."""
+    changed = Signal()
+
+
+# One shared instance for the whole application.
+_vault_hub = _VaultHub()
+
+
+# ── Flow layout (wraps tiles onto multiple rows) ─────────────────────────────
+
+class _FlowLayout(QLayout):
+    def __init__(self, parent=None, margin=0, spacing=14):
+        super().__init__(parent)
+        if parent is not None:
+            self.setContentsMargins(margin, margin, margin, margin)
+        self.setSpacing(spacing)
+        self._items: list = []
+
+    def addItem(self, item):
+        self._items.append(item)
+
+    def count(self):
+        return len(self._items)
+
+    def itemAt(self, i):
+        return self._items[i] if 0 <= i < len(self._items) else None
+
+    def takeAt(self, i):
+        return self._items.pop(i) if 0 <= i < len(self._items) else None
+
+    def expandingDirections(self):
+        return Qt.Orientations(Qt.Orientation(0))
+
+    def hasHeightForWidth(self):
+        return True
+
+    def heightForWidth(self, width):
+        return self._do_layout(QRect(0, 0, width, 0), True)
+
+    def setGeometry(self, rect):
+        super().setGeometry(rect)
+        self._do_layout(rect, False)
+
+    def sizeHint(self):
+        return self.minimumSize()
+
+    def minimumSize(self):
+        size = QSize()
+        for item in self._items:
+            size = size.expandedTo(item.minimumSize())
+        m = self.contentsMargins()
+        size += QSize(m.left() + m.right(), m.top() + m.bottom())
+        return size
+
+    def _do_layout(self, rect, test_only):
+        m = self.contentsMargins()
+        eff = rect.adjusted(m.left(), m.top(), -m.right(), -m.bottom())
+        x, y, line_height = eff.x(), eff.y(), 0
+        spacing = self.spacing()
+        for item in self._items:
+            hint = item.sizeHint()
+            next_x = x + hint.width() + spacing
+            if next_x - spacing > eff.right() and line_height > 0:
+                x = eff.x()
+                y = y + line_height + spacing
+                next_x = x + hint.width() + spacing
+                line_height = 0
+            if not test_only:
+                item.setGeometry(QRect(QPoint(x, y), hint))
+            x = next_x
+            line_height = max(line_height, hint.height())
+        return y + line_height - rect.y() + m.bottom()
+
+
+# ── Dialogs ──────────────────────────────────────────────────────────────────
+
+def _dialog_ss() -> str:
+    return f"""
+        QDialog {{ background:{MANTLE}; }}
+        QLabel {{ color:{SUBTEXT1}; font-size:11px; background:transparent; }}
+        QLineEdit, QTextEdit {{
+            background:{BASE}; color:{TEXT}; border:1px solid {SURFACE0};
+            border-radius:4px; padding:6px; selection-background-color:{SURFACE1};
+        }}
+        QPushButton {{
+            background:{SURFACE0}; color:{TEXT}; border:1px solid {SURFACE1};
+            border-radius:4px; padding:5px 14px; font-size:11px;
+        }}
+        QPushButton:hover {{ background:{SURFACE1}; }}
+    """
+
+
+class _AccentPicker(QWidget):
+    """A horizontal row of colour swatches; tracks the chosen accent."""
+
+    def __init__(self, selected: str, parent=None):
+        super().__init__(parent)
+        self.selected = selected
+        self._swatches: dict[str, QPushButton] = {}
+        row = QHBoxLayout(self)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(6)
+        for accent in _ACCENTS:
+            b = QPushButton()
+            b.setFixedSize(22, 22)
+            b.setCursor(Qt.PointingHandCursor)
+            b.clicked.connect(lambda _=False, a=accent: self._choose(a))
+            self._swatches[accent] = b
+            row.addWidget(b)
+        row.addStretch()
+        self._restyle()
+
+    def _choose(self, accent: str):
+        self.selected = accent
+        self._restyle()
+
+    def _restyle(self):
+        for accent, b in self._swatches.items():
+            border = TEXT if accent == self.selected else "transparent"
+            b.setStyleSheet(
+                f"QPushButton {{ background:{accent}; border:2px solid {border};"
+                f" border-radius:11px; }}"
+            )
+
+
+class _CategoryDialog(QDialog):
+    def __init__(self, parent=None, name: str = "", accent: str = BLUE, title: str = "New Category"):
+        super().__init__(parent)
+        self.setWindowTitle(title)
+        self.setStyleSheet(_dialog_ss())
+        self.setMinimumWidth(360)
+        vb = QVBoxLayout(self)
+        vb.setContentsMargins(18, 18, 18, 18)
+        vb.setSpacing(10)
+        vb.addWidget(QLabel("Name"))
+        self._name = QLineEdit(name)
+        self._name.setPlaceholderText("e.g. Recon notes, Payloads, CVE research")
+        vb.addWidget(self._name)
+        vb.addWidget(QLabel("Colour"))
+        self._picker = _AccentPicker(accent)
+        vb.addWidget(self._picker)
+        bb = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        bb.accepted.connect(self.accept)
+        bb.rejected.connect(self.reject)
+        vb.addWidget(bb)
+        self._name.setFocus()
+
+    def values(self) -> tuple[str, str]:
+        return self._name.text().strip(), self._picker.selected
+
+
+class _LinkDialog(QDialog):
+    def __init__(self, parent=None, title: str = "", url: str = ""):
+        super().__init__(parent)
+        self.setWindowTitle("Add Link")
+        self.setStyleSheet(_dialog_ss())
+        self.setMinimumWidth(420)
+        vb = QVBoxLayout(self)
+        vb.setContentsMargins(18, 18, 18, 18)
+        vb.setSpacing(10)
+        vb.addWidget(QLabel("URL"))
+        self._url = QLineEdit(url)
+        self._url.setPlaceholderText("https://…")
+        vb.addWidget(self._url)
+        vb.addWidget(QLabel("Title (optional)"))
+        self._title = QLineEdit(title)
+        vb.addWidget(self._title)
+        bb = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        bb.accepted.connect(self.accept)
+        bb.rejected.connect(self.reject)
+        vb.addWidget(bb)
+        self._url.setFocus()
+
+    def values(self) -> tuple[str, str]:
+        return self._url.text().strip(), self._title.text().strip()
+
+
+class _NoteDialog(QDialog):
+    """Create / edit / view a note. The note has a language (txt, md, json, …);
+    the Preview tab renders it accordingly (markdown, syntax-highlighted code,
+    pretty JSON, HTML)."""
+
+    def __init__(self, parent=None, title: str = "", text: str = "", lang: str = "txt",
+                 preview_first: bool = False):
+        super().__init__(parent)
+        self.setWindowTitle("Note")
+        self.setStyleSheet(_dialog_ss() + f"""
+            QComboBox {{ background:{BASE}; color:{TEXT}; border:1px solid {SURFACE0};
+                        border-radius:4px; padding:4px 8px; }}
+            QComboBox QAbstractItemView {{ background:{MANTLE}; color:{TEXT};
+                        selection-background-color:{SURFACE0}; }}
+            QTabWidget::pane {{ border:1px solid {SURFACE0}; border-radius:4px; }}
+            QTabBar::tab {{ background:{MANTLE}; color:{OVERLAY0}; padding:5px 16px;
+                        border:none; font-size:11px; }}
+            QTabBar::tab:selected {{ color:{TEXT}; background:{BASE};
+                        border-bottom:2px solid {MAUVE}; }}
+        """)
+        self.resize(640, 540)
+        vb = QVBoxLayout(self)
+        vb.setContentsMargins(18, 18, 18, 18)
+        vb.setSpacing(10)
+
+        top = QHBoxLayout()
+        self._title = QLineEdit(title)
+        self._title.setPlaceholderText("Note title")
+        top.addWidget(self._title, stretch=1)
+        top.addWidget(QLabel("Type"))
+        self._lang = QComboBox()
+        self._lang.addItems(_NOTE_LANGS)
+        self._lang.setCurrentText(lang if lang in _NOTE_LANGS else "txt")
+        top.addWidget(self._lang)
+        vb.addLayout(top)
+
+        self._tabs = QTabWidget()
+        self._editor = QTextEdit(text)
+        self._editor.setStyleSheet(
+            f"QTextEdit {{ background:{BASE}; color:{TEXT}; border:none;"
+            f" font-family:monospace; font-size:12px; }}")
+        self._editor.setAcceptRichText(False)
+        self._preview = QTextBrowser()
+        self._preview.setOpenExternalLinks(True)
+        self._tabs.addTab(self._editor, "Edit")
+        self._tabs.addTab(self._preview, "Preview")
+        self._tabs.currentChanged.connect(self._on_tab)
+        vb.addWidget(self._tabs, stretch=1)
+        # Re-render live when the language changes while previewing.
+        self._lang.currentTextChanged.connect(
+            lambda _: self._on_tab(self._tabs.currentIndex()))
+
+        bb = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        bb.accepted.connect(self.accept)
+        bb.rejected.connect(self.reject)
+        vb.addWidget(bb)
+
+        if preview_first:
+            self._tabs.setCurrentIndex(1)
+
+    def _on_tab(self, index: int):
+        if self._tabs.tabText(index) == "Preview":
+            _render_note(self._preview, self._editor.toPlainText(), self._lang.currentText())
+
+    def values(self) -> tuple[str, str, str]:
+        return self._title.text().strip(), self._editor.toPlainText(), self._lang.currentText()
+
+
+# ── Category card ────────────────────────────────────────────────────────────
+
+class _CategoryCard(QFrame):
+    clicked = Signal(str)          # category id
+    edit_requested = Signal(str)
+    delete_requested = Signal(str)
+
+    def __init__(self, category: dict, count: int, parent=None):
+        super().__init__(parent)
+        self._id = category["id"]
+        self._accent = category.get("accent", OVERLAY2)
+        self._selected = False
+        self.setCursor(Qt.PointingHandCursor)
+        self.setObjectName("vaultCat")
+
+        vb = QVBoxLayout(self)
+        vb.setContentsMargins(12, 10, 12, 10)
+        vb.setSpacing(3)
+        self._name_lbl = QLabel(category.get("name", "Untitled"))
+        self._name_lbl.setStyleSheet(
+            f"color:{TEXT}; font-size:12px; font-weight:bold; background:transparent; border:none;"
+        )
+        self._name_lbl.setWordWrap(True)
+        vb.addWidget(self._name_lbl)
+        self._count_lbl = QLabel(self._count_text(count))
+        self._count_lbl.setStyleSheet(
+            f"color:{OVERLAY0}; font-size:9px; letter-spacing:1px; background:transparent; border:none;"
+        )
+        vb.addWidget(self._count_lbl)
+        self._restyle()
+
+    @staticmethod
+    def _count_text(count: int) -> str:
+        return "EMPTY" if count == 0 else f"{count} ITEM" + ("S" if count != 1 else "")
+
+    def set_count(self, count: int):
+        self._count_lbl.setText(self._count_text(count))
+
+    def set_selected(self, selected: bool):
+        self._selected = selected
+        self._restyle()
+
+    def _restyle(self):
+        border = self._accent if self._selected else SURFACE0
+        bg = SURFACE0 if self._selected else BASE
+        self.setStyleSheet(f"""
+            QFrame#vaultCat {{
+                background:{bg};
+                border:1px solid {border};
+                border-left:3px solid {self._accent};
+                border-radius:6px;
+            }}
+            QFrame#vaultCat:hover {{ background:{SURFACE0}; }}
+        """)
+
+    def mousePressEvent(self, ev):
+        if ev.button() == Qt.LeftButton:
+            self.clicked.emit(self._id)
+        super().mousePressEvent(ev)
+
+    def contextMenuEvent(self, ev):
+        menu = QMenu(self)
+        menu.setStyleSheet(_menu_ss())
+        act_edit = menu.addAction("Rename / Recolour")
+        act_del = menu.addAction("Delete")
+        chosen = menu.exec(ev.globalPos())
+        if chosen == act_edit:
+            self.edit_requested.emit(self._id)
+        elif chosen == act_del:
+            self.delete_requested.emit(self._id)
+
+
+# ── Item tile ────────────────────────────────────────────────────────────────
+
+class _ItemTile(QFrame):
+    opened = Signal(str)           # item id
+    rename_requested = Signal(str)
+    reveal_requested = Signal(str)
+    delete_requested = Signal(str)
+
+    def __init__(self, item: dict, thumb_path=None, parent=None):
+        super().__init__(parent)
+        self._id = item["id"]
+        self._type = item.get("type", FILE)
+        self.setFixedSize(_TILE_W, _TILE_H)
+        self.setCursor(Qt.PointingHandCursor)
+        self.setObjectName("vaultTile")
+        self.setStyleSheet(f"""
+            QFrame#vaultTile {{
+                background:{BASE}; border:1px solid {SURFACE0}; border-radius:8px;
+            }}
+            QFrame#vaultTile:hover {{ border:1px solid {SURFACE1}; background:{MANTLE}; }}
+        """)
+
+        vb = QVBoxLayout(self)
+        vb.setContentsMargins(8, 8, 8, 8)
+        vb.setSpacing(6)
+
+        preview = QLabel()
+        preview.setAlignment(Qt.AlignCenter)
+        preview.setFixedHeight(92)
+        preview.setStyleSheet(
+            f"background:{CRUST}; border:none; border-radius:5px; color:{OVERLAY0}; font-size:34px;"
+        )
+        if self._type == IMAGE and thumb_path:
+            pix = QPixmap(str(thumb_path))
+            if not pix.isNull():
+                preview.setPixmap(pix.scaled(
+                    QSize(_TILE_W - 16, 92), Qt.KeepAspectRatio, Qt.SmoothTransformation))
+            else:
+                preview.setText("🖼")
+        else:
+            preview.setText(_TYPE_GLYPH.get(self._type, "⛃"))
+        vb.addWidget(preview)
+
+        title = QLabel(item.get("title", "Untitled"))
+        title.setStyleSheet(
+            f"color:{TEXT}; font-size:10px; background:transparent; border:none;")
+        title.setWordWrap(False)
+        title.setToolTip(item.get("title", ""))
+        # Elide manually-ish: rely on fixed width + clipping.
+        title.setMaximumWidth(_TILE_W - 16)
+        vb.addWidget(title)
+
+        sub = QLabel(self._subtitle(item))
+        sub.setStyleSheet(
+            f"color:{OVERLAY0}; font-size:8px; letter-spacing:1px; background:transparent; border:none;")
+        vb.addWidget(sub)
+
+    @staticmethod
+    def _subtitle(item: dict) -> str:
+        t = item.get("type", FILE)
+        if t == LINK:
+            url = item.get("url", "")
+            host = url.split("//")[-1].split("/")[0]
+            return host.upper()[:26] or "LINK"
+        if t == NOTE:
+            lang = (item.get("lang") or "txt").lower()
+            return "NOTE" if lang == "txt" else f"NOTE · {lang.upper()}"
+        return t.upper()
+
+    def mousePressEvent(self, ev):
+        if ev.button() == Qt.LeftButton:
+            self.opened.emit(self._id)
+        super().mousePressEvent(ev)
+
+    def contextMenuEvent(self, ev):
+        menu = QMenu(self)
+        menu.setStyleSheet(_menu_ss())
+        act_open = menu.addAction("Open")
+        act_rename = menu.addAction("Rename")
+        act_reveal = None
+        if self._type in (IMAGE, PDF, FILE):
+            act_reveal = menu.addAction("Reveal in Folder")
+        menu.addSeparator()
+        act_del = menu.addAction("Delete")
+        chosen = menu.exec(ev.globalPos())
+        if chosen == act_open:
+            self.opened.emit(self._id)
+        elif chosen == act_rename:
+            self.rename_requested.emit(self._id)
+        elif act_reveal is not None and chosen == act_reveal:
+            self.reveal_requested.emit(self._id)
+        elif chosen == act_del:
+            self.delete_requested.emit(self._id)
+
+
+def _menu_ss() -> str:
+    return f"""
+        QMenu {{ background:{MANTLE}; color:{TEXT}; border:1px solid {SURFACE0}; }}
+        QMenu::item {{ padding:6px 22px; font-size:11px; }}
+        QMenu::item:selected {{ background:{SURFACE0}; }}
+        QMenu::separator {{ height:1px; background:{SURFACE0}; margin:4px 8px; }}
+    """
+
+
+# ── PDF reader (embedded) ────────────────────────────────────────────────────
+
+try:
+    from PySide6.QtPdf import QPdfDocument
+    from PySide6.QtPdfWidgets import QPdfView
+    _PDF_OK = True
+except Exception:  # pragma: no cover - environment without QtPdf
+    _PDF_OK = False
+
+
+class _PdfReader(QWidget):
+    """Embedded PDF viewer with a back button and 'open in browser' escape hatch."""
+    back = Signal()
+
+    def __init__(self, open_in_browser=None, parent=None):
+        super().__init__(parent)
+        self._open_in_browser = open_in_browser
+        self._path = None
+        self.setStyleSheet(f"background:{BASE};")
+        vb = QVBoxLayout(self)
+        vb.setContentsMargins(0, 0, 0, 0)
+        vb.setSpacing(0)
+
+        bar = QHBoxLayout()
+        bar.setContentsMargins(12, 8, 12, 8)
+        bar.setSpacing(8)
+        back_btn = QPushButton("◀  Back")
+        back_btn.setStyleSheet(_btn_ss())
+        back_btn.clicked.connect(self.back.emit)
+        bar.addWidget(back_btn)
+        self._name_lbl = QLabel("")
+        self._name_lbl.setStyleSheet(f"color:{TEXT}; font-size:11px; font-weight:bold;")
+        bar.addWidget(self._name_lbl, stretch=1)
+        open_btn = QPushButton("Open in AWE Browser")
+        open_btn.setStyleSheet(_btn_ss())
+        open_btn.clicked.connect(self._open_external)
+        bar.addWidget(open_btn)
+        bar_w = QWidget()
+        bar_w.setStyleSheet(f"background:{MANTLE};")
+        bar_w.setLayout(bar)
+        vb.addWidget(bar_w)
+
+        self._doc = QPdfDocument(self)
+        self._view = QPdfView(self)
+        self._view.setDocument(self._doc)
+        self._view.setPageMode(QPdfView.PageMode.MultiPage)
+        self._view.setZoomMode(QPdfView.ZoomMode.FitToWidth)
+        vb.addWidget(self._view, stretch=1)
+
+    def load(self, path, title: str):
+        self._path = path
+        self._name_lbl.setText(title)
+        self._doc.load(str(path))
+
+    def _open_external(self):
+        if self._path and self._open_in_browser:
+            self._open_in_browser(QUrl.fromLocalFile(str(self._path)).toString())
+
+
+def _btn_ss() -> str:
+    return (
+        f"QPushButton {{ background:{SURFACE0}; color:{TEXT}; border:1px solid {SURFACE1};"
+        f" border-radius:4px; padding:5px 14px; font-size:11px; }}"
+        f"QPushButton:hover {{ background:{SURFACE1}; }}"
+    )
+
+
+# ── Vault page ───────────────────────────────────────────────────────────────
+
+class VaultPage(QWidget):
+    def __init__(self, open_in_browser=None, parent=None):
+        super().__init__(parent)
+        self._open_in_browser = open_in_browser
+        self._store = VaultStore()
+        self._current_cat: str | None = None
+        self._cards: dict[str, _CategoryCard] = {}
+        self.setAcceptDrops(True)
+        self.setStyleSheet(f"background:{BASE};")
+
+        root = QHBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
+        root.addWidget(self._build_rail())
+
+        div = QFrame()
+        div.setFrameShape(QFrame.VLine)
+        div.setFixedWidth(1)
+        div.setStyleSheet(f"background:{SURFACE0}; border:none;")
+        root.addWidget(div)
+
+        root.addWidget(self._build_content(), stretch=1)
+
+        self._reload_categories()
+        # Stay in sync with other open project windows sharing the global vault.
+        _vault_hub.changed.connect(self._on_external_change)
+
+        # Ctrl+V captures clipboard content (image / file / url / text) into the
+        # selected category. Safe as a page-wide shortcut because every text
+        # input in this page lives in a modal dialog, which suppresses it.
+        paste_sc = QShortcut(QKeySequence.Paste, self)
+        paste_sc.setContext(Qt.WidgetWithChildrenShortcut)
+        paste_sc.activated.connect(self._paste_clipboard)
+
+    # ── Cross-window sync ─────────────────────────────────────────────────────
+    def _commit(self):
+        """Signal that this window changed the shared vault. Every VaultPage
+        (including this one) reloads from disk in response, so all windows stay
+        consistent through a single refresh path."""
+        _vault_hub.changed.emit()
+
+    def _on_external_change(self):
+        self._store.reload()
+        self._reload_categories()
+
+    # ── Left rail ───────────────────────────────────────────────────────────
+    def _build_rail(self) -> QWidget:
+        rail = QWidget()
+        rail.setFixedWidth(232)
+        rail.setStyleSheet(f"background:{MANTLE};")
+        vb = QVBoxLayout(rail)
+        vb.setContentsMargins(12, 14, 12, 12)
+        vb.setSpacing(10)
+
+        hdr = QHBoxLayout()
+        title = QLabel("VAULT")
+        title.setStyleSheet(
+            f"color:{LAVENDER}; font-size:11px; font-weight:bold; letter-spacing:2px;"
+            " background:transparent;")
+        hdr.addWidget(title)
+        hdr.addStretch()
+        add_btn = QPushButton("+")
+        add_btn.setFixedSize(24, 24)
+        add_btn.setToolTip("New category")
+        add_btn.setCursor(Qt.PointingHandCursor)
+        add_btn.setStyleSheet(
+            f"QPushButton {{ background:{SURFACE0}; color:{TEXT}; border:none;"
+            f" border-radius:12px; font-size:16px; font-weight:bold; padding:0;"
+            f" text-align:center; }}"
+            f"QPushButton:hover {{ background:{LAVENDER}; color:{CRUST}; }}")
+        add_btn.clicked.connect(self._new_category)
+        hdr.addWidget(add_btn)
+        vb.addLayout(hdr)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        scroll.setStyleSheet(f"QScrollArea {{ background:{MANTLE}; border:none; }}" + SCROLLBAR_V_THIN)
+        self._cards_host = QWidget()
+        self._cards_host.setStyleSheet(f"background:{MANTLE};")
+        self._cards_vb = QVBoxLayout(self._cards_host)
+        self._cards_vb.setContentsMargins(0, 0, 0, 0)
+        self._cards_vb.setSpacing(8)
+        self._cards_vb.addStretch()
+        scroll.setWidget(self._cards_host)
+        vb.addWidget(scroll, stretch=1)
+        return rail
+
+    # ── Right content ────────────────────────────────────────────────────────
+    def _build_content(self) -> QWidget:
+        self._content_stack = QStackedWidget()
+
+        # index 0 — grid view
+        grid_page = QWidget()
+        gv = QVBoxLayout(grid_page)
+        gv.setContentsMargins(0, 0, 0, 0)
+        gv.setSpacing(0)
+
+        header = QWidget()
+        header.setStyleSheet(f"background:{MANTLE};")
+        hb = QHBoxLayout(header)
+        hb.setContentsMargins(18, 12, 18, 12)
+        self._cat_title = QLabel("Vault")
+        self._cat_title.setStyleSheet(f"color:{TEXT}; font-size:15px; font-weight:bold;")
+        hb.addWidget(self._cat_title)
+        self._cat_sub = QLabel("")
+        self._cat_sub.setStyleSheet(f"color:{OVERLAY0}; font-size:10px; letter-spacing:1px;")
+        hb.addWidget(self._cat_sub)
+        hb.addStretch()
+        self._add_btn = QPushButton("Add  ▾")
+        self._add_btn.setStyleSheet(_btn_ss())
+        self._add_btn.setCursor(Qt.PointingHandCursor)
+        self._add_btn.setEnabled(False)
+        self._add_menu = QMenu(self._add_btn)
+        self._add_menu.setStyleSheet(_menu_ss())
+        self._add_menu.addAction("Add Link…", self._add_link)
+        self._add_menu.addAction("Add Note…", self._add_note)
+        self._add_menu.addAction("Add File(s)…", self._add_files)
+        self._add_menu.addSeparator()
+        self._add_menu.addAction("Paste from Clipboard  (Ctrl+V)", self._paste_clipboard)
+        self._add_btn.setMenu(self._add_menu)
+        hb.addWidget(self._add_btn)
+        gv.addWidget(header)
+
+        div = QFrame()
+        div.setFixedHeight(1)
+        div.setStyleSheet(f"background:{SURFACE0}; border:none;")
+        gv.addWidget(div)
+
+        self._grid_scroll = QScrollArea()
+        self._grid_scroll.setWidgetResizable(True)
+        self._grid_scroll.setFrameShape(QFrame.NoFrame)
+        self._grid_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self._grid_scroll.setStyleSheet(
+            f"QScrollArea {{ background:{BASE}; border:none; }}" + SCROLLBAR_V_THIN)
+        self._grid_host = QWidget()
+        self._grid_host.setStyleSheet(f"background:{BASE};")
+        self._flow = _FlowLayout(self._grid_host, margin=18, spacing=14)
+        self._grid_scroll.setWidget(self._grid_host)
+        gv.addWidget(self._grid_scroll, stretch=1)
+
+        # empty / placeholder overlay lives in the same page, toggled by _render_items
+        self._empty_lbl = QLabel(
+            "Select a category, or create one with  +\n\n"
+            "Then use  Add ▾  — or drag files here — to fill it.")
+        self._empty_lbl.setAlignment(Qt.AlignCenter)
+        self._empty_lbl.setStyleSheet(
+            f"color:{OVERLAY0}; font-size:12px; background:{BASE};")
+        gv.addWidget(self._empty_lbl, stretch=1)
+
+        self._content_stack.addWidget(grid_page)          # 0
+
+        # index 1 — pdf reader (or a plain message if QtPdf is unavailable)
+        if _PDF_OK:
+            self._pdf_reader = _PdfReader(open_in_browser=self._open_in_browser)
+            self._pdf_reader.back.connect(lambda: self._content_stack.setCurrentIndex(0))
+            self._content_stack.addWidget(self._pdf_reader)  # 1
+        else:
+            self._pdf_reader = None
+
+        return self._content_stack
+
+    # ── Category operations ──────────────────────────────────────────────────
+    def _reload_categories(self):
+        # Clear existing cards (keep the trailing stretch).
+        for card in self._cards.values():
+            card.setParent(None)
+        self._cards.clear()
+        for cat in self._store.list_categories():
+            count = len(self._store.list_items(cat["id"]))
+            card = _CategoryCard(cat, count)
+            card.clicked.connect(self._select_category)
+            card.edit_requested.connect(self._edit_category)
+            card.delete_requested.connect(self._delete_category)
+            self._cards[cat["id"]] = card
+            self._cards_vb.insertWidget(self._cards_vb.count() - 1, card)
+
+        if self._current_cat not in self._cards:
+            self._current_cat = None
+        if self._current_cat is None:
+            cats = self._store.list_categories()
+            if cats:
+                self._select_category(cats[0]["id"])
+            else:
+                self._show_placeholder()
+        else:
+            self._select_category(self._current_cat)
+
+    def _new_category(self):
+        dlg = _CategoryDialog(self, accent=_ACCENTS[0])
+        if dlg.exec() == QDialog.Accepted:
+            name, accent = dlg.values()
+            if name:
+                cat = self._store.add_category(name, accent)
+                self._current_cat = cat["id"]
+                self._commit()
+
+    def _edit_category(self, category_id: str):
+        cat = self._store.get_category(category_id)
+        if not cat:
+            return
+        dlg = _CategoryDialog(self, name=cat.get("name", ""),
+                              accent=cat.get("accent", BLUE), title="Edit Category")
+        if dlg.exec() == QDialog.Accepted:
+            name, accent = dlg.values()
+            if name:
+                self._store.rename_category(category_id, name)
+            self._store.set_accent(category_id, accent)
+            self._commit()
+
+    def _delete_category(self, category_id: str):
+        cat = self._store.get_category(category_id)
+        if not cat:
+            return
+        confirm = QMessageBox.question(
+            self, "Delete Category",
+            f"Delete “{cat.get('name')}” and all its items?\n"
+            "Copied files will be removed from the vault.",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+        if confirm == QMessageBox.Yes:
+            self._store.delete_category(category_id)
+            if self._current_cat == category_id:
+                self._current_cat = None
+            self._commit()
+
+    def _select_category(self, category_id: str):
+        self._current_cat = category_id
+        for cid, card in self._cards.items():
+            card.set_selected(cid == category_id)
+        cat = self._store.get_category(category_id)
+        self._cat_title.setText(cat.get("name", "Vault") if cat else "Vault")
+        self._add_btn.setEnabled(True)
+        self._content_stack.setCurrentIndex(0)
+        self._render_items()
+
+    def _show_placeholder(self):
+        self._cat_title.setText("Vault")
+        self._cat_sub.setText("")
+        self._add_btn.setEnabled(False)
+        self._grid_scroll.hide()
+        self._empty_lbl.show()
+
+    # ── Item rendering ───────────────────────────────────────────────────────
+    def _render_items(self):
+        # Clear the flow layout.
+        while self._flow.count():
+            item = self._flow.takeAt(0)
+            w = item.widget()
+            if w is not None:
+                w.setParent(None)
+
+        if not self._current_cat:
+            self._show_placeholder()
+            return
+        items = self._store.list_items(self._current_cat)
+        self._cat_sub.setText(_CategoryCard._count_text(len(items)))
+        if self._current_cat in self._cards:
+            self._cards[self._current_cat].set_count(len(items))
+
+        if not items:
+            self._grid_scroll.hide()
+            self._empty_lbl.setText(
+                "Nothing here yet.\n\nUse  Add ▾  above — or drag files onto this panel.")
+            self._empty_lbl.show()
+            return
+
+        self._empty_lbl.hide()
+        self._grid_scroll.show()
+        for it in items:
+            thumb = self._store.abs_path(it) if it.get("type") == IMAGE else None
+            tile = _ItemTile(it, thumb_path=thumb)
+            tile.opened.connect(self._open_item)
+            tile.rename_requested.connect(self._rename_item)
+            tile.reveal_requested.connect(self._reveal_item)
+            tile.delete_requested.connect(self._delete_item)
+            self._flow.addWidget(tile)
+        self._grid_host.updateGeometry()
+
+    # ── Add items ────────────────────────────────────────────────────────────
+    def _add_link(self):
+        if not self._current_cat:
+            return
+        dlg = _LinkDialog(self)
+        if dlg.exec() == QDialog.Accepted:
+            url, title = dlg.values()
+            if url:
+                self._store.add_link(self._current_cat, url, title)
+                self._commit()
+
+    def _add_note(self):
+        if not self._current_cat:
+            return
+        dlg = _NoteDialog(self)
+        if dlg.exec() == QDialog.Accepted:
+            title, text, lang = dlg.values()
+            if text or title:
+                self._store.add_note(self._current_cat, text, title, lang)
+                self._commit()
+
+    def _add_files(self):
+        if not self._current_cat:
+            return
+        paths, _ = QFileDialog.getOpenFileNames(self, "Add files to vault")
+        for p in paths:
+            self._add_file_path(p)
+        if paths:
+            self._commit()
+
+    def _add_file_path(self, path: str):
+        try:
+            self._store.add_file(self._current_cat, path)
+        except Exception:
+            log.warning("Failed to add file to vault: %s", path, exc_info=True)
+
+    # ── Open / mutate items ──────────────────────────────────────────────────
+    def _open_item(self, item_id: str):
+        item = self._store.get_item(item_id)
+        if not item:
+            return
+        t = item.get("type")
+        if t == LINK:
+            if self._open_in_browser:
+                self._open_in_browser(item.get("url", ""))
+        elif t == NOTE:
+            dlg = _NoteDialog(self, title=item.get("title", ""), text=item.get("text", ""),
+                              lang=item.get("lang", "txt"), preview_first=True)
+            if dlg.exec() == QDialog.Accepted:
+                title, text, lang = dlg.values()
+                self._store.update_note(item_id, title, text, lang)
+                self._commit()
+        elif t == IMAGE:
+            self._open_image_gallery(item)
+        elif t == PDF:
+            self._open_pdf(item)
+        else:  # generic file
+            path = self._store.abs_path(item)
+            if path and path.exists():
+                QDesktopServices.openUrl(QUrl.fromLocalFile(str(path)))
+
+    def _open_image_gallery(self, item: dict):
+        # Gather every image in the category so the gallery can page through them.
+        images = [i for i in self._store.list_items(self._current_cat) if i.get("type") == IMAGE]
+        paths = [self._store.abs_path(i) for i in images]
+        paths = [p for p in paths if p is not None]
+        try:
+            start = next(idx for idx, i in enumerate(images) if i["id"] == item["id"])
+        except StopIteration:
+            start = 0
+        from gui.pipelineWindow import _ImageGalleryViewer
+        viewer = _ImageGalleryViewer(item.get("title", "Image"), paths, parent=self)
+        viewer._show_index(start)
+        viewer.show()
+
+    def _open_pdf(self, item: dict):
+        path = self._store.abs_path(item)
+        if not path or not path.exists():
+            return
+        if self._pdf_reader is not None:
+            self._pdf_reader.load(path, item.get("title", "PDF"))
+            self._content_stack.setCurrentIndex(1)
+        elif self._open_in_browser:
+            self._open_in_browser(QUrl.fromLocalFile(str(path)).toString())
+
+    def _rename_item(self, item_id: str):
+        item = self._store.get_item(item_id)
+        if not item:
+            return
+        new, ok = _prompt_text(self, "Rename", "Title:", item.get("title", ""))
+        if ok and new.strip():
+            self._store.rename_item(item_id, new.strip())
+            self._commit()
+
+    def _reveal_item(self, item_id: str):
+        item = self._store.get_item(item_id)
+        path = self._store.abs_path(item) if item else None
+        if path is not None:
+            QDesktopServices.openUrl(QUrl.fromLocalFile(str(path.parent)))
+
+    def _delete_item(self, item_id: str):
+        self._store.delete_item(item_id)
+        self._commit()
+
+    # ── Drag & drop ──────────────────────────────────────────────────────────
+    def dragEnterEvent(self, ev):
+        if self._current_cat and ev.mimeData().hasUrls():
+            ev.acceptProposedAction()
+        else:
+            ev.ignore()
+
+    def dropEvent(self, ev):
+        if not self._current_cat:
+            ev.ignore()
+            return
+        added = False
+        for url in ev.mimeData().urls():
+            if url.isLocalFile():
+                local = url.toLocalFile()
+                if os.path.isfile(local):
+                    self._add_file_path(local)
+                    added = True
+        if added:
+            self._commit()
+            ev.acceptProposedAction()
+        else:
+            ev.ignore()
+
+    # ── Clipboard paste ───────────────────────────────────────────────────────
+    def _paste_clipboard(self):
+        """Capture whatever is on the clipboard into the selected category:
+        an image, a dropped/copied file, a URL, or plain text (as a note)."""
+        if not self._current_cat:
+            QMessageBox.information(
+                self, "Vault", "Select a category first, then paste.")
+            return
+        clip = QApplication.clipboard()
+        md = clip.mimeData()
+        added = False
+
+        if md.hasImage() and not clip.image().isNull():
+            data = _qimage_png_bytes(clip.image())
+            self._store.add_file_bytes(self._current_cat, data, ".png", "Pasted image")
+            added = True
+        elif md.hasUrls() and md.urls():
+            for url in md.urls():
+                if url.isLocalFile() and os.path.isfile(url.toLocalFile()):
+                    self._add_file_path(url.toLocalFile())
+                    added = True
+                elif url.toString():
+                    self._store.add_link(self._current_cat, url.toString(), "")
+                    added = True
+        elif md.hasText() and md.text().strip():
+            txt = md.text().strip()
+            if _looks_like_url(txt):
+                self._store.add_link(self._current_cat, txt, "")
+            else:
+                first = txt.splitlines()[0].strip()[:48] or "Pasted text"
+                self._store.add_note(self._current_cat, txt, first, "txt")
+            added = True
+
+        if added:
+            self._commit()
+
+
+def _prompt_text(parent, title: str, label: str, initial: str) -> tuple[str, bool]:
+    from PySide6.QtWidgets import QInputDialog
+    dlg = QInputDialog(parent)
+    dlg.setStyleSheet(_dialog_ss())
+    dlg.setWindowTitle(title)
+    dlg.setLabelText(label)
+    dlg.setTextValue(initial)
+    ok = dlg.exec() == QDialog.Accepted
+    return dlg.textValue(), ok

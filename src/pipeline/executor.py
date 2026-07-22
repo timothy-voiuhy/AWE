@@ -29,7 +29,7 @@ from datetime import datetime, timezone
 
 from PySide6.QtCore import QThread, Signal
 
-from containers.results.parsers import PARSERS
+from containers.parsers import PARSERS
 from containers.tool_registry import TOOL_REGISTRY
 from database.repository import AweRepository
 from database.settings_repository import DEFAULTS, Keys, SettingsRepository

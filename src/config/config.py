@@ -19,6 +19,7 @@ if sys.platform == "linux":
     CERTIFICATE_FILE = HOME_DIR + "/AWE/proxycert/CA/awe_cert.crt"
     DEFAULT_WORKSPACE_DIR = HOME_DIR + "/AWE/AtomProjects/"
     WAPPALZER_RUN_DIR = HOME_DIR + "/AWE/Wappalzer/"
+    CUSTOM_TOOLS_DIR = HOME_DIR + "/AWE/CustomTools/"
 if sys.platform == "win32":
     CERT_CACHE_DIR = HOME_DIR + "\\AWE\\proxycert\\Certs\\"
     ROOT_CERT_FILE = HOME_DIR + "\\AWE\\proxycert\\CA\\rootCACert.pem"
@@ -28,6 +29,7 @@ if sys.platform == "win32":
     CERTIFICATE_FILE = HOME_DIR + "\\AWE\\proxycert\\CA\\awe_cert.crt"
     CERT_KEYS_DIR = HOME_DIR + "\\AWE\\proxycert\\Keys\\"
     HOST_CERTS_DIR = HOME_DIR + "\\AWE\\proxycert\\HOST_CERTS"
+    CUSTOM_TOOLS_DIR = HOME_DIR + "\\AWE\\CustomTools\\"
 
 if sys.platform == "linux":
     PROXY_DUMP_DIR =  HOME_DIR + "/AWE/AtomProjects/Proxy/"

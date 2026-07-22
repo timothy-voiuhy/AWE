@@ -20,9 +20,11 @@ _BROWSER_UA = {
     "Firefox": "Mozilla/5.0 (X11; Linux x86_64; rv:128.0) Gecko/20100101 Firefox/128.0",
 }
 
-# Persists the set of currently-open browser windows' URLs so they can be
-# restored the next time a BrowserWindow is opened after a fresh app launch —
-# QtWebEngine has no built-in multi-window session restore of its own.
+# Persists each project's open browser-tab URLs so they can be restored the
+# next time that project is opened — QtWebEngine has no built-in multi-window
+# session restore of its own. Sessions are scoped per project (keyed by the
+# project directory) under a "projects" map, so opening project A never
+# restores project B's tabs.
 _SESSION_FILE = Path(os.path.expanduser("~")) / ".config" / "awe" / "browser_session.json"
 
 
@@ -30,10 +32,12 @@ class BrowserWindow(QMainWindow):
     # Strong refs so windows spawned during session restore aren't GC'd, and
     # so we can enumerate open windows to persist their URLs.
     _instances: list = []
-    _session_restore_attempted = False
+    # Project keys whose saved session has already been consumed this process,
+    # so each project restores its tabs exactly once per launch.
+    _restored_keys: set = set()
     _pending_restore_links: list = []
 
-    def __init__(self, link=None) -> None:
+    def __init__(self, link=None, session_key=None) -> None:
         super().__init__()
         self.certificate_file = CERTIFICATE_FILE
         self.downloadPath = HOME_DIR+"/Downloads/"
@@ -41,9 +45,13 @@ class BrowserWindow(QMainWindow):
         if not Path(self.downloadPath).exists():
             os.makedirs(self.downloadPath)
         self.init_link = link
-        # Only the first BrowserWindow opened in this process attempts a
-        # restore, and only fills in this window's link if none was requested.
-        restored_links = self._take_restorable_session()
+        # Identifies which project this tab belongs to for session save/restore.
+        # None marks a transient window (e.g. an HTTP-response render) that must
+        # neither restore nor be persisted.
+        self.session_key = session_key
+        # Restore this project's saved tabs once; fill in this window's link
+        # only if the caller didn't request a specific one.
+        restored_links = self._take_restorable_session(session_key)
         if restored_links and self.init_link is None:
             self.init_link = restored_links.pop(0)
         # Hold strong references so PySide6 GC doesn't collect them before
@@ -88,14 +96,16 @@ class BrowserWindow(QMainWindow):
         BrowserWindow._pending_restore_links = restored_links
 
     @classmethod
-    def _take_restorable_session(cls) -> list:
-        # Only the first window opened in the process should trigger a restore.
-        if cls._session_restore_attempted:
+    def _take_restorable_session(cls, session_key) -> list:
+        # Transient windows have no project scope and never restore; each
+        # project restores only once per process.
+        if session_key is None or session_key in cls._restored_keys:
             return []
-        cls._session_restore_attempted = True
+        cls._restored_keys.add(session_key)
         try:
             data = json.loads(_SESSION_FILE.read_text())
-            return [u for u in data.get("open_urls", []) if u]
+            projects = data.get("projects", {}) if isinstance(data, dict) else {}
+            return [u for u in projects.get(str(session_key), []) if u]
         except Exception:
             return []
 
@@ -108,10 +118,26 @@ class BrowserWindow(QMainWindow):
     @classmethod
     def _save_session(cls) -> None:
         try:
-            urls = [w.browser.url().toString() for w in cls._instances
-                    if w.browser.url().isValid()]
+            # Preserve the sessions of projects that aren't currently open …
+            try:
+                data = json.loads(_SESSION_FILE.read_text())
+                projects = data.get("projects", {}) if isinstance(data, dict) else {}
+            except Exception:
+                projects = {}
+            # … then overwrite entries for every project that currently has open
+            # tabs with its live set of URLs (grouped by project key). Transient
+            # windows (session_key is None) are never persisted.
+            current: dict = {}
+            for w in cls._instances:
+                if w.session_key is None or not w.browser.url().isValid():
+                    continue
+                url = w.browser.url().toString()
+                if url:
+                    current.setdefault(str(w.session_key), []).append(url)
+            for key, urls in current.items():
+                projects[key] = urls
             _SESSION_FILE.parent.mkdir(parents=True, exist_ok=True)
-            _SESSION_FILE.write_text(json.dumps({"open_urls": urls}))
+            _SESSION_FILE.write_text(json.dumps({"projects": projects}))
         except Exception:
             pass
 
