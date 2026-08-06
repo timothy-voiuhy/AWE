@@ -89,3 +89,5 @@ htmlcov/
 # ── React / TypeScript ────────────────────────────────────────────────────────
 node_modules/
 *.tsbuildinfo
+awe-frontend/vite.config.js
+awe-frontend/vite.config.d.ts

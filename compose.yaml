@@ -24,7 +24,7 @@ services:
       backend:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1/"]
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:8000/"]
       interval: 10s
       timeout: 3s
       retries: 5
@@ -39,12 +39,14 @@ services:
       AWE_WORKSPACE_DIR: /data/projects
       AWE_LEGACY_SRC_DIR: /app/src
       AWE_MONGO_URI: mongodb://mongo:27017
+      AWE_AUTH_FILE: /data/auth/account.json
       AWE_SECRET_KEY: ${AWE_SECRET_KEY:?Set AWE_SECRET_KEY in .env}
-      AWE_ADMIN_PASSWORD_HASH: ${AWE_ADMIN_PASSWORD_HASH:?Set AWE_ADMIN_PASSWORD_HASH in .env}
+      AWE_ADMIN_PASSWORD_HASH: ${AWE_ADMIN_PASSWORD_HASH:-}
       AWE_SECURE_COOKIES: "true"
       AWE_ALLOWED_ORIGINS: '["https://${AWE_HOST:-localhost}"]'
     volumes:
       - awe_projects:/data/projects
+      - awe_auth:/data/auth
       # Pipeline tools require Docker control. Never expose the backend publicly;
       # only the authenticated gateway should be reachable.
       - /var/run/docker.sock:/var/run/docker.sock
@@ -71,6 +73,7 @@ services:
 
 volumes:
   awe_projects:
+  awe_auth:
   mongo_data:
   caddy_data:
   caddy_config:

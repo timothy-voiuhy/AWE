@@ -7,7 +7,12 @@ from starlette.responses import JSONResponse
 
 from .auth import CSRF_COOKIE, CSRF_HEADER, SESSION_COOKIE, AuthService, AuthenticationError
 
-_PUBLIC_PATHS = {"/api/v1/health", "/api/v1/auth/login"}
+_PUBLIC_PATHS = {
+    "/api/v1/health",
+    "/api/v1/auth/login",
+    "/api/v1/auth/setup",
+    "/api/v1/auth/setup-status",
+}
 _SAFE_METHODS = {"GET", "HEAD", "OPTIONS"}
 
 

@@ -19,6 +19,7 @@ class Settings(BaseSettings):
     auth_enabled: bool = True
     secret_key: str = "development-only-change-me"
     admin_password_hash: str = ""
+    auth_file: Path = Field(default=Path.home() / ".config" / "awe" / "auth.json")
     session_ttl_seconds: int = 43200
     secure_cookies: bool = False
 
@@ -27,8 +28,6 @@ class Settings(BaseSettings):
         if self.environment == "production":
             if self.secret_key == "development-only-change-me" or len(self.secret_key) < 32:
                 raise ValueError("AWE_SECRET_KEY must be at least 32 characters in production")
-            if not self.admin_password_hash:
-                raise ValueError("AWE_ADMIN_PASSWORD_HASH is required in production")
             if not self.secure_cookies:
                 raise ValueError("AWE_SECURE_COOKIES must be true in production")
         return self

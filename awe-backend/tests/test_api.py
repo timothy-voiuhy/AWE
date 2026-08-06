@@ -2,17 +2,26 @@ from pathlib import Path
 from datetime import datetime, timezone
 
 from fastapi.testclient import TestClient
+from pymongo.errors import ServerSelectionTimeoutError
+from bson import ObjectId
 
 from awe_backend.api import (
+    get_docker_service,
+    get_intruder_service,
     get_job_manager,
     get_pipeline_catalog,
     get_project_store,
     get_repository_factory,
+    get_replay_service,
+    get_vault_service,
+    get_proxy_control,
+    get_websocket_client,
 )
 from awe_backend.main import create_app
 from awe_backend.config import Settings
 from awe_backend.projects import ProjectStore
-from awe_backend.schemas import PipelineJob, PipelineStep, PipelineTemplate
+from awe_backend.schemas import DockerContainer, IntruderResult, PipelineJob, PipelineStep, PipelineTemplate, RepeaterResponse
+from awe_backend.vault import VaultService
 
 
 class FakePipelineCatalog:
@@ -82,13 +91,84 @@ class FakeRepository:
             "created_at": "2026-01-01T00:00:00+00:00",
         }][:limit]
 
+
+class FakeTrafficCursor(list):
+    def sort(self, *_): return self
+    def limit(self, value): return FakeTrafficCursor(self[:value])
+
+
+class FakeTrafficCollection:
+    doc = {"_id": ObjectId(), "host": "example.com", "path": "/api", "method": "GET", "status_code": 200, "timestamp": "2026-01-01T00:00:00+00:00", "request": {"url": "https://example.com/api"}, "response": {"body": "ok"}}
+    def find(self, query): return FakeTrafficCursor([self.doc])
+    def find_one(self, query): return self.doc if query.get("_id") == self.doc["_id"] else None
+
+
+class FakeRepositoryFactory:
+    def __call__(self, _): return FakeRepository()
+    def traffic(self): return FakeTrafficCollection()
+    def websocket_db(self): return FakeWebSocketDatabase()
+
+
+class FakeWebSocketCollection:
+    def __init__(self, rows): self.rows = rows
+    def find(self, _): return FakeTrafficCursor(self.rows)
+
+
+class FakeWebSocketDatabase:
+    ws_connections = FakeWebSocketCollection([{"_id": ObjectId(), "host": "example.com", "path": "/socket", "opened_at": "2026-01-01", "closed_at": None, "frame_count": 1}])
+    ws_frames = FakeWebSocketCollection([{"_id": ObjectId(), "conn_id": "connection-1", "direction": "client_to_server", "opcode_name": "text", "payload_text": "hello", "payload_len": 5, "timestamp": "2026-01-01"}])
+
+
+class FakeReplayService:
+    async def send(self, request):
+        return RepeaterResponse(status_code=200, reason="OK", headers={"content-type": "text/plain"}, body=f"echo:{request.method}", elapsed_ms=4)
+
+
+class FakeDockerService:
+    def __init__(self):
+        self.stopped = []
+        self.removed = []
+
+    def list(self):
+        return [DockerContainer(id="abc123", name="awe_test", image="alpine", status="running", created="2026-01-01")]
+
+    def stop(self, container_id):
+        self.stopped.append(container_id)
+
+    def remove(self, container_id):
+        self.removed.append(container_id)
+
+
+class FakeIntruderService:
+    async def run(self, request):
+        return [IntruderResult(sequence=1, payload=request.payloads[0], status_code=200, length=2, elapsed_ms=3)]
+
+
+class FakeWebSocketClient:
+    async def send(self, url, message): return f"echo:{message}"
+
+
+class FakeProxyControl:
+    def __init__(self): self.config = None; self.resolution = None
+    def set_intercept(self, enabled, patterns): self.config = (enabled, patterns)
+    def pending(self): return [{"id":"req-1","host":"example.com","method":"POST","url":"https://example.com/api","headers":[["content-type","text/plain"]],"body_b64":"aGk="}]
+    def resolve(self, request_id, decision, headers, body_b64): self.resolution = (request_id, decision, headers, body_b64)
+
 def test_health_and_project_endpoints(tmp_path: Path):
     app = create_app(Settings(auth_enabled=False, workspace_dir=tmp_path))
     app.dependency_overrides[get_project_store] = lambda: ProjectStore(tmp_path)
     app.dependency_overrides[get_pipeline_catalog] = FakePipelineCatalog
     fake_jobs = FakeJobManager()
     app.dependency_overrides[get_job_manager] = lambda: fake_jobs
-    app.dependency_overrides[get_repository_factory] = lambda: lambda _: FakeRepository()
+    app.dependency_overrides[get_repository_factory] = FakeRepositoryFactory
+    app.dependency_overrides[get_replay_service] = FakeReplayService
+    fake_docker = FakeDockerService()
+    app.dependency_overrides[get_docker_service] = lambda: fake_docker
+    app.dependency_overrides[get_vault_service] = lambda: VaultService("test-secret")
+    app.dependency_overrides[get_intruder_service] = FakeIntruderService
+    app.dependency_overrides[get_websocket_client] = FakeWebSocketClient
+    fake_control = FakeProxyControl()
+    app.dependency_overrides[get_proxy_control] = lambda: fake_control
 
     with TestClient(app) as client:
         health = client.get("/api/v1/health")
@@ -105,6 +185,65 @@ def test_health_and_project_endpoints(tmp_path: Path):
         )
         assert created.status_code == 201
         project = created.json()
+
+        settings_payload = {
+            "default_threads": 24,
+            "default_rate_limit": 75,
+            "default_concurrency": 8,
+            "proxy_port": 9090,
+            "upstream_proxy": "http://127.0.0.1:8080",
+        }
+        saved_settings = client.put(
+            f"/api/v1/projects/{project['id']}/settings", json=settings_payload
+        )
+        assert saved_settings.status_code == 200
+        assert client.get(
+            f"/api/v1/projects/{project['id']}/settings"
+        ).json() == settings_payload
+
+        containers = client.get("/api/v1/docker/containers")
+        assert containers.status_code == 200
+        assert containers.json()[0]["name"] == "awe_test"
+        assert client.post("/api/v1/docker/containers/abc123/stop").status_code == 204
+        assert client.delete("/api/v1/docker/containers/abc123").status_code == 204
+        assert fake_docker.stopped == ["abc123"]
+        assert fake_docker.removed == ["abc123"]
+
+        vault_payload = {
+            "name": "API key",
+            "kind": "token",
+            "value": "secret-value",
+        }
+        vault_item = client.post(
+            f"/api/v1/projects/{project['id']}/vault", json=vault_payload
+        )
+        assert vault_item.status_code == 201
+        item_id = vault_item.json()["id"]
+        assert client.get(f"/api/v1/projects/{project['id']}/vault").json()[0]["value"] == "secret-value"
+        assert client.delete(
+            f"/api/v1/projects/{project['id']}/vault/{item_id}"
+        ).status_code == 204
+
+        intruder = client.post(f"/api/v1/projects/{project['id']}/intruder/runs", json={"method":"GET","url":"https://example.com/users/§payload§","payloads":["admin"],"placeholder":"§payload§"})
+        assert intruder.status_code == 200
+        assert intruder.json()[0]["payload"] == "admin"
+        outside_intruder = client.post(f"/api/v1/projects/{project['id']}/intruder/runs", json={"method":"GET","url":"https://outside.test/§payload§","payloads":["x"]})
+        assert outside_intruder.status_code == 403
+
+        sockets = client.get(f"/api/v1/projects/{project['id']}/websockets")
+        assert sockets.status_code == 200
+        assert sockets.json()[0]["host"] == "example.com"
+        frames = client.get(f"/api/v1/projects/{project['id']}/websockets/connection-1/frames")
+        assert frames.json()[0]["payload_text"] == "hello"
+        sent = client.post(f"/api/v1/projects/{project['id']}/websockets/send", json={"url":"wss://example.com/socket","message":"hello"})
+        assert sent.json() == {"reply":"echo:hello"}
+
+        assert client.put(f"/api/v1/projects/{project['id']}/intercept", json={"enabled":True,"patterns":["example\\.com$"]}).status_code == 204
+        assert fake_control.config == (True, ["example\\.com$"])
+        pending = client.get(f"/api/v1/projects/{project['id']}/intercept/pending")
+        assert pending.json()[0]["id"] == "req-1"
+        assert client.post(f"/api/v1/projects/{project['id']}/intercept/req-1/resolve", json={"decision":"forward","headers":[],"body_b64":""}).status_code == 204
+        assert fake_control.resolution[1] == "forward"
 
         listed = client.get("/api/v1/projects")
         assert listed.status_code == 200
@@ -162,6 +301,27 @@ def test_health_and_project_endpoints(tmp_path: Path):
         )
         assert results.status_code == 200
         assert results.json()[0]["result_key"] == "https://example.com"
+
+        traffic = client.get(f"/api/v1/projects/{project['id']}/traffic")
+        assert traffic.status_code == 200
+        assert traffic.json()[0]["host"] == "example.com"
+        traffic_id = traffic.json()[0]["id"]
+        detail = client.get(f"/api/v1/projects/{project['id']}/traffic/{traffic_id}")
+        assert detail.status_code == 200
+
+        replayed = client.post(f"/api/v1/projects/{project['id']}/repeater/send", json={"method": "POST", "url": "https://example.com/api", "body": "hello"})
+        assert replayed.status_code == 200
+        assert replayed.json()["body"] == "echo:POST"
+        blocked_replay = client.post(f"/api/v1/projects/{project['id']}/repeater/send", json={"url": "https://outside.test/"})
+        assert blocked_replay.status_code == 403
+
+        def unavailable_repository(_):
+            raise ServerSelectionTimeoutError("offline")
+
+        app.dependency_overrides[get_repository_factory] = lambda: unavailable_repository
+        unavailable = client.get(f"/api/v1/projects/{project['id']}/sessions")
+        assert unavailable.status_code == 503
+        assert unavailable.json() == {"detail": "Database unavailable"}
 
         missing = client.get("/api/v1/projects/not-a-valid-id")
         assert missing.status_code == 404

@@ -7,5 +7,5 @@ npm install
 npm run dev
 ```
 
-The Vite development server proxies `/api` to `http://localhost:8000`.
-
+The frontend runs at `http://localhost:4000`. The Vite development server
+proxies `/api` to the backend at `http://localhost:8001`.

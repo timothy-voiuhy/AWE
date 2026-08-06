@@ -15,6 +15,7 @@ from .schemas import Project, ProjectCreate, ProjectUpdate, ScopeConfig
 
 _METADATA_FILE = ".awe-project.json"
 _SCOPE_FILE = ".awe-scope.json"
+_SETTINGS_FILE = ".awe-settings.json"
 _PROJECT_ID = re.compile(r"^[a-z0-9]{16}$")
 
 
@@ -100,6 +101,24 @@ class ProjectStore:
         temporary.write_text(scope.model_dump_json(indent=2), encoding="utf-8")
         temporary.replace(scope_file)
         return scope
+
+    def get_settings(self, project_id: str) -> dict:
+        project_dir = self.project_dir(project_id)
+        try:
+            data = json.loads((project_dir / _SETTINGS_FILE).read_text(encoding="utf-8"))
+            return data if isinstance(data, dict) else {}
+        except (FileNotFoundError, OSError, ValueError):
+            return {}
+
+    def put_settings(self, project_id: str, values: dict) -> dict:
+        project_dir = self.project_dir(project_id)
+        settings_file = project_dir / _SETTINGS_FILE
+        current = self.get_settings(project_id)
+        current.update(values)
+        temporary = settings_file.with_suffix(".tmp")
+        temporary.write_text(json.dumps(current, indent=2), encoding="utf-8")
+        temporary.replace(settings_file)
+        return current
 
     def _project_dir(self, project_id: str) -> Path:
         if not _PROJECT_ID.fullmatch(project_id):
