@@ -42,6 +42,7 @@ rootCACert.pem
 awe_cert.crt
 .env
 .env.*
+!.env.example
 secrets.json
 credentials.json
 
@@ -84,3 +85,7 @@ htmlcov/
 # ── Compiled Qt resources ─────────────────────────────────────────────────────
 *.qrc.py
 *_rc.py
+
+# ── React / TypeScript ────────────────────────────────────────────────────────
+node_modules/
+*.tsbuildinfo

@@ -1,0 +1,76 @@
+services:
+  gateway:
+    image: caddy:2.8-alpine
+    restart: unless-stopped
+    depends_on:
+      frontend:
+        condition: service_healthy
+    environment:
+      AWE_HOST: ${AWE_HOST:-localhost}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+
+  frontend:
+    build:
+      context: .
+      dockerfile: awe-frontend/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1/"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  backend:
+    build:
+      context: .
+      dockerfile: awe-backend/Dockerfile
+    restart: unless-stopped
+    environment:
+      AWE_ENVIRONMENT: production
+      AWE_WORKSPACE_DIR: /data/projects
+      AWE_LEGACY_SRC_DIR: /app/src
+      AWE_MONGO_URI: mongodb://mongo:27017
+      AWE_SECRET_KEY: ${AWE_SECRET_KEY:?Set AWE_SECRET_KEY in .env}
+      AWE_ADMIN_PASSWORD_HASH: ${AWE_ADMIN_PASSWORD_HASH:?Set AWE_ADMIN_PASSWORD_HASH in .env}
+      AWE_SECURE_COOKIES: "true"
+      AWE_ALLOWED_ORIGINS: '["https://${AWE_HOST:-localhost}"]'
+    volumes:
+      - awe_projects:/data/projects
+      # Pipeline tools require Docker control. Never expose the backend publicly;
+      # only the authenticated gateway should be reachable.
+      - /var/run/docker.sock:/var/run/docker.sock
+    depends_on:
+      mongo:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/v1/health')"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+
+  mongo:
+    image: mongo:7
+    restart: unless-stopped
+    command: ["mongod", "--bind_ip_all"]
+    volumes:
+      - mongo_data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  awe_projects:
+  mongo_data:
+  caddy_data:
+  caddy_config:
