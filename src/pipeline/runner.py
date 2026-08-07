@@ -82,6 +82,7 @@ class PipelineRunner:
         session_id: str | None = None,
         mongo_uri: str = "mongodb://localhost:27017",
         reuse_project_results: bool = True,
+        docker_workspace_dir: str | None = None,
     ):
         self.session_started = EventHook()
         self.step_started = EventHook()
@@ -100,6 +101,7 @@ class PipelineRunner:
         self._given_session_id    = session_id        # reuse existing if set
         self._mongo_uri           = mongo_uri
         self._reuse_project       = reuse_project_results
+        self._docker_workspace_dir = docker_workspace_dir
         self._stop_event          = threading.Event()
         self._session_id          = ""
         self._active_containers: dict[str, object] = {}
@@ -343,7 +345,7 @@ class PipelineRunner:
                     self._emit(step.tool_key, "⚙ Using custom command override")
                 else:
                     command = tool.build_command(**params)
-                volumes = tool.get_volumes(output_dir, input_dir_host)
+                volumes = tool.get_volumes(self._docker_host_path(output_dir), self._docker_host_path(input_dir_host) if input_dir_host else None)
                 self._emit(step.tool_key, f"▶ {command[:140]}")
                 self._run_container(step.tool_key, tool, command, volumes)
 
@@ -446,6 +448,15 @@ class PipelineRunner:
                 pass
 
     # ── Helpers ───────────────────────────────────────────────────────────────
+
+    def _docker_host_path(self, container_path: str) -> str:
+        """Translate backend-container workspace paths to host paths used by Docker."""
+        if not self._docker_workspace_dir:
+            return container_path
+        prefix = "/data/projects"
+        if container_path == prefix or container_path.startswith(prefix + "/"):
+            return os.path.join(self._docker_workspace_dir, container_path[len(prefix):].lstrip("/"))
+        return container_path
 
     def _emit(self, tool_key: str, line: str):
         self.step_log.emit(tool_key, line)

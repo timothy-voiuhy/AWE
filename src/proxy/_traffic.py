@@ -79,6 +79,7 @@ class TrafficStore:
         req_body: bytes,
         response: ProxyResponse,
         tool_source: str | None = None,
+        project_id: str | None = None,
     ) -> None:
         with self._lock:
             if not self._enabled:
@@ -112,6 +113,7 @@ class TrafficStore:
             "is_sse":      is_sse,
             "is_rsc":      is_rsc,
             "tool_source": tool_source,
+            "project_id": project_id,
             "timestamp":   datetime.now(timezone.utc).isoformat(),
             "request": {
                 "method":        method,

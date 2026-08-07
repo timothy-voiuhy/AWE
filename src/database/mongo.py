@@ -15,6 +15,7 @@ Usage:
     db.scan_sessions.find_one(...)
 """
 import hashlib
+import os
 import re
 from functools import lru_cache
 
@@ -22,7 +23,7 @@ import pymongo
 from pymongo import MongoClient
 from pymongo.database import Database
 
-_DEFAULT_URI = "mongodb://localhost:27017"
+_DEFAULT_URI = os.environ.get("AWE_MONGO_URI", "mongodb://localhost:27017")
 
 _MAX_DB_NAME = 38   # MongoDB max db name ≤ 38 chars on some platforms
 
@@ -148,5 +149,6 @@ def get_proxy_traffic_db(uri: str = _DEFAULT_URI) -> Database:
 
 def _ensure_proxy_indexes(db: Database):
     db.traffic.create_index("host")
+    db.traffic.create_index("project_id")
     db.traffic.create_index([("host", 1), ("timestamp", -1)])
     db.traffic.create_index([("host", 1), ("method", 1), ("path", 1)])

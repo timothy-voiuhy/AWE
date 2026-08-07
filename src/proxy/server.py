@@ -187,7 +187,7 @@ async def _run(args: argparse.Namespace) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description="AWE MITM Proxy")
     parser.add_argument("-p", "--port",         type=int, default=8080)
-    parser.add_argument("--host",               default="127.0.0.1")
+    parser.add_argument("--host",               default=os.environ.get("AWE_PROXY_HOST", "127.0.0.1"))
     parser.add_argument("--upstream-proxy",     default=None,
                         help="Upstream proxy URL, e.g. http://127.0.0.1:9050")
     parser.add_argument("-v", "--verbose",      action="store_true")

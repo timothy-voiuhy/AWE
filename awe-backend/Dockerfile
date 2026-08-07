@@ -7,6 +7,7 @@ WORKDIR /app
 
 COPY awe-backend /app/awe-backend
 RUN python -m pip install --no-cache-dir /app/awe-backend
+RUN python -m playwright install --with-deps chromium
 
 # Migration bridge: the backend currently reuses AWE's Qt-free pipeline,
 # repository, container registry, and parser modules from the legacy tree.

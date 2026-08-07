@@ -1,10 +1,13 @@
 import asyncio
 import base64
 import fnmatch
+import re
+from pathlib import Path
 from functools import lru_cache
 from urllib.parse import urlsplit
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, UploadFile, File, WebSocket, WebSocketDisconnect, status
+from fastapi.responses import FileResponse
 from pymongo.errors import PyMongoError
 from bson import ObjectId
 
@@ -16,8 +19,12 @@ from .pipelines import PipelineCatalog
 from .repositories import LegacyRepositoryFactory
 from .replay import HttpReplayService
 from .docker_service import DockerService
+from .docker_operations import DockerOperationManager, DockerOperationNotFound
 from .vault import VaultService
 from .browser import BrowserSessionManager, BrowserUnavailable
+from .ai_service import AIService
+from .terminal import TerminalManager
+from .terminal_profiles import TerminalProfileStore
 from .testing_services import IntruderService, ProxyControlService, WebSocketClientService
 import docker
 from .schemas import (
@@ -34,17 +41,20 @@ from .schemas import (
     PipelineJob,
     PipelineRunCreate,
     ScanSession,
+    PipelineToolRun,
     StoredResult,
     TrafficEntry,
     RepeaterRequest,
     RepeaterResponse,
     ProjectSettings,
     DockerContainer,
+    DockerImage, DockerTool, DockerImagePull, DockerImageBuild, DockerToolCreate, DockerToolRun, DockerOperation,
     VaultItem,
     VaultItemInput,
     VaultCategory, VaultCategoryInput, VaultItemRecord, VaultItemRecordInput,
     IntruderRequest,
     IntruderResult,
+    IntruderJob,
     WebSocketConnection,
     WebSocketFrame,
     WebSocketSendRequest,
@@ -53,9 +63,30 @@ from .schemas import (
     InterceptRequest,
     InterceptDecision,
     BrowserSession, BrowserNavigate, BrowserViewport,
+    AIConversation, AIConversationDetail, AIChatRequest, AISettings,
+    AIApproval, AIApprovalDecision,
+    TerminalConnectRequest, TerminalSessionInfo,
+    TerminalProfile, TerminalProfileInput,
 )
 
 router = APIRouter()
+
+@router.get("/proxy/info", tags=["proxy"])
+def proxy_info(settings: Settings = Depends(get_settings)) -> dict:
+    return {
+        "host": settings.proxy_advertise_host,
+        "port": settings.proxy_public_port,
+        "certificate_url": "/api/v1/proxy/certificate",
+        "scheme": "http",
+    }
+
+@router.get("/proxy/certificate", tags=["proxy"])
+def download_proxy_certificate(settings: Settings = Depends(get_settings)) -> FileResponse:
+    certificate = settings.proxy_certificate_path
+    if not certificate.is_file():
+        raise HTTPException(status_code=503, detail="Proxy certificate is not available yet")
+    return FileResponse(certificate, media_type="application/x-x509-ca-cert", filename="awe-proxy-ca.crt")
+from .intruder_jobs import IntruderJobManager, IntruderJobNotFound
 
 
 @lru_cache
@@ -97,6 +128,10 @@ def get_replay_service() -> HttpReplayService:
 def get_docker_service() -> DockerService: return DockerService()
 
 
+@lru_cache
+def get_docker_operation_manager() -> DockerOperationManager: return DockerOperationManager()
+
+
 def get_vault_service(settings: Settings = Depends(get_settings)) -> VaultService:
     return VaultService(settings.secret_key)
 
@@ -106,13 +141,30 @@ def get_browser_manager() -> BrowserSessionManager:
     return BrowserSessionManager()
 
 
+def get_ai_service(project_id: str, store: ProjectStore = Depends(get_project_store), settings: Settings = Depends(get_settings)) -> AIService:
+    return AIService(store.project_dir(project_id), settings.secret_key)
+
+
+@lru_cache
+def get_terminal_manager() -> TerminalManager:
+    return TerminalManager()
+
+
+@lru_cache
 def get_intruder_service() -> IntruderService:
     return IntruderService()
+
+@lru_cache
+def _intruder_manager(workspace: str, mongo_uri: str) -> IntruderJobManager:
+    return IntruderJobManager(get_intruder_service(), Path(workspace), mongo_uri)
+
+def get_intruder_job_manager(settings: Settings = Depends(get_settings)) -> IntruderJobManager:
+    return _intruder_manager(str(settings.workspace_dir.resolve()), settings.mongo_uri)
 
 
 def get_proxy_control(settings: Settings = Depends(get_settings)) -> ProxyControlService:
     try:
-        return ProxyControlService(settings.legacy_src_dir)
+        return ProxyControlService(settings.legacy_src_dir, settings.proxy_control_host, settings.proxy_control_port)
     except (OSError, ValueError) as exc:
         raise HTTPException(status_code=503, detail="AWE proxy is unavailable") from exc
 
@@ -299,24 +351,34 @@ def start_pipeline_run(
     payload: PipelineRunCreate,
     store: ProjectStore = Depends(get_project_store),
     jobs: PipelineJobManager = Depends(get_job_manager),
+    repositories: LegacyRepositoryFactory = Depends(get_repository_factory),
 ) -> PipelineJob:
     try:
         project = store.get(project_id)
         project_dir = store.project_dir(project_id)
         scope = store.get_scope(project_id)
+        repository = repositories(store.project_dir(project_id))
     except ProjectNotFoundError as exc:
         raise HTTPException(status_code=404, detail="Project not found") from exc
-    if not project.target:
+    except PyMongoError as exc:
+        raise HTTPException(status_code=503, detail="Database unavailable") from exc
+    session = repository.get_session(payload.session_id) if payload.session_id else None
+    if payload.session_id and (not session or session.get("pipeline_key") != payload.pipeline_key):
+        raise HTTPException(status_code=404, detail="Pipeline session not found")
+    target = session.get("target", "") if session else project.target
+    if not target:
         raise HTTPException(status_code=409, detail="Configure a target before running a pipeline")
     try:
         return jobs.start(
             project_id=project_id,
             project_dir=project_dir,
             pipeline_key=payload.pipeline_key,
-            target=project.target,
+            target=target,
             params=payload.params,
-            in_scope=[entry.value for entry in scope.entries if entry.in_scope],
-            out_of_scope=[entry.value for entry in scope.entries if not entry.in_scope],
+            in_scope=session.get("in_scope", []) if session else [entry.value for entry in scope.entries if entry.in_scope],
+            out_of_scope=session.get("out_of_scope", []) if session else [entry.value for entry in scope.entries if not entry.in_scope],
+            session_id=payload.session_id,
+            tool_keys=payload.tool_keys,
         )
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -421,6 +483,86 @@ def list_scan_sessions(
 
 
 @router.get(
+    "/projects/{project_id}/sessions/{session_id}/tool-runs",
+    response_model=list[PipelineToolRun],
+    tags=["pipeline runs"],
+)
+def list_session_tool_runs(
+    project_id: str,
+    session_id: str,
+    store: ProjectStore = Depends(get_project_store),
+    repositories: LegacyRepositoryFactory = Depends(get_repository_factory),
+) -> list[PipelineToolRun]:
+    try:
+        repository = repositories(store.project_dir(project_id))
+        session = repository.get_session(session_id)
+        rows = repository.get_tool_runs(session_id) if session else []
+    except ProjectNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Project not found") from exc
+    except PyMongoError as exc:
+        raise HTTPException(status_code=503, detail="Database unavailable") from exc
+    if not session:
+        raise HTTPException(status_code=404, detail="Pipeline session not found")
+    return [PipelineToolRun.model_validate(row) for row in rows]
+
+
+@router.delete(
+    "/projects/{project_id}/sessions/{session_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    tags=["pipeline runs"],
+)
+def delete_scan_session(
+    project_id: str,
+    session_id: str,
+    store: ProjectStore = Depends(get_project_store),
+    repositories: LegacyRepositoryFactory = Depends(get_repository_factory),
+) -> Response:
+    try:
+        repository = repositories(store.project_dir(project_id))
+        if not repository.get_session(session_id):
+            raise HTTPException(status_code=404, detail="Pipeline session not found")
+        repository.delete_session(session_id)
+    except ProjectNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Project not found") from exc
+    except PyMongoError as exc:
+        raise HTTPException(status_code=503, detail="Database unavailable") from exc
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.get(
+    "/projects/{project_id}/results",
+    response_model=list[StoredResult],
+    tags=["results"],
+)
+def list_project_results(
+    project_id: str,
+    category: str | None = None,
+    limit: int = 5000,
+    store: ProjectStore = Depends(get_project_store),
+    repositories: LegacyRepositoryFactory = Depends(get_repository_factory),
+) -> list[StoredResult]:
+    """Return de-duplicated results from every project session, including proxy traffic."""
+    limit = max(1, min(limit, 10000))
+    try:
+        repository = repositories(store.project_dir(project_id))
+        docs = repository.get_results_project(category=category)
+    except ProjectNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Project not found") from exc
+    except PyMongoError as exc:
+        raise HTTPException(status_code=503, detail="Database unavailable") from exc
+
+    merged: dict[tuple[str, str], dict] = {}
+    for item in docs:
+        key = (item.get("category", ""), item.get("result_key", ""))
+        if key not in merged:
+            merged[key] = dict(item)
+            merged[key]["sources"] = list(item.get("sources", []))
+        else:
+            merged[key]["sources"] = sorted(set(merged[key]["sources"]) | set(item.get("sources", [])))
+    return [StoredResult.model_validate(item) for item in list(merged.values())[:limit]]
+
+
+@router.get(
     "/projects/{project_id}/sessions/{session_id}/results",
     response_model=list[StoredResult],
     tags=["results"],
@@ -465,7 +607,7 @@ def list_traffic(
 ) -> list[TrafficEntry]:
     try:
         store.project_dir(project_id)
-        query: dict = {}
+        query: dict = {"project_id": project_id}
         if host:
             query["host"] = host
         if method:
@@ -487,7 +629,7 @@ def get_traffic(
 ) -> TrafficEntry:
     try:
         store.project_dir(project_id)
-        doc = repositories.traffic().find_one({"_id": ObjectId(traffic_id)})
+        doc = repositories.traffic().find_one({"_id": ObjectId(traffic_id), "project_id": project_id})
     except ProjectNotFoundError as exc:
         raise HTTPException(status_code=404, detail="Project not found") from exc
     except (PyMongoError, ValueError) as exc:
@@ -497,6 +639,78 @@ def get_traffic(
     if not doc:
         raise HTTPException(status_code=404, detail="Traffic entry not found")
     return _traffic_entry(doc)
+
+
+@router.delete("/projects/{project_id}/traffic/{traffic_id}", status_code=status.HTTP_204_NO_CONTENT, tags=["proxy"])
+def delete_traffic(
+    project_id: str,
+    traffic_id: str,
+    store: ProjectStore = Depends(get_project_store),
+    repositories: LegacyRepositoryFactory = Depends(get_repository_factory),
+) -> Response:
+    try:
+        store.project_dir(project_id)
+        result = repositories.traffic().delete_one({"_id": ObjectId(traffic_id), "project_id": project_id})
+    except ProjectNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Project not found") from exc
+    except (PyMongoError, ValueError) as exc:
+        if isinstance(exc, PyMongoError):
+            raise HTTPException(status_code=503, detail="Database unavailable") from exc
+        raise HTTPException(status_code=404, detail="Traffic entry not found") from exc
+    if not result.deleted_count:
+        raise HTTPException(status_code=404, detail="Traffic entry not found")
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.delete("/projects/{project_id}/traffic", status_code=status.HTTP_204_NO_CONTENT, tags=["proxy"])
+def delete_traffic_subtree(
+    project_id: str,
+    host: str,
+    path_prefix: str = "",
+    store: ProjectStore = Depends(get_project_store),
+    repositories: LegacyRepositoryFactory = Depends(get_repository_factory),
+) -> Response:
+    try:
+        store.project_dir(project_id)
+        query: dict = {"host": host, "project_id": project_id}
+        if path_prefix:
+            prefix = "/" + path_prefix.strip("/")
+            query["path"] = {"$regex": f"^{re.escape(prefix)}(?:/.*)?$"}
+        repositories.traffic().delete_many(query)
+    except ProjectNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Project not found") from exc
+    except PyMongoError as exc:
+        raise HTTPException(status_code=503, detail="Database unavailable") from exc
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.post("/projects/{project_id}/traffic/sync-results", tags=["proxy", "results"])
+def sync_traffic_results(
+    project_id: str,
+    store: ProjectStore = Depends(get_project_store),
+    repositories: LegacyRepositoryFactory = Depends(get_repository_factory),
+    settings: Settings = Depends(get_settings),
+) -> dict:
+    try:
+        project = store.get(project_id)
+        project_dir = store.project_dir(project_id)
+        scope_data = store.get_scope(project_id).model_dump()
+        collection = repositories.traffic()
+        repositories(project_dir)  # load the legacy source path before imports
+        from database.scope import ScopeConfig as LegacyScopeConfig
+        from proxy.traffic_extractor import TrafficExtractor
+        from workers.proxy_extractor_worker import _write_results
+        extracted, review_candidates = TrafficExtractor().extract(
+            collection,
+            LegacyScopeConfig.from_dict(scope_data),
+            query={"project_id": project_id},
+        )
+        summary = _write_results(str(project_dir), settings.mongo_uri, project.target, extracted, review_candidates)
+        return {**summary, "extracted_counts": {key: len(value) for key, value in extracted.items()}}
+    except ProjectNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Project not found") from exc
+    except PyMongoError as exc:
+        raise HTTPException(status_code=503, detail="Database unavailable") from exc
 
 
 def _host_in_project_scope(url: str, target: str, scope: ScopeConfig) -> bool:
@@ -566,11 +780,174 @@ def stop_docker_container(container_id: str, service: DockerService = Depends(ge
     except docker.errors.DockerException as exc: raise HTTPException(status_code=404, detail="Container not found") from exc
 
 
+@router.post("/docker/containers/{container_id}/start", status_code=204, tags=["docker"])
+def start_docker_container(container_id: str, service: DockerService = Depends(get_docker_service)) -> None:
+    try: service.start(container_id)
+    except PermissionError as exc: raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except docker.errors.DockerException as exc: raise HTTPException(status_code=404, detail="Container not found") from exc
+
+
 @router.delete("/docker/containers/{container_id}", status_code=204, tags=["docker"])
 def remove_docker_container(container_id: str, service: DockerService = Depends(get_docker_service)) -> None:
     try: service.remove(container_id)
     except PermissionError as exc: raise HTTPException(status_code=403, detail=str(exc)) from exc
     except docker.errors.DockerException as exc: raise HTTPException(status_code=404, detail="Container not found") from exc
+
+
+@router.get("/docker/images", response_model=list[DockerImage], tags=["docker"])
+def list_docker_images(service: DockerService = Depends(get_docker_service)) -> list[DockerImage]:
+    try:
+        import sys
+        source = str(get_settings().legacy_src_dir.resolve())
+        if source not in sys.path: sys.path.insert(0, source)
+        from containers.tool_registry import TOOL_REGISTRY
+        return [DockerImage.model_validate(item) for item in service.images({tool.image for tool in TOOL_REGISTRY.values()})]
+    except docker.errors.DockerException as exc: raise HTTPException(status_code=503, detail="Docker is unavailable") from exc
+
+
+@router.delete("/docker/images/{image}", status_code=204, tags=["docker"])
+def remove_docker_image(image: str, service: DockerService = Depends(get_docker_service)) -> None:
+    try: service.remove_image(image)
+    except docker.errors.DockerException as exc: raise HTTPException(status_code=404, detail="Image not found") from exc
+
+
+@router.post("/docker/images/pull", response_model=dict, tags=["docker"])
+def pull_docker_image(payload: DockerImagePull, service: DockerService = Depends(get_docker_service)) -> dict:
+    try: return service.pull_image(payload.image)
+    except docker.errors.DockerException as exc: raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+@router.post("/docker/images/build", response_model=dict, tags=["docker"])
+def build_docker_image(payload: DockerImageBuild, service: DockerService = Depends(get_docker_service)) -> dict:
+    try: return service.build_image(payload.dockerfile, payload.tag)
+    except docker.errors.DockerException as exc: raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+@router.post("/docker/tools/images/{operation}", response_model=dict, tags=["docker"])
+def operate_tool_images(operation: str, service: DockerService = Depends(get_docker_service), manager: DockerOperationManager = Depends(get_docker_operation_manager)) -> dict:
+    if operation not in {"build", "pull", "setup"}: raise HTTPException(status_code=422, detail="Operation must be build, pull, or setup")
+    try: return manager.start_images(operation, service).model_dump()
+    except Exception as exc: raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+@router.post("/docker/tools/{key}/image/{operation}", response_model=DockerOperation, tags=["docker"])
+def operate_one_tool_image(key: str, operation: str, service: DockerService = Depends(get_docker_service), manager: DockerOperationManager = Depends(get_docker_operation_manager)) -> DockerOperation:
+    if operation not in {"build", "pull"}: raise HTTPException(status_code=422, detail="Operation must be build or pull")
+    try: return manager.start_one_image(key, operation, service)
+    except KeyError: raise HTTPException(status_code=404, detail="Tool not found")
+    except Exception as exc: raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+@router.post("/docker/tools", response_model=DockerTool, status_code=201, tags=["docker"])
+def create_docker_tool(payload: DockerToolCreate, settings: Settings = Depends(get_settings)) -> DockerTool:
+    import json, sys
+    source = str(settings.legacy_src_dir.resolve())
+    if source not in sys.path: sys.path.insert(0, source)
+    try:
+        from config.config import CUSTOM_TOOLS_DIR
+        from containers.custom_tools import register_custom_tool
+        from containers.tool_registry import TOOL_REGISTRY
+        if payload.key in TOOL_REGISTRY: raise ValueError(f"Tool key '{payload.key}' already exists")
+        tool_dir = Path(CUSTOM_TOOLS_DIR) / payload.key
+        tool_dir.mkdir(parents=True, exist_ok=True)
+        (tool_dir / "tool.json").write_text(json.dumps(payload.model_dump(exclude={"dockerfile", "parser"}), indent=2))
+        if payload.dockerfile: (tool_dir / "Dockerfile").write_text(payload.dockerfile)
+        if payload.parser: (tool_dir / "parser.py").write_text(payload.parser)
+        register_custom_tool(str(tool_dir))
+        return _docker_tool_detail(payload.key)
+    except Exception as exc: raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+def _docker_tool_detail(key: str) -> DockerTool:
+    from containers.custom_tools import CustomToolConfig
+    from containers.tool_registry import TOOL_REGISTRY
+    from containers.parsers import PARSERS
+    tool = TOOL_REGISTRY[key]
+    is_custom = isinstance(tool, CustomToolConfig)
+    return DockerTool(key=key, display_name=tool.display_name, category=tool.category, image=tool.image, description=tool.description, param_specs=tool.param_spec(), source="build" if tool.dockerfile else "hub", is_custom=is_custom, status="ok" if key in PARSERS else "no parser", command_template=getattr(tool, "command_template", ""), dockerfile=Path(tool.dockerfile).read_text(errors="replace") if is_custom and tool.dockerfile and Path(tool.dockerfile).exists() else "", parser=Path(tool.parser_path).read_text(errors="replace") if is_custom and tool.parser_path and Path(tool.parser_path).exists() else "")
+
+
+@router.put("/docker/tools/{key}", response_model=DockerTool, tags=["docker"])
+def update_docker_tool(key: str, payload: DockerToolCreate, settings: Settings = Depends(get_settings)) -> DockerTool:
+    import json, sys
+    source = str(settings.legacy_src_dir.resolve())
+    if source not in sys.path: sys.path.insert(0, source)
+    try:
+        from containers.custom_tools import CustomToolConfig, register_custom_tool
+        from containers.tool_registry import TOOL_REGISTRY
+        if payload.key != key: raise ValueError("Tool key cannot be changed")
+        if not isinstance(TOOL_REGISTRY.get(key), CustomToolConfig): raise KeyError(key)
+        tool_dir = Path(TOOL_REGISTRY[key].tool_dir)
+        (tool_dir / "tool.json").write_text(json.dumps(payload.model_dump(exclude={"dockerfile", "parser"}), indent=2))
+        (tool_dir / "Dockerfile").write_text(payload.dockerfile)
+        (tool_dir / "parser.py").write_text(payload.parser)
+        register_custom_tool(str(tool_dir))
+        return _docker_tool_detail(key)
+    except KeyError as exc: raise HTTPException(status_code=404, detail="Custom tool not found") from exc
+    except Exception as exc: raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.delete("/docker/tools/{key}", status_code=204, tags=["docker"])
+def delete_docker_tool(key: str, settings: Settings = Depends(get_settings)) -> None:
+    import sys
+    source = str(settings.legacy_src_dir.resolve())
+    if source not in sys.path: sys.path.insert(0, source)
+    try:
+        from containers.custom_tools import remove_custom_tool
+        remove_custom_tool(key)
+    except ValueError as exc: raise HTTPException(status_code=404, detail="Custom tool not found") from exc
+
+
+@router.post("/docker/prune", response_model=dict, tags=["docker"])
+def prune_docker(service: DockerService = Depends(get_docker_service)) -> dict:
+    try: return {"removed": service.prune()}
+    except docker.errors.DockerException as exc: raise HTTPException(status_code=503, detail="Docker is unavailable") from exc
+
+
+@router.get("/docker/containers/{container_id}/logs", response_model=list[str], tags=["docker"])
+def docker_logs(container_id: str, service: DockerService = Depends(get_docker_service)) -> list[str]:
+    try: return service.logs(container_id)
+    except PermissionError as exc: raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except docker.errors.DockerException as exc: raise HTTPException(status_code=404, detail="Container not found") from exc
+
+
+@router.get("/docker/tools", response_model=list[DockerTool], tags=["docker"])
+def list_docker_tools(settings: Settings = Depends(get_settings), service: DockerService = Depends(get_docker_service)) -> list[DockerTool]:
+    import sys
+    source=str(settings.legacy_src_dir.resolve())
+    if source not in sys.path: sys.path.insert(0,source)
+    try:
+        from containers.tool_registry import TOOL_REGISTRY
+        local = {tag for item in service.images() for tag in item["tags"]}
+        result = []
+        for key, tool in TOOL_REGISTRY.items():
+            item = _docker_tool_detail(key)
+            item.image_present = tool.image in local or any(tag.split(":")[0] == tool.image.split(":")[0] for tag in local)
+            result.append(item)
+        return result
+    except Exception as exc: raise HTTPException(status_code=503, detail=f"Tool registry unavailable: {exc}") from exc
+
+
+@router.get("/docker/status", response_model=dict, tags=["docker"])
+def docker_status(service: DockerService = Depends(get_docker_service)) -> dict:
+    try: return service.status()
+    except docker.errors.DockerException as exc: return {"available": False, "version": "", "message": str(exc)}
+
+
+@router.get("/docker/operations/{operation_id}", response_model=DockerOperation, tags=["docker"])
+def get_docker_operation(operation_id: str, manager: DockerOperationManager = Depends(get_docker_operation_manager)) -> DockerOperation:
+    try: return manager.get(operation_id)
+    except DockerOperationNotFound as exc: raise HTTPException(status_code=404, detail="Operation not found") from exc
+
+
+@router.post("/docker/operations/{operation_id}/cancel", response_model=DockerOperation, tags=["docker"])
+def cancel_docker_operation(operation_id: str, manager: DockerOperationManager = Depends(get_docker_operation_manager)) -> DockerOperation:
+    try: return manager.cancel(operation_id)
+    except DockerOperationNotFound as exc: raise HTTPException(status_code=404, detail="Operation not found") from exc
+
+
+@router.post("/projects/{project_id}/docker/tools/{key}/runs", response_model=DockerOperation, status_code=202, tags=["docker"])
+def run_docker_tool(project_id: str, key: str, payload: DockerToolRun, store: ProjectStore = Depends(get_project_store), service: DockerService = Depends(get_docker_service), manager: DockerOperationManager = Depends(get_docker_operation_manager)) -> DockerOperation:
+    project_dir = store.project_dir(project_id).resolve()
+    relative = Path(payload.output_subdir)
+    if relative.is_absolute() or ".." in relative.parts: raise HTTPException(status_code=422, detail="Output directory must be relative to the project")
+    return manager.start_tool(key, payload.params, project_dir / relative, service)
 
 
 @router.get("/projects/{project_id}/vault", response_model=list[VaultItem], tags=["vault"])
@@ -662,6 +1039,27 @@ async def run_intruder(
         return await service.run(payload)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+@router.post("/projects/{project_id}/intruder/jobs",response_model=IntruderJob,status_code=202,tags=["testing"])
+def start_intruder_job(project_id:str,payload:IntruderRequest,store:ProjectStore=Depends(get_project_store),manager:IntruderJobManager=Depends(get_intruder_job_manager))->IntruderJob:
+    try:project=store.get(project_id);scope=store.get_scope(project_id)
+    except ProjectNotFoundError as exc:raise HTTPException(status_code=404,detail="Project not found") from exc
+    if not all(_host_in_project_scope(payload.url.replace(payload.placeholder,value),project.target,scope) for value in payload.payloads):raise HTTPException(status_code=403,detail="Every generated URL must be inside the project scope")
+    return manager.start(project_id,payload)
+
+@router.get("/projects/{project_id}/intruder/jobs",response_model=list[IntruderJob],tags=["testing"])
+def list_intruder_jobs(project_id:str,manager:IntruderJobManager=Depends(get_intruder_job_manager))->list[IntruderJob]:return manager.list(project_id)
+
+@router.get("/projects/{project_id}/intruder/jobs/{job_id}",response_model=IntruderJob,tags=["testing"])
+def get_intruder_job(project_id:str,job_id:str,manager:IntruderJobManager=Depends(get_intruder_job_manager))->IntruderJob:
+    try:job=manager.get(project_id, job_id)
+    except IntruderJobNotFound as exc:raise HTTPException(status_code=404,detail="Intruder job not found") from exc
+    if job.project_id!=project_id:raise HTTPException(status_code=404,detail="Intruder job not found")
+    return job
+
+@router.post("/projects/{project_id}/intruder/jobs/{job_id}/cancel",response_model=IntruderJob,tags=["testing"])
+def cancel_intruder_job(project_id:str,job_id:str,manager:IntruderJobManager=Depends(get_intruder_job_manager))->IntruderJob:
+    get_intruder_job(project_id,job_id,manager);return manager.cancel(project_id, job_id)
 
 
 def _websocket_connection(doc: dict) -> WebSocketConnection:
@@ -761,11 +1159,11 @@ def list_browser_sessions(project_id: str, store: ProjectStore = Depends(get_pro
 
 
 @router.post("/projects/{project_id}/browser/sessions", response_model=BrowserSession, status_code=201, tags=["browser"])
-async def create_browser_session(project_id: str, payload: BrowserViewport = BrowserViewport(), store: ProjectStore = Depends(get_project_store), manager: BrowserSessionManager = Depends(get_browser_manager)) -> BrowserSession:
+async def create_browser_session(project_id: str, payload: BrowserViewport = BrowserViewport(), store: ProjectStore = Depends(get_project_store), manager: BrowserSessionManager = Depends(get_browser_manager), app_settings: Settings = Depends(get_settings)) -> BrowserSession:
     _browser_project(project_id, store)
     settings = store.get_settings(project_id)
     try:
-        state = await manager.create(project_id, settings.get("proxy_port", 8080), payload.width, payload.height)
+        state = await manager.create(project_id, app_settings.browser_proxy_host, app_settings.browser_proxy_port, payload.width, payload.height, app_settings.browser_proxy_enabled)
         return _browser_model(state)
     except BrowserUnavailable as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
@@ -840,3 +1238,132 @@ async def browser_stream(project_id: str, session_id: str, websocket: WebSocket,
                 await websocket.send_json({"type": "error", "message": str(exc)})
     except (WebSocketDisconnect, KeyError):
         pass
+
+
+@router.get("/projects/{project_id}/ai/settings", response_model=AISettings, tags=["ai"])
+def get_ai_settings(project_id: str, service: AIService = Depends(get_ai_service)) -> AISettings:
+    return AISettings.model_validate(service.settings())
+
+
+@router.put("/projects/{project_id}/ai/settings", response_model=AISettings, tags=["ai"])
+def put_ai_settings(project_id: str, payload: AISettings, service: AIService = Depends(get_ai_service)) -> AISettings:
+    return AISettings.model_validate(service.save_settings(payload.model_dump()))
+
+
+@router.get("/projects/{project_id}/ai/conversations", response_model=list[AIConversation], tags=["ai"])
+def list_ai_conversations(project_id: str, service: AIService = Depends(get_ai_service)) -> list[AIConversation]:
+    return [AIConversation.model_validate(item) for item in service.list_conversations()]
+
+
+@router.post("/projects/{project_id}/ai/conversations", response_model=AIConversationDetail, status_code=201, tags=["ai"])
+def create_ai_conversation(project_id: str, service: AIService = Depends(get_ai_service)) -> AIConversationDetail:
+    return AIConversationDetail.model_validate(service.create())
+
+
+@router.get("/projects/{project_id}/ai/conversations/{conversation_id}", response_model=AIConversationDetail, tags=["ai"])
+def get_ai_conversation(project_id: str, conversation_id: str, service: AIService = Depends(get_ai_service)) -> AIConversationDetail:
+    try: return AIConversationDetail.model_validate(service.get(conversation_id))
+    except KeyError as exc: raise HTTPException(status_code=404, detail="Conversation not found") from exc
+
+
+@router.post("/projects/{project_id}/ai/conversations/{conversation_id}/messages", response_model=AIConversationDetail, tags=["ai"])
+async def send_ai_message(project_id: str, conversation_id: str, payload: AIChatRequest, service: AIService = Depends(get_ai_service)) -> AIConversationDetail:
+    try:
+        await service.reply(conversation_id, payload.content)
+        return AIConversationDetail.model_validate(service.get(conversation_id))
+    except KeyError as exc: raise HTTPException(status_code=404, detail="Conversation not found") from exc
+    except httpx.HTTPError as exc: raise HTTPException(status_code=502, detail=f"AI provider request failed: {exc}") from exc
+    except RuntimeError as exc: raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+@router.websocket("/projects/{project_id}/ai/conversations/{conversation_id}/stream")
+async def stream_ai_message(project_id: str, conversation_id: str, websocket: WebSocket, store: ProjectStore = Depends(get_project_store), settings: Settings = Depends(get_settings)) -> None:
+    try: store.project_dir(project_id)
+    except ProjectNotFoundError:
+        await websocket.close(code=4404, reason="Project not found"); return
+    await websocket.accept(); service=AIService(store.project_dir(project_id), settings.secret_key)
+    try:
+        request=await websocket.receive_json(); prompt=str(request.get("content", "")).strip()
+        if not prompt: await websocket.send_json({"type":"error","message":"Message cannot be empty"}); return
+        async for event in service.stream_reply(conversation_id,prompt): await websocket.send_json(event)
+    except WebSocketDisconnect: return
+    except KeyError: await websocket.send_json({"type":"error","message":"Conversation not found"})
+    except Exception as exc: await websocket.send_json({"type":"error","message":str(exc)})
+
+
+@router.get("/projects/{project_id}/ai/approvals", response_model=list[AIApproval], tags=["ai"])
+def list_ai_approvals(project_id: str, service: AIService = Depends(get_ai_service)) -> list[AIApproval]:
+    return [AIApproval.model_validate(item) for item in service.approvals() if item.get("status") == "pending"]
+
+
+@router.post("/projects/{project_id}/ai/approvals/{approval_id}", response_model=AIApproval, tags=["ai"])
+def resolve_ai_approval(project_id: str, approval_id: str, payload: AIApprovalDecision, service: AIService = Depends(get_ai_service), store: ProjectStore = Depends(get_project_store), jobs: PipelineJobManager = Depends(get_job_manager)) -> AIApproval:
+    item=service.resolve_approval(approval_id,payload.decision)
+    if item is None: raise HTTPException(status_code=404, detail="Approval request not found")
+    if payload.decision == "approve" and item["tool_name"] == "start_pipeline":
+        try:
+            project=store.get(project_id); scope=store.get_scope(project_id); project_dir=store.project_dir(project_id)
+            jobs.start(project_id, project_dir, str(item["arguments"].get("pipeline_key","")), project.target, {}, [e.value for e in scope.entries if e.in_scope], [e.value for e in scope.entries if not e.in_scope])
+            item["execution"]="started"
+        except (ProjectNotFoundError, ValueError) as exc:
+            item["execution_error"]=str(exc)
+    return AIApproval.model_validate(item)
+
+
+@router.post("/projects/{project_id}/terminal/sessions", response_model=TerminalSessionInfo, status_code=201, tags=["terminal"])
+async def create_terminal_session(project_id: str, payload: TerminalConnectRequest, store: ProjectStore = Depends(get_project_store), manager: TerminalManager = Depends(get_terminal_manager)) -> TerminalSessionInfo:
+    store.project_dir(project_id)
+    try:
+        session=await manager.create(project_id,payload.host,payload.port,payload.username,payload.password,payload.private_key,payload.key_passphrase,payload.trust_host_key)
+        return TerminalSessionInfo(id=session.id,project_id=project_id,host=session.host,port=session.port,username=session.username)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+@router.get("/projects/{project_id}/terminal/profiles", response_model=list[TerminalProfile], tags=["terminal"])
+def list_terminal_profiles(project_id: str, store: ProjectStore = Depends(get_project_store)) -> list[TerminalProfile]:
+    return [TerminalProfile.model_validate(item) for item in TerminalProfileStore(store.project_dir(project_id)).list()]
+
+
+@router.post("/projects/{project_id}/terminal/profiles", response_model=TerminalProfile, status_code=201, tags=["terminal"])
+def create_terminal_profile(project_id: str, payload: TerminalProfileInput, store: ProjectStore = Depends(get_project_store)) -> TerminalProfile:
+    return TerminalProfile.model_validate(TerminalProfileStore(store.project_dir(project_id)).create(payload.name,payload.host,payload.port,payload.username))
+
+
+@router.put("/projects/{project_id}/terminal/profiles/{profile_id}", response_model=TerminalProfile, tags=["terminal"])
+def update_terminal_profile(project_id: str, profile_id: str, payload: TerminalProfileInput, store: ProjectStore = Depends(get_project_store)) -> TerminalProfile:
+    item=TerminalProfileStore(store.project_dir(project_id)).update(profile_id,payload.name,payload.host,payload.port,payload.username)
+    if item is None: raise HTTPException(status_code=404, detail="Terminal profile not found")
+    return TerminalProfile.model_validate(item)
+
+
+@router.delete("/projects/{project_id}/terminal/profiles/{profile_id}", status_code=204, tags=["terminal"])
+def delete_terminal_profile(project_id: str, profile_id: str, store: ProjectStore = Depends(get_project_store)) -> None:
+    if not TerminalProfileStore(store.project_dir(project_id)).delete(profile_id): raise HTTPException(status_code=404, detail="Terminal profile not found")
+
+
+@router.websocket("/projects/{project_id}/terminal/sessions/{session_id}/stream")
+async def terminal_stream(project_id: str, session_id: str, websocket: WebSocket, store: ProjectStore = Depends(get_project_store), manager: TerminalManager = Depends(get_terminal_manager)) -> None:
+    try:
+        store.project_dir(project_id); session=manager.get(session_id)
+        if session.project_id != project_id: raise KeyError(session_id)
+    except (ProjectNotFoundError, KeyError):
+        await websocket.close(code=4404, reason="Terminal session not found"); return
+    await websocket.accept()
+    async def read_output():
+        while chunk := await session.process.stdout.read(4096):
+            await websocket.send_text(chunk)
+        await websocket.close(code=1000, reason="SSH shell exited")
+    output_task=asyncio.create_task(read_output())
+    try:
+        while True:
+            message=await websocket.receive_json(); kind=message.get("type")
+            if kind == "input": manager.touch(session_id); session.process.stdin.write(str(message.get("data",""))[:10000])
+            elif kind == "resize": await manager.resize(session_id,int(message.get("cols",120)),int(message.get("rows",32)))
+            elif kind == "close": break
+    except (WebSocketDisconnect, KeyError): pass
+    except Exception as exc:
+        try: await websocket.close(code=1011, reason=f"Terminal stream failed: {str(exc)[:80]}")
+        except Exception: pass
+    finally:
+        output_task.cancel(); await manager.close(session_id)

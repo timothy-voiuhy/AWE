@@ -27,6 +27,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import socket
 from typing import TYPE_CHECKING
 
@@ -55,9 +56,9 @@ class ControlServer:
         self._server: asyncio.Server | None = None
 
     async def start(self) -> None:
-        self._server = await asyncio.start_server(
-            self._handle_client, "127.0.0.1", 0,
-        )
+        host = os.environ.get("AWE_PROXY_CONTROL_HOST", "127.0.0.1")
+        port = int(os.environ.get("AWE_PROXY_CONTROL_PORT", "0"))
+        self._server = await asyncio.start_server(self._handle_client, host, port)
 
     @property
     def port(self) -> int:
@@ -157,8 +158,9 @@ class ControlServer:
 class ControlClient:
     """Synchronous client — used by the GUI (different process)."""
 
-    def __init__(self, port: int) -> None:
+    def __init__(self, port: int, host: str = "127.0.0.1") -> None:
         self._port = port
+        self._host = host
 
     def set_scope(self, patterns: list[str]) -> bool:
         return self._send({"action": "set_scope", "patterns": patterns})
@@ -217,7 +219,7 @@ class ControlClient:
 
     def _rpc(self, cmd: dict) -> dict:
         try:
-            with socket.create_connection(("127.0.0.1", self._port), timeout=5.0) as s:
+            with socket.create_connection((self._host, self._port), timeout=5.0) as s:
                 s.sendall((json.dumps(cmd) + "\n").encode())
                 buf = b""
                 while True:

@@ -48,10 +48,18 @@ class PipelineJobManager:
         params: dict,
         in_scope: list[str],
         out_of_scope: list[str],
+        session_id: str = "",
+        tool_keys: list[str] | None = None,
     ) -> PipelineJob:
         template = self._template_loader(pipeline_key)
         if template is None:
             raise ValueError(f"Unknown pipeline: {pipeline_key}")
+        selected_keys = set(tool_keys or [])
+        if selected_keys:
+            known_keys = {step.tool_key for step in template.steps}
+            unknown_keys = selected_keys - known_keys
+            if unknown_keys:
+                raise ValueError(f"Unknown pipeline tools: {', '.join(sorted(unknown_keys))}")
 
         job_id = secrets.token_hex(12)
         job = PipelineJob(
@@ -69,6 +77,8 @@ class PipelineJobManager:
             in_scope=in_scope,
             out_of_scope=out_of_scope,
             mongo_uri=self._mongo_uri,
+            retry_tool_keys=selected_keys or None,
+            session_id=session_id or None,
         )
         self._connect(job_id, runner)
         with self._lock:
@@ -91,7 +101,8 @@ class PipelineJobManager:
             sys.path.insert(0, source)
         from pipeline.runner import PipelineRunner
 
-        return PipelineRunner(**kwargs)
+        from .config import get_settings
+        return PipelineRunner(**kwargs, docker_workspace_dir=str(get_settings().docker_workspace_dir))
 
     def get(self, job_id: str) -> PipelineJob:
         with self._lock:

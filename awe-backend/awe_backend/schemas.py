@@ -2,7 +2,7 @@ from datetime import datetime
 
 from typing import Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 class HealthResponse(BaseModel):
@@ -86,6 +86,8 @@ class PipelineTemplate(BaseModel):
 class PipelineRunCreate(BaseModel):
     pipeline_key: str = Field(min_length=1, max_length=100)
     params: dict = Field(default_factory=dict)
+    session_id: str = Field(default="", max_length=100)
+    tool_keys: list[str] = Field(default_factory=list, max_length=200)
 
 
 class PipelineEvent(BaseModel):
@@ -121,6 +123,20 @@ class ScanSession(BaseModel):
     params: dict = Field(default_factory=dict)
     in_scope: list[str] = Field(default_factory=list)
     out_of_scope: list[str] = Field(default_factory=list)
+
+
+class PipelineToolRun(BaseModel):
+    id: str
+    session_id: str
+    tool_key: str
+    display_name: str = ""
+    stage: int = 0
+    status: str
+    started_at: str = ""
+    completed_at: str | None = None
+    result_count: int = 0
+    error_msg: str | None = None
+    log_lines: list[str] = Field(default_factory=list)
 
 
 class StoredResult(BaseModel):
@@ -177,6 +193,64 @@ class DockerContainer(BaseModel):
     image: str
     status: str
     created: str = ""
+    is_service: bool = False
+
+
+class DockerImage(BaseModel):
+    id: str
+    tags: list[str]
+    size_mb: float
+
+
+class DockerTool(BaseModel):
+    key: str
+    display_name: str
+    category: str
+    image: str
+    description: str = ""
+    param_specs: list[dict] = Field(default_factory=list)
+    source: str = "hub"
+    image_present: bool = False
+    is_custom: bool = False
+    status: str = "ok"
+    command_template: str = ""
+    dockerfile: str = ""
+    parser: str = ""
+
+
+class DockerImagePull(BaseModel):
+    image: str = Field(min_length=1, max_length=256, pattern=r"^[a-zA-Z0-9._:/-]+$")
+
+class DockerImageBuild(BaseModel):
+    tag: str = Field(min_length=1, max_length=256, pattern=r"^[a-zA-Z0-9._:/-]+$")
+    dockerfile: str = Field(min_length=1, max_length=200_000)
+
+class DockerToolCreate(BaseModel):
+    key: str = Field(pattern=r"^[a-z0-9_]+$", min_length=1, max_length=64)
+    display_name: str = Field(min_length=1, max_length=120)
+    category: str = Field(min_length=1, max_length=80)
+    image: str = Field(min_length=1, max_length=256)
+    command_template: str = Field(min_length=1, max_length=2000)
+    description: str = ""
+    param_specs: list[dict] = Field(default_factory=list)
+    dockerfile: str = Field(min_length=1, max_length=200_000)
+    parser: str = Field(min_length=1, max_length=500_000)
+
+
+class DockerToolRun(BaseModel):
+    params: dict[str, object] = Field(default_factory=dict)
+    output_subdir: str = Field(default="docker-output", max_length=200)
+
+
+class DockerOperation(BaseModel):
+    id: str
+    kind: str
+    status: Literal["queued", "running", "completed", "failed", "cancelling", "cancelled"]
+    progress_completed: int = 0
+    progress_total: int = 0
+    message: str = ""
+    logs: list[str] = Field(default_factory=list)
+    result: dict = Field(default_factory=dict)
 
 
 class VaultItemInput(BaseModel):
@@ -228,8 +302,11 @@ class IntruderRequest(BaseModel):
     url: str = Field(min_length=1, max_length=4096)
     headers: dict[str, str] = Field(default_factory=dict)
     body: str = Field(default="", max_length=2_000_000)
-    payloads: list[str] = Field(min_length=1, max_length=100)
+    payloads: list[str] = Field(min_length=1, max_length=500)
     placeholder: str = Field(default="§payload§", min_length=1, max_length=50)
+    concurrency: int = Field(default=5, ge=1, le=25)
+    timeout_seconds: float = Field(default=20, ge=1, le=120)
+    follow_redirects: bool = False
 
 
 class IntruderResult(BaseModel):
@@ -239,6 +316,21 @@ class IntruderResult(BaseModel):
     length: int
     elapsed_ms: int
     error: str = ""
+    request_url: str = ""
+    request_body: str = ""
+    response_headers: dict[str, str] = Field(default_factory=dict)
+    response_body: str = ""
+
+class IntruderJob(BaseModel):
+    id: str
+    project_id: str
+    status: Literal["queued", "running", "cancelling", "cancelled", "completed", "failed"]
+    created_at: datetime
+    completed_at: datetime | None = None
+    total: int = 0
+    completed: int = 0
+    error: str = ""
+    results: list[IntruderResult] = Field(default_factory=list)
 
 
 class WebSocketConnection(BaseModel):
@@ -307,3 +399,81 @@ class BrowserNavigate(BaseModel):
 class BrowserViewport(BaseModel):
     width: int = Field(default=1280, ge=320, le=2560)
     height: int = Field(default=800, ge=240, le=1600)
+
+
+class AIConversation(BaseModel):
+    id: str
+    title: str
+    updated_at: str
+
+
+class AIMessage(BaseModel):
+    role: Literal["user", "assistant", "system"]
+    content: str
+    created_at: str
+
+
+class AIConversationDetail(AIConversation):
+    messages: list[AIMessage] = Field(default_factory=list)
+
+
+class AIChatRequest(BaseModel):
+    content: str = Field(min_length=1, max_length=100_000)
+
+
+class AISettings(BaseModel):
+    provider: Literal["openai", "anthropic", "ollama"] = "openai"
+    model: str = Field(default="gpt-4o-mini", max_length=200)
+    base_url: str = Field(default="", max_length=2048)
+    api_key: str = Field(default="", max_length=1000)
+    api_key_configured: bool = False
+
+
+class AIApproval(BaseModel):
+    id: str
+    conversation_id: str
+    tool_name: str
+    arguments: dict = Field(default_factory=dict)
+    risk: Literal["low", "medium", "high"] = "medium"
+    status: Literal["pending", "approved", "rejected", "expired"] = "pending"
+    created_at: str
+    resolved_at: str | None = None
+
+
+class AIApprovalDecision(BaseModel):
+    decision: Literal["approve", "reject"]
+
+
+class TerminalConnectRequest(BaseModel):
+    host: str = Field(min_length=1, max_length=255)
+    port: int = Field(default=22, ge=1, le=65535)
+    username: str = Field(min_length=1, max_length=120)
+    password: str = Field(default="", max_length=1000)
+    private_key: str = Field(default="", max_length=100_000)
+    key_passphrase: str = Field(default="", max_length=1000)
+    trust_host_key: bool = False
+
+    @model_validator(mode="after")
+    def require_credentials(self):
+        if not self.password and not self.private_key:
+            raise ValueError("A password or private key is required")
+        return self
+
+
+class TerminalSessionInfo(BaseModel):
+    id: str
+    project_id: str
+    host: str
+    port: int
+    username: str
+
+
+class TerminalProfileInput(BaseModel):
+    name: str = Field(default="", max_length=120)
+    host: str = Field(min_length=1, max_length=255)
+    port: int = Field(default=22, ge=1, le=65535)
+    username: str = Field(min_length=1, max_length=120)
+
+
+class TerminalProfile(TerminalProfileInput):
+    id: str

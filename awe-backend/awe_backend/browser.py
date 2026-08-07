@@ -41,25 +41,28 @@ class BrowserSessionManager:
         self._sessions: dict[str, _ManagedBrowser] = {}
         self._lock = asyncio.Lock()
 
-    async def _ensure_browser(self, proxy_port: int) -> None:
+    async def _ensure_browser(self, proxy_host: str, proxy_port: int, proxy_enabled: bool = True) -> None:
         if self._browser is not None:
             return
         try:
             from playwright.async_api import async_playwright
             self._playwright = await async_playwright().start()
-            self._browser = await self._playwright.chromium.launch(
-                headless=True,
-                proxy={"server": f"http://127.0.0.1:{proxy_port}"},
-                args=["--disable-gpu", "--no-sandbox"],
-            )
+            options = {"headless": True, "args": ["--disable-gpu", "--no-sandbox"]}
+            if proxy_enabled:
+                options["proxy"] = {"server": f"http://{proxy_host}:{proxy_port}"}
+            self._browser = await self._playwright.chromium.launch(**options)
         except Exception as exc:
             await self.shutdown()
             raise BrowserUnavailable("Managed Chromium is unavailable; run `playwright install chromium`.") from exc
 
-    async def create(self, project_id: str, proxy_port: int, width: int, height: int) -> BrowserState:
+    async def create(self, project_id: str, proxy_host: str, proxy_port: int, width: int, height: int, proxy_enabled: bool = True) -> BrowserState:
         async with self._lock:
-            await self._ensure_browser(proxy_port)
-            context = await self._browser.new_context(viewport={"width": width, "height": height}, ignore_https_errors=True)
+            await self._ensure_browser(proxy_host, proxy_port, proxy_enabled)
+            context = await self._browser.new_context(
+                viewport={"width": width, "height": height},
+                ignore_https_errors=True,
+                extra_http_headers={"X-AWE-Project-ID": project_id},
+            )
             page = await context.new_page()
             now = _now()
             state = BrowserState(secrets.token_urlsafe(18), project_id, "about:blank", "New tab", width, height, now, now)

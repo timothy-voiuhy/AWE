@@ -26,22 +26,14 @@ export function ProjectWorkspace() {
     refetchInterval: (query) => query.state.data?.some((run) => ['queued', 'running', 'stopping'].includes(run.status)) ? 5000 : false,
   })
   const activeRun = runs.data?.find((run) => ['queued', 'running', 'stopping'].includes(run.status))
-  const sessions = useQuery({ queryKey: ['projects', projectId, 'sessions'], queryFn: () => api.listSessions(projectId) })
   const [target, setTarget] = useState('')
   const [scope, setScope] = useState<ScopeConfig>(emptyScope)
   const [entryValue, setEntryValue] = useState('')
   const [entryType, setEntryType] = useState<ScopeEntryType>('domain')
   const [entryDirection, setEntryDirection] = useState<'in' | 'out'>('in')
-  const [selectedSession, setSelectedSession] = useState('')
-  const results = useQuery({
-    queryKey: ['projects', projectId, 'sessions', selectedSession, 'results'],
-    queryFn: () => api.listResults(projectId, selectedSession),
-    enabled: Boolean(selectedSession),
-  })
 
   useEffect(() => { if (project.data) setTarget(project.data.target) }, [project.data])
   useEffect(() => { if (scopeQuery.data) setScope(scopeQuery.data) }, [scopeQuery.data])
-  useEffect(() => { if (!selectedSession && sessions.data?.[0]) setSelectedSession(sessions.data[0].id) }, [selectedSession, sessions.data])
   useEffect(() => {
     if (!activeRun) return
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
@@ -158,21 +150,6 @@ export function ProjectWorkspace() {
         {runs.data?.[0] && <div className="panel live-console"><div className="console-head"><span>Latest run</span><strong>{runs.data[0].pipeline_key} · {runs.data[0].status}</strong></div><pre>{runs.data[0].events.filter((event) => event.type === 'pipeline.tool_log').slice(-30).map((event) => `[${String(event.data.tool_key)}] ${String(event.data.line)}`).join('\n') || runs.data[0].message || 'Waiting for pipeline output…'}</pre></div>}
       </section>
 
-      <section className="results-section">
-        <div className="section-title"><h2>Persisted results</h2><span>{results.data?.length ?? 0}</span></div>
-        <div className="results-layout">
-          <aside className="panel session-list">
-            {sessions.isError && <p className="error">MongoDB history is unavailable.</p>}
-            {sessions.data?.length === 0 && <p className="muted">No completed sessions yet.</p>}
-            {sessions.data?.map((session) => <button className={selectedSession === session.id ? 'selected' : ''} onClick={() => setSelectedSession(session.id)} key={session.id}><strong>{session.pipeline_name}</strong><span>{session.status} · {new Date(session.started_at).toLocaleString()}</span></button>)}
-          </aside>
-          <div className="panel result-table-wrap">
-            {results.isFetching && <p className="muted">Loading results…</p>}
-            {results.data && results.data.length === 0 && <div className="empty compact">This session has no stored results.</div>}
-            {results.data && results.data.length > 0 && <table><thead><tr><th>Category</th><th>Result</th><th>Sources</th></tr></thead><tbody>{results.data.map((result) => <tr key={result.id}><td><span className="category-tag">{result.category}</span></td><td><code>{result.result_key}</code></td><td>{result.sources.join(', ') || '—'}</td></tr>)}</tbody></table>}
-          </div>
-        </div>
-      </section>
     </main>
   )
 }

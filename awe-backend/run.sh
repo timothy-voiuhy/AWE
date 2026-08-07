@@ -8,6 +8,7 @@ PIP_BIN="${VENV_DIR}/bin/pip"
 STAMP_FILE="${VENV_DIR}/.awe-dependencies.sha256"
 HOST="${AWE_BACKEND_HOST:-127.0.0.1}"
 PORT="${AWE_BACKEND_PORT:-8001}"
+RELOAD="${AWE_BACKEND_RELOAD:-1}"
 
 create_venv() {
     if python3 -m venv "${VENV_DIR}" 2>/dev/null; then
@@ -109,7 +110,10 @@ if [[ "${AWE_BACKEND_SKIP_MONGO:-0}" != "1" ]]; then
 fi
 
 echo "Starting AWE backend at http://${HOST}:${PORT}"
-exec "${PYTHON_BIN}" -m uvicorn awe_backend.main:app \
+UVICORN_ARGS=(awe_backend.main:app \
     --host "${HOST}" \
-    --port "${PORT}" \
-    "$@"
+    --port "${PORT}")
+if [[ "${RELOAD}" == "1" ]]; then
+    UVICORN_ARGS+=(--reload --reload-dir "${SCRIPT_DIR}/awe_backend")
+fi
+exec "${PYTHON_BIN}" -m uvicorn "${UVICORN_ARGS[@]}" "$@"

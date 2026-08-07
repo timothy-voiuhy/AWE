@@ -20,6 +20,7 @@ upgraded TLS transport.
 from __future__ import annotations
 
 import asyncio
+import base64
 import logging
 import ssl
 
@@ -114,7 +115,8 @@ class ConnectionHandler:
         method, target, version = parts[0].upper(), parts[1], parts[2].strip()
 
         if method == "CONNECT":
-            await self._handle_connect(target)
+            _, project_id = _pop_project_marker(headers)
+            await self._handle_connect(target, project_id)
         else:
             from proxy._http import _read_body
             body = await _read_body(self._reader, header_map(headers))
@@ -122,7 +124,7 @@ class ConnectionHandler:
 
     # ── CONNECT / TLS MITM ────────────────────────────────────────────────────
 
-    async def _handle_connect(self, target: str) -> None:
+    async def _handle_connect(self, target: str, project_id: str | None = None) -> None:
         host, _, port_str = target.rpartition(":")
         if not host or not port_str.isdigit():
             self._writer.write(_CONNECT_FAIL)
@@ -155,7 +157,7 @@ class ConnectionHandler:
         # Build a new writer on the TLS transport; reader is unchanged
         # (it's backed by StreamReaderProtocol which loop.start_tls() updated in-place)
         tls_writer = asyncio.StreamWriter(tls_transport, protocol, self._reader, loop)
-        await self._serve_tunnel(self._reader, tls_writer, host, port)
+        await self._serve_tunnel(self._reader, tls_writer, host, port, project_id)
 
     async def _serve_tunnel(
         self,
@@ -163,6 +165,7 @@ class ConnectionHandler:
         writer: asyncio.StreamWriter,
         host: str,
         port: int,
+        connection_project_id: str | None = None,
     ) -> None:
         while True:
             try:
@@ -183,6 +186,8 @@ class ConnectionHandler:
 
             url = _build_url("https", host, port, target)
             headers, tool_source = pop_tool_marker(headers)
+            headers, project_id = _pop_project_marker(headers)
+            project_id = project_id or connection_project_id
 
             # Apply match-and-replace to the request
             if self._rules:
@@ -211,7 +216,7 @@ class ConnectionHandler:
                     method, url, headers, body, writer,
                 )
                 self._traffic.capture(host, method, url, headers, body, response,
-                                      tool_source=tool_source)
+                                      tool_source=tool_source, project_id=project_id)
                 if not wrote:
                     try:
                         writer.write(build_response(
@@ -236,7 +241,7 @@ class ConnectionHandler:
                 )
 
             self._traffic.capture(host, method, url, headers, body, response,
-                                  tool_source=tool_source)
+                                  tool_source=tool_source, project_id=project_id)
 
             try:
                 writer.write(build_response(
@@ -265,6 +270,7 @@ class ConnectionHandler:
             host = hmap.get("host", "")
             url  = target if "://" in target else f"http://{host}{target}"
             headers, tool_source = pop_tool_marker(headers)
+            headers, project_id = _pop_project_marker(headers)
 
             # Apply match-and-replace to the request
             if self._rules:
@@ -293,7 +299,7 @@ class ConnectionHandler:
                     method, url, headers, body, self._writer,
                 )
                 self._traffic.capture(host, method, url, headers, body, response,
-                                      tool_source=tool_source)
+                                      tool_source=tool_source, project_id=project_id)
                 if not wrote:
                     try:
                         self._writer.write(build_response(
@@ -318,7 +324,7 @@ class ConnectionHandler:
                 )
 
             self._traffic.capture(host, method, url, headers, body, response,
-                                  tool_source=tool_source)
+                                  tool_source=tool_source, project_id=project_id)
 
             try:
                 self._writer.write(build_response(
@@ -352,6 +358,7 @@ class ConnectionHandler:
     ) -> None:
         log.debug("WebSocket intercept: %s:%d%s", host, port, path)
         headers, tool_source = pop_tool_marker(headers)
+        headers, project_id = _pop_project_marker(headers)
         up_ctx = ssl.create_default_context()
         up_ctx.check_hostname = False
         up_ctx.verify_mode    = ssl.CERT_NONE
@@ -415,6 +422,26 @@ def _strip_ws_compression_from_response(raw: bytes) -> bytes:
         return "\r\n".join(filtered).encode("iso-8859-1")
     except Exception:
         return raw
+
+
+def _pop_project_marker(headers: list[tuple[str, str]]) -> tuple[list[tuple[str, str]], str | None]:
+    """Remove AWE's internal project marker before forwarding upstream."""
+    project_id = None
+    clean = []
+    for key, value in headers:
+        if key.lower() == "x-awe-project-id":
+            project_id = value.strip() or None
+        elif key.lower() == "proxy-authorization" and value.lower().startswith("basic "):
+            try:
+                decoded = base64.b64decode(value.split(None, 1)[1]).decode("utf-8")
+                username = decoded.split(":", 1)[0].strip()
+                if username:
+                    project_id = username
+            except (ValueError, UnicodeError):
+                pass
+        else:
+            clean.append((key, value))
+    return clean, project_id
 
 
 def _build_url(scheme: str, host: str, port: int, path: str) -> str:

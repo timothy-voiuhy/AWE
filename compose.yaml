@@ -19,12 +19,14 @@ services:
     build:
       context: .
       dockerfile: awe-frontend/Dockerfile
+    ports:
+      - "4000:4000"
     restart: unless-stopped
     depends_on:
       backend:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:8000/"]
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:4000/"]
       interval: 10s
       timeout: 3s
       retries: 5
@@ -35,26 +37,64 @@ services:
       dockerfile: awe-backend/Dockerfile
     restart: unless-stopped
     environment:
-      AWE_ENVIRONMENT: production
+      AWE_ENVIRONMENT: ${AWE_ENVIRONMENT:-production}
       AWE_WORKSPACE_DIR: /data/projects
+      AWE_DOCKER_WORKSPACE_DIR: /home/user/AWE/.awe-projects
       AWE_LEGACY_SRC_DIR: /app/src
       AWE_MONGO_URI: mongodb://mongo:27017
       AWE_AUTH_FILE: /data/auth/account.json
       AWE_SECRET_KEY: ${AWE_SECRET_KEY:?Set AWE_SECRET_KEY in .env}
       AWE_ADMIN_PASSWORD_HASH: ${AWE_ADMIN_PASSWORD_HASH:-}
-      AWE_SECURE_COOKIES: "true"
+      AWE_SECURE_COOKIES: ${AWE_SECURE_COOKIES:-true}
+      AWE_BROWSER_PROXY_ENABLED: ${AWE_BROWSER_PROXY_ENABLED:-true}
+      AWE_BROWSER_PROXY_HOST: ${AWE_BROWSER_PROXY_HOST:-proxy}
+      AWE_BROWSER_PROXY_PORT: ${AWE_BROWSER_PROXY_PORT:-8080}
+      AWE_PROXY_CONTROL_HOST: ${AWE_PROXY_CONTROL_HOST:-proxy}
+      AWE_PROXY_CONTROL_PORT: ${AWE_PROXY_CONTROL_PORT:-8765}
+      AWE_PROXY_ADVERTISE_HOST: ${AWE_PROXY_ADVERTISE_HOST:-localhost}
+      AWE_PROXY_PUBLIC_PORT: ${AWE_PROXY_PUBLIC_PORT:-8080}
       AWE_ALLOWED_ORIGINS: '["https://${AWE_HOST:-localhost}"]'
     volumes:
-      - awe_projects:/data/projects
+      - ./.awe-projects:/data/projects
       - awe_auth:/data/auth
+      - proxy_data:/data/proxy:ro
       # Pipeline tools require Docker control. Never expose the backend publicly;
       # only the authenticated gateway should be reachable.
       - /var/run/docker.sock:/var/run/docker.sock
     depends_on:
       mongo:
         condition: service_healthy
+      proxy:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/v1/health')"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+
+  proxy:
+    build:
+      context: .
+      dockerfile: dockerfiles/Dockerfile.proxy
+    restart: unless-stopped
+    environment:
+      AWE_MONGO_URI: mongodb://mongo:27017
+      AWE_PROXY_HOST: 0.0.0.0
+      AWE_PROXY_CONTROL_HOST: 0.0.0.0
+      AWE_PROXY_CONTROL_PORT: ${AWE_PROXY_CONTROL_PORT:-8765}
+      HOME: /data/proxy
+    volumes:
+      - proxy_data:/data/proxy
+    depends_on:
+      mongo:
+        condition: service_healthy
+    expose:
+      - "8080"
+      - "8765"
+    ports:
+      - "${AWE_PROXY_PUBLIC_PORT:-8080}:8080"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import socket; s=socket.create_connection(('127.0.0.1',8080),2); s.close()"]
       interval: 10s
       timeout: 3s
       retries: 10
@@ -77,3 +117,4 @@ volumes:
   mongo_data:
   caddy_data:
   caddy_config:
+  proxy_data:

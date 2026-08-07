@@ -47,7 +47,19 @@ import time
 from pathlib import PurePosixPath
 from urllib.parse import urlsplit, parse_qs
 
-from PySide6.QtCore import QThread, Signal
+try:
+    from PySide6.QtCore import QThread, Signal
+except ModuleNotFoundError:  # The extraction engine is also used by the web backend.
+    class QThread:  # pragma: no cover - only the Qt wrapper instantiates this.
+        def __init__(self, *args, **kwargs):
+            super().__init__()
+
+    class Signal:  # pragma: no cover
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def emit(self, *args, **kwargs):
+            raise RuntimeError("Qt signals require PySide6")
 
 from containers.results.models import (
     SubdomainResult, LiveHost, EndpointResult, ParamResult, CdnResult,
@@ -148,6 +160,7 @@ class TrafficExtractor:
         batch_pause_ms: int = _DEFAULT_BATCH_PAUSE_MS,
         max_request_body_scan_chars: int = _MAX_REQUEST_BODY_SCAN_CHARS,
         max_secret_scan_chars: int = _MAX_SECRET_SCAN_CHARS,
+        query: dict | None = None,
     ) -> tuple[dict[str, list[BaseResult]], dict[str, list[dict]]]:
         """Returns (results, review_candidates):
           results           — {category: [BaseResult, ...]} for the Results page
@@ -161,7 +174,7 @@ class TrafficExtractor:
             return results, review_candidates
 
         try:
-            all_hosts = col.distinct("host")
+            all_hosts = col.distinct("host", query or {})
         except Exception as exc:
             log.warning("TrafficExtractor: cannot query hosts: %s", exc)
             return results, review_candidates
@@ -182,9 +195,12 @@ class TrafficExtractor:
             # explicitly tagged None — excludes traffic AWE's own testing
             # panels (GraphQL/WebSocket/etc.) generated about themselves so
             # it never re-enters Results or the review queues. See proxy._markers.
+            match = {"host": {"$in": in_scope}, "tool_source": None}
+            if query:
+                match.update(query)
             cursor = col.aggregate(
                 [
-                    {"$match": {"host": {"$in": in_scope}, "tool_source": None}},
+                    {"$match": match},
                     {"$project": {
                         "host": 1,
                         "method": 1,
