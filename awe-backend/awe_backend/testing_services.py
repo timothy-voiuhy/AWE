@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import itertools
+import re
 import sys
 import time
 from pathlib import Path
@@ -12,17 +14,44 @@ from .schemas import IntruderRequest, IntruderResult
 
 
 class IntruderService:
+    _POSITION_RE = re.compile(r"§([^§]*)§")
+
+    @classmethod
+    def generate_requests(cls, request: IntruderRequest) -> list[tuple[list[str], str, str]]:
+        marker = "\x00AWE_BODY\x00"
+        parts = cls._POSITION_RE.split(f"{request.url}{marker}{request.body}")
+        static, originals = parts[0::2], parts[1::2]
+        if not originals:
+            return [([payload], request.url, request.body) for payload in request.payloads]
+        sets = [values for values in (request.payload_sets or [request.payloads]) if values]
+        rows: list[list[str]] = []
+        if request.attack_mode == "sniper":
+            for position in range(len(originals)):
+                for payload in sets[0] if sets else []:
+                    row = list(originals); row[position] = payload; rows.append(row)
+        elif request.attack_mode == "battering_ram":
+            for payload in sets[0] if sets else []: rows.append([payload] * len(originals))
+        elif request.attack_mode == "pitchfork":
+            rows = [list(row) for row in zip(*[sets[i] if i < len(sets) else [] for i in range(len(originals))])]
+        else:
+            rows = [list(row) for row in itertools.product(*[sets[i] if i < len(sets) else [""] for i in range(len(originals))])]
+        generated = []
+        for row in rows:
+            rebuilt = ''.join(segment + (row[i] if i < len(row) else originals[i]) for i, segment in enumerate(static[:-1])) + static[-1]
+            url, _, body = rebuilt.partition(marker)
+            generated.append((row, url, body))
+        return generated
+
     async def run(self, request: IntruderRequest, cancel_event=None, progress=None) -> list[IntruderResult]:
-        if request.placeholder not in request.url and request.placeholder not in request.body:
-            raise ValueError("Placeholder must appear in the URL or request body")
+        generated = self.generate_requests(request)
+        if not generated: raise ValueError("No payload requests could be generated")
         semaphore = asyncio.Semaphore(request.concurrency)
         async with httpx.AsyncClient(follow_redirects=request.follow_redirects, verify=True) as client:
-            async def execute(sequence: int, payload: str) -> IntruderResult:
+            async def execute(sequence: int, used: list[str], url: str, body: str) -> IntruderResult:
               async with semaphore:
                 if cancel_event and cancel_event.is_set(): return None
                 started = time.perf_counter()
-                url = request.url.replace(request.placeholder, payload)
-                body = request.body.replace(request.placeholder, payload)
+                payload = " | ".join(str(item) for item in used)
                 try:
                     response = await client.request(
                         request.method,
@@ -34,7 +63,7 @@ class IntruderService:
                     result=IntruderResult(sequence=sequence, payload=payload, status_code=response.status_code, length=len(response.content), elapsed_ms=int((time.perf_counter() - started) * 1000),request_url=url,request_body=body,response_headers=dict(response.headers),response_body=response.text[:1_000_000]);progress and progress(result);return result
                 except httpx.HTTPError as exc:
                     result=IntruderResult(sequence=sequence, payload=payload, status_code=0, length=0, elapsed_ms=int((time.perf_counter() - started) * 1000), error=str(exc)[:300],request_url=url,request_body=body);progress and progress(result);return result
-            results = await asyncio.gather(*(execute(sequence, payload) for sequence, payload in enumerate(request.payloads, 1)))
+            results = await asyncio.gather(*(execute(sequence, used, url, body) for sequence, (used, url, body) in enumerate(generated, 1)))
         return sorted([item for item in results if item is not None], key=lambda item: item.sequence)
 
 

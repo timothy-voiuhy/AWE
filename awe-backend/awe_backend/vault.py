@@ -77,6 +77,9 @@ class VaultService:
     def items(self, category_id: str) -> list[dict]:
         return sorted([item for item in self._load()["items"] if item.get("category_id") == category_id], key=lambda item: item.get("created_at", ""))
 
+    def get_item(self, item_id: str) -> dict | None:
+        return next((item for item in self._load()["items"] if item.get("id") == item_id), None)
+
     def add_item(self, category_id: str, item_type: str, title: str, **values) -> dict:
         item = {"id": _id(), "category_id": category_id, "type": item_type, "title": title.strip() or item_type.title(), "created_at": _now(), **values}
         self._load()["items"].append(item); self._save(); return item

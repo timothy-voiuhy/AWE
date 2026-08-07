@@ -2,6 +2,7 @@ import asyncio
 import base64
 import fnmatch
 import re
+import docker.errors
 from pathlib import Path
 from functools import lru_cache
 from urllib.parse import urlsplit
@@ -52,6 +53,7 @@ from .schemas import (
     VaultItem,
     VaultItemInput,
     VaultCategory, VaultCategoryInput, VaultItemRecord, VaultItemRecordInput,
+    JwtScanRequest,
     IntruderRequest,
     IntruderResult,
     IntruderJob,
@@ -70,6 +72,30 @@ from .schemas import (
 )
 
 router = APIRouter()
+
+@router.post("/jwt/scan", tags=["jwt"])
+def scan_jwt(payload: JwtScanRequest) -> dict:
+    """Run jwt_tool in an isolated Docker container, matching the Qt workbench."""
+    args = [payload.token]
+    if payload.url and payload.mode != "decode":
+        args += ["-t", payload.url]
+        if payload.cookie:
+            args += ["-rc", f"{payload.cookie}={payload.token}"]
+        elif payload.header:
+            args += ["-rh", f"{payload.header} {payload.token}"]
+        args += ["-M", payload.mode]
+    try:
+        client = docker.from_env()
+        output = client.containers.run("ticarpi/jwt_tool", args=args, remove=True, stdout=True, stderr=True)
+    except docker.errors.ImageNotFound:
+        try:
+            client.images.pull("ticarpi/jwt_tool")
+            output = client.containers.run("ticarpi/jwt_tool", args=args, remove=True, stdout=True, stderr=True)
+        except Exception as exc:
+            raise HTTPException(status_code=503, detail=f"jwt_tool unavailable: {exc}") from exc
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"jwt_tool failed: {exc}") from exc
+    return {"output": output.decode("utf-8", errors="replace") if isinstance(output, bytes) else str(output)}
 
 @router.get("/proxy/info", tags=["proxy"])
 def proxy_info(settings: Settings = Depends(get_settings)) -> dict:
@@ -1008,6 +1034,17 @@ async def upload_vault_file(category_id: str, upload: UploadFile = File(...), va
     return VaultItemRecord.model_validate(vault.add_file(category_id, upload.filename or "file", content))
 
 
+@router.get("/vault/items/{item_id}/file", tags=["vault"])
+def download_vault_file(item_id: str, vault: VaultService = Depends(get_vault_service)) -> FileResponse:
+    item = vault.get_item(item_id)
+    if not item or item.get("type") not in {"image", "pdf", "file"}:
+        raise HTTPException(status_code=404, detail="Vault file not found")
+    path = vault.file_path(item)
+    if path is None or not path.is_file():
+        raise HTTPException(status_code=404, detail="Vault file not found")
+    return FileResponse(path, filename=item.get("title") or "download")
+
+
 @router.patch("/vault/items/{item_id}", response_model=VaultItemRecord, tags=["vault"])
 def update_vault_item_record(item_id: str, payload: VaultItemRecordInput, vault: VaultService = Depends(get_vault_service)) -> VaultItemRecord:
     item = vault.update_item(item_id, title=payload.title, url=payload.url, text=payload.text, lang=payload.lang)
@@ -1032,7 +1069,7 @@ async def run_intruder(
         scope = store.get_scope(project_id)
     except ProjectNotFoundError as exc:
         raise HTTPException(status_code=404, detail="Project not found") from exc
-    urls = [payload.url.replace(payload.placeholder, value) for value in payload.payloads]
+    urls = [url for _, url, _ in service.generate_requests(payload)]
     if not all(_host_in_project_scope(url, project.target, scope) for url in urls):
         raise HTTPException(status_code=403, detail="Every generated URL must be inside the project scope")
     try:
@@ -1041,10 +1078,10 @@ async def run_intruder(
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 @router.post("/projects/{project_id}/intruder/jobs",response_model=IntruderJob,status_code=202,tags=["testing"])
-def start_intruder_job(project_id:str,payload:IntruderRequest,store:ProjectStore=Depends(get_project_store),manager:IntruderJobManager=Depends(get_intruder_job_manager))->IntruderJob:
+def start_intruder_job(project_id:str,payload:IntruderRequest,store:ProjectStore=Depends(get_project_store),manager:IntruderJobManager=Depends(get_intruder_job_manager),service:IntruderService=Depends(get_intruder_service))->IntruderJob:
     try:project=store.get(project_id);scope=store.get_scope(project_id)
     except ProjectNotFoundError as exc:raise HTTPException(status_code=404,detail="Project not found") from exc
-    if not all(_host_in_project_scope(payload.url.replace(payload.placeholder,value),project.target,scope) for value in payload.payloads):raise HTTPException(status_code=403,detail="Every generated URL must be inside the project scope")
+    if not all(_host_in_project_scope(url,project.target,scope) for _,url,_ in service.generate_requests(payload)):raise HTTPException(status_code=403,detail="Every generated URL must be inside the project scope")
     return manager.start(project_id,payload)
 
 @router.get("/projects/{project_id}/intruder/jobs",response_model=list[IntruderJob],tags=["testing"])

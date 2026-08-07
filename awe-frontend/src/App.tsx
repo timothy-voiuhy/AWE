@@ -27,26 +27,26 @@ import { DockerManagerPage } from './features/operations/DockerManagerPage'
 import { PipelinePage } from './features/pipeline/PipelinePage'
 
 const workspaceNav = [
-  { path: '', label: 'Overview', glyph: '⌂' },
-  { path: '/browser', label: 'Browser', glyph: '◉' },
-  { path: '/pipeline', label: 'Pipeline', glyph: '⚡' },
+  { path: '', label: 'Overview', glyph: '⌂', icon: '/assets/icons/target.png' },
+  { path: '/browser', label: 'Browser', glyph: '◉', icon: '/assets/icons/browser.png' },
+  { path: '/pipeline', label: 'Pipeline', glyph: '⚡', icon: '/assets/icons/pipeline.png' },
   { path: '/ai', label: 'AI Chat', glyph: '✦' },
   { path: '/terminal', label: 'Terminal', glyph: '>_' },
-  { path: '/results', label: 'Results', glyph: '◈' },
-  { path: '/history', label: 'History', glyph: '⊟' },
-  { path: '/sitemap', label: 'Site Map', glyph: '◫' },
-  { path: '/network', label: 'Network', glyph: '⊗' },
-  { path: '/repeater', label: 'Repeater', glyph: '↻' },
-  { path: '/intruder', label: 'Intruder', glyph: '⚡' },
-  { path: '/intercept', label: 'Intercept', glyph: '⏸' },
-  { path: '/websockets', label: 'WebSockets', glyph: '⇆' },
-  { path: '/decoder', label: 'Decoder', glyph: '⊞' },
-  { path: '/comparer', label: 'Comparer', glyph: '⇌' },
-  { path: '/jwt', label: 'JWT', glyph: '⚿' },
-  { path: '/graphql', label: 'GraphQL', glyph: '⬡' },
-  { path: '/docker', label: 'Docker', glyph: '⬡' },
-  { path: '/vault', label: 'Vault', glyph: '⛁' },
-  { path: '/settings', label: 'Settings', glyph: '⚙' },
+  { path: '/results', label: 'Results', glyph: '◈', icon: '/assets/icons/results.png' },
+  { path: '/history', label: 'History', glyph: '⊟', icon: '/assets/icons/http.png' },
+  { path: '/sitemap', label: 'Site Map', glyph: '◫', icon: '/assets/icons/sitemap.png' },
+  { path: '/network', label: 'Network', glyph: '⊗', icon: '/assets/icons/network.png' },
+  { path: '/repeater', label: 'Repeater', glyph: '↻', icon: '/assets/icons/repeater.png' },
+  { path: '/intruder', label: 'Intruder', glyph: '⚡', icon: '/assets/icons/intruder.png' },
+  { path: '/intercept', label: 'Intercept', glyph: '⏸', icon: '/assets/icons/intercept.png' },
+  { path: '/websockets', label: 'WebSockets', glyph: '⇆', icon: '/assets/icons/websocket.png' },
+  { path: '/decoder', label: 'Decoder', glyph: '⊞', icon: '/assets/icons/encoding.png' },
+  { path: '/comparer', label: 'Comparer', glyph: '⇌', icon: '/assets/icons/comparer.png' },
+  { path: '/jwt', label: 'JWT', glyph: '⚿', icon: '/assets/icons/jwt.png' },
+  { path: '/graphql', label: 'GraphQL', glyph: '⬡', icon: '/assets/icons/graphql.png' },
+  { path: '/docker', label: 'Docker', glyph: '⬡', icon: '/assets/icons/docker.png' },
+  { path: '/vault', label: 'Vault', glyph: '⛁', icon: '/assets/icons/notes.png' },
+  { path: '/settings', label: 'Settings', glyph: '⚙', icon: '/assets/icons/settings-512.png' },
 ]
 
 export function App() {
@@ -105,9 +105,9 @@ export function App() {
       <aside className={`sidebar ${sidebarOpen ? 'sidebar-open' : ''} ${sidebarCollapsed ? 'sidebar-collapsed' : ''}`}>
         <div className="brand"><span>AW</span><strong>AWE</strong><button className="sidebar-toggle" onClick={() => setSidebarCollapsed((value) => !value)}>{sidebarCollapsed ? '›' : '‹'}</button><button className="mobile-close" onClick={() => setSidebarOpen(false)}>×</button></div>
         <nav className="primary-nav">
-          <NavLink onClick={() => setSidebarOpen(false)} title="Projects" className={({ isActive }) => isActive && !projectId ? 'active' : ''} to="/projects"><span>◫</span><em>Projects</em></NavLink>
-          <NavLink onClick={() => setSidebarOpen(false)} title="Vault" className={({ isActive }) => isActive ? 'active' : ''} to="/vault"><span>⛁</span><em>Vault</em></NavLink>
-          {projectId && <div className="workspace-nav"><small>Workspace</small>{workspaceNav.map((item) => <NavLink onClick={() => setSidebarOpen(false)} title={item.label} end={!item.path} className={({ isActive }) => isActive ? 'active' : ''} to={`/projects/${projectId}${item.path}`} key={item.label}><span>{item.glyph}</span><em>{item.label}</em></NavLink>)}</div>}
+          <NavLink onClick={() => setSidebarOpen(false)} title="Projects" className={({ isActive }) => isActive && !projectId ? 'active' : ''} to="/projects"><img src="/assets/icons/target.png" alt="" /><em>Projects</em></NavLink>
+          <NavLink onClick={() => setSidebarOpen(false)} title="Vault" className={({ isActive }) => isActive ? 'active' : ''} to="/vault"><img src="/assets/icons/notes.png" alt="" /><em>Vault</em></NavLink>
+          {projectId && <div className="workspace-nav"><small>Workspace</small>{workspaceNav.map((item) => <NavLink onClick={() => setSidebarOpen(false)} title={item.label} end={!item.path} className={({ isActive }) => isActive ? 'active' : ''} to={`/projects/${projectId}${item.path}`} key={item.label}>{item.icon ? <img src={item.icon} alt="" /> : <span>{item.glyph}</span>}<em>{item.label}</em></NavLink>)}</div>}
         </nav>
         <button className="logout-button" title="Sign out" onClick={() => logout.mutate()}><span>⇥</span><em>Sign out</em></button>
         <small>Attack Workspace Environment</small>

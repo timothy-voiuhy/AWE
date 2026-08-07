@@ -297,12 +297,22 @@ class VaultItemRecordInput(BaseModel):
     lang: str = Field(default="txt", max_length=32)
 
 
+class JwtScanRequest(BaseModel):
+    token: str = Field(min_length=10, max_length=20000)
+    url: str = Field(default="", max_length=4096)
+    cookie: str = Field(default="jwt", max_length=200)
+    header: str = Field(default="Authorization: Bearer", max_length=300)
+    mode: Literal["decode", "pb", "at", "er", "as", "rs", "ki"] = "decode"
+
+
 class IntruderRequest(BaseModel):
     method: Literal["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"] = "GET"
     url: str = Field(min_length=1, max_length=4096)
     headers: dict[str, str] = Field(default_factory=dict)
     body: str = Field(default="", max_length=2_000_000)
     payloads: list[str] = Field(min_length=1, max_length=500)
+    payload_sets: list[list[str]] = Field(default_factory=list, max_length=25)
+    attack_mode: Literal["sniper", "battering_ram", "pitchfork", "cluster_bomb"] = "sniper"
     placeholder: str = Field(default="§payload§", min_length=1, max_length=50)
     concurrency: int = Field(default=5, ge=1, le=25)
     timeout_seconds: float = Field(default=20, ge=1, le=120)

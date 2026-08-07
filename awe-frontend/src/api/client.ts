@@ -111,6 +111,7 @@ export interface DockerToolInput { key:string;display_name:string;category:strin
 export interface VaultItem { id:string;name:string;value:string;kind:'credential'|'api_key'|'token'|'note';created_at:string }
 export interface VaultCategory { id:string;name:string;accent:string;created_at:string;order:number }
 export interface VaultItemRecord { id:string;category_id:string;type:'image'|'pdf'|'file'|'link'|'note';title:string;created_at:string;url?:string;text?:string;lang?:string;filename?:string }
+export interface JwtScanResult { output:string }
 export interface IntruderResult { sequence:number;payload:string;status_code:number;length:number;elapsed_ms:number;error:string;request_url:string;request_body:string;response_headers:Record<string,string>;response_body:string }
 export interface IntruderJob { id:string;project_id:string;status:'queued'|'running'|'cancelling'|'cancelled'|'completed'|'failed';created_at:string;completed_at:string|null;total:number;completed:number;error:string;results:IntruderResult[] }
 export interface WebSocketConnection { id:string;host:string;path:string;opened_at:string;closed_at:string|null;frame_count:number }
@@ -136,11 +137,12 @@ class ApiError extends Error {
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const csrf = document.cookie.split('; ').find((item) => item.startsWith('awe_csrf='))?.split('=')[1]
+  const isMultipart = typeof FormData !== 'undefined' && init?.body instanceof FormData
   const response = await fetch(`/api/v1${path}`, {
     ...init,
     credentials: 'include',
     headers: {
-      'Content-Type': 'application/json',
+      ...(isMultipart ? {} : { 'Content-Type': 'application/json' }),
       ...(csrf ? { 'X-AWE-CSRF': decodeURIComponent(csrf) } : {}),
       ...init?.headers,
     },
@@ -238,12 +240,16 @@ export const api = {
   listVaultCategories:()=>request<VaultCategory[]>('/vault/categories'),
   createVaultCategory:(data:{name:string;accent:string})=>request<VaultCategory>('/vault/categories',{method:'POST',body:JSON.stringify(data)}),
   deleteVaultCategory:(id:string)=>request<void>(`/vault/categories/${id}`,{method:'DELETE'}),
+  updateVaultCategory:(id:string,data:{name:string;accent:string})=>request<VaultCategory>(`/vault/categories/${id}`,{method:'PATCH',body:JSON.stringify(data)}),
   listVaultItems:(category:string)=>request<VaultItemRecord[]>(`/vault/categories/${category}/items`),
   createVaultLink:(category:string,data:{type:'link';title:string;url:string})=>request<VaultItemRecord>(`/vault/categories/${category}/items`,{method:'POST',body:JSON.stringify(data)}),
   createVaultNote:(category:string,data:{type:'note';title:string;text:string;lang:string})=>request<VaultItemRecord>(`/vault/categories/${category}/items`,{method:'POST',body:JSON.stringify(data)}),
+  uploadVaultFile:async(category:string,file:File)=>{const data=new FormData();data.append('upload',file);return request<VaultItemRecord>(`/vault/categories/${category}/files`,{method:'POST',body:data})},
+  updateVaultItem:(id:string,data:{type:'link'|'note';title?:string;url?:string;text?:string;lang?:string})=>request<VaultItemRecord>(`/vault/items/${id}`,{method:'PATCH',body:JSON.stringify(data)}),
   deleteVaultItem:(id:string)=>request<void>(`/vault/items/${id}`,{method:'DELETE'}),
-  runIntruder:async(id:string,data:{method:string;url:string;headers:Record<string,string>;body:string;payloads:string[];placeholder:string;concurrency?:number;timeout_seconds?:number;follow_redirects?:boolean})=>{let job=await request<IntruderJob>(`/projects/${id}/intruder/jobs`,{method:'POST',body:JSON.stringify(data)});while(['queued','running','cancelling'].includes(job.status)){await new Promise(resolve=>setTimeout(resolve,350));job=await request<IntruderJob>(`/projects/${id}/intruder/jobs/${job.id}`)}if(job.status==='failed')throw new Error(job.error||'Intruder job failed');return job.results},
-  startIntruderJob:(id:string,data:{method:string;url:string;headers:Record<string,string>;body:string;payloads:string[];placeholder:string;concurrency?:number;timeout_seconds?:number;follow_redirects?:boolean})=>request<IntruderJob>(`/projects/${id}/intruder/jobs`,{method:'POST',body:JSON.stringify(data)}),
+  scanJwt:(data:{token:string;url?:string;cookie?:string;header?:string;mode?:string})=>request<JwtScanResult>('/jwt/scan',{method:'POST',body:JSON.stringify(data)}),
+  runIntruder:async(id:string,data:{method:string;url:string;headers:Record<string,string>;body:string;payloads:string[];payload_sets?:string[][];attack_mode?:string;placeholder:string;concurrency?:number;timeout_seconds?:number;follow_redirects?:boolean})=>{let job=await request<IntruderJob>(`/projects/${id}/intruder/jobs`,{method:'POST',body:JSON.stringify(data)});while(['queued','running','cancelling'].includes(job.status)){await new Promise(resolve=>setTimeout(resolve,350));job=await request<IntruderJob>(`/projects/${id}/intruder/jobs/${job.id}`)}if(job.status==='failed')throw new Error(job.error||'Intruder job failed');return job.results},
+  startIntruderJob:(id:string,data:{method:string;url:string;headers:Record<string,string>;body:string;payloads:string[];payload_sets?:string[][];attack_mode?:string;placeholder:string;concurrency?:number;timeout_seconds?:number;follow_redirects?:boolean})=>request<IntruderJob>(`/projects/${id}/intruder/jobs`,{method:'POST',body:JSON.stringify(data)}),
   listIntruderJobs:(id:string)=>request<IntruderJob[]>(`/projects/${id}/intruder/jobs`),
   getIntruderJob:(id:string,job:string)=>request<IntruderJob>(`/projects/${id}/intruder/jobs/${job}`),
   cancelIntruderJob:(id:string,job:string)=>request<IntruderJob>(`/projects/${id}/intruder/jobs/${job}/cancel`,{method:'POST'}),

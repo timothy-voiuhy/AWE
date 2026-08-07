@@ -57,6 +57,7 @@ services:
     volumes:
       - ./.awe-projects:/data/projects
       - awe_auth:/data/auth
+      - awe_vault:/root/.config/awe/vault
       - proxy_data:/data/proxy:ro
       # Pipeline tools require Docker control. Never expose the backend publicly;
       # only the authenticated gateway should be reachable.
@@ -114,6 +115,7 @@ services:
 volumes:
   awe_projects:
   awe_auth:
+  awe_vault:
   mongo_data:
   caddy_data:
   caddy_config:

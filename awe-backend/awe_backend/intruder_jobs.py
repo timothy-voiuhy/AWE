@@ -44,7 +44,7 @@ class IntruderJobManager:
     def start(self, project_id: str, request: IntruderRequest) -> IntruderJob:
         job = IntruderJob(id=secrets.token_hex(12), project_id=project_id,
                           status="queued", created_at=datetime.now(timezone.utc),
-                          total=len(request.payloads))
+                          total=len(self.service.generate_requests(request)))
         self._db(project_id).intruder_jobs.insert_one({
             "_id": job.id, "id": job.id, "project_id": project_id,
             "status": job.status, "created_at": job.created_at.isoformat(),
