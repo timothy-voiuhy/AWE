@@ -45,6 +45,7 @@ from .schemas import (
     PipelineToolRun,
     StoredResult,
     TrafficEntry,
+    NetworkGraph, NetworkNode, NetworkEdge, NetworkManualNode,
     RepeaterRequest,
     RepeaterResponse,
     ProjectSettings,
@@ -622,12 +623,99 @@ def _traffic_entry(doc: dict) -> TrafficEntry:
     return TrafficEntry.model_validate({**doc, "id": str(doc["_id"])})
 
 
+def _traffic_summary(doc: dict) -> TrafficEntry:
+    """Build the list representation without transferring captured bodies.
+
+    Traffic bodies can be hundreds of kilobytes each.  The list view only
+    needs request/response metadata; the full document is still available
+    through GET /traffic/{traffic_id} when the user selects an entry.
+    """
+    value = {**doc, "id": str(doc["_id"])}
+    for field in ("request", "response"):
+        message = dict(value.get(field) or {})
+        body = message.pop("body", "")
+        if isinstance(body, str):
+            message["body_length"] = len(body.encode("utf-8"))
+        message.pop("body_encoding", None)
+        message.pop("body_truncated", None)
+        if field == "request":
+            message.pop("headers", None)
+        else:
+            headers = message.get("headers")
+            if isinstance(headers, dict):
+                message["headers"] = {
+                    key: header_value
+                    for key, header_value in headers.items()
+                    if key.lower() in {"content-type", "content-length"}
+                }
+        value[field] = message
+    return TrafficEntry.model_validate(value)
+
+
+def _network_graph(project_dir: Path, target: str, repositories: LegacyRepositoryFactory) -> NetworkGraph:
+    """Build the same typed attack-surface graph used by the Qt client."""
+    repo = repositories(project_dir); nodes: dict[str, NetworkNode] = {}; edges: dict[tuple[str,str,str], NetworkEdge] = {}
+    def node(nid: str, kind: str, label: str, data: dict | None = None):
+        if nid not in nodes: nodes[nid] = NetworkNode(id=nid, kind=kind, label=label, data=data or {})
+        elif data:
+            nodes[nid].data.update({k:v for k,v in data.items() if v not in (None, "", [], {})})
+    def edge(src: str, dst: str, kind: str, label: str = ""):
+        if src in nodes and dst in nodes: edges[(src,dst,kind)] = NetworkEdge(source_id=src,target_id=dst,kind=kind,label=label)
+    root=f"target:{target}"; node(root,"target",target,{"domain":target})
+    default=f"subdomain:{target}"; node(default,"subdomain",target,{"domain":target}); edge(root,default,"has_subdomain")
+    for session in sorted(repo.list_sessions(limit=0), key=lambda x:x.get("started_at", "")):
+        sid=session["id"]
+        for category in ("subdomain","portscan","http","cdn","vuln","osint","crawl","params","info","custom"):
+            for result in repo.get_results(sid, category):
+                d=result.get("data",{}); sources=result.get("sources",[])
+                if category=="subdomain" and d.get("domain"):
+                    dom=d["domain"]; sid2=f"subdomain:{dom}"; node(sid2,"subdomain",dom,{"domain":dom,"ips":d.get("ip_addresses",[]),"sources":sources}); edge(root,sid2,"has_subdomain")
+                    for ip in d.get("ip_addresses",[]): node(f"ip:{ip}","ip",ip,{"ip":ip}); edge(sid2,f"ip:{ip}","resolves_to")
+                elif category=="portscan" and d.get("host") and d.get("port"):
+                    host=str(d["host"]); ip=f"ip:{host}"; node(ip,"ip",host,{"ip":host}); pid=f"port:{host}:{d['port']}"; node(pid,"port",f"{d['port']}/{d.get('protocol','tcp')} {d.get('service','')}",d); edge(ip,pid,"has_port")
+                elif category=="http" and d.get("url"):
+                    parsed=urlsplit(d["url"]); host=parsed.hostname or ""; sub=f"subdomain:{host}"; node(sub,"subdomain",host,{"domain":host,"live":True,"status":d.get("status_code"),"title":d.get("title","")}); edge(root,sub,"has_subdomain")
+                    for tech in d.get("technologies",[]): tid=f"tech:{tech}"; node(tid,"tech",tech,{"tech":tech}); edge(sub,tid,"uses_tech")
+                    port=int(d.get("port") or (443 if parsed.scheme=="https" else 80)); pid=f"port:{host}:{port}"; node(pid,"port",f"{port}/tcp",{"host":host,"port":port,"url":d["url"],"status":d.get("status_code")}); edge(sub,pid,"has_port")
+                elif category=="cdn" and d.get("provider"):
+                    sub=f"subdomain:{d.get('subdomain',target)}"; node(sub,"subdomain",d.get("subdomain",target),{"domain":d.get("subdomain",target)}); cid=f"cdn:{d['provider']}:{d.get('subdomain',target)}"; node(cid,"cdn",d["provider"],d); edge(sub,cid,"proxied_by")
+                elif category=="vuln" and d.get("name"):
+                    host=urlsplit(d.get("url","")).hostname or target; sub=f"subdomain:{host}"; node(sub,"subdomain",host,{"domain":host}); vid=f"vuln:{d.get('template_id',d['name'])}:{host}"; node(vid,"vuln",d["name"],d); edge(sub,vid,"has_vuln")
+                elif category=="osint" and d.get("value"):
+                    oid=f"osint:{d.get('result_type','hit')}:{d['value']}"; node(oid,"osint",str(d['value'])[:80],d); edge(default,oid,"is_osint")
+                elif category=="crawl" and d.get("url"):
+                    parsed=urlsplit(d["url"]); host=parsed.hostname or target; sub=f"subdomain:{host}"; node(sub,"subdomain",host,{"domain":host}); eid=f"endpoint:{d.get('method','GET')}:{d['url']}"; node(eid,"endpoint",f"{d.get('method','GET')} {parsed.path or '/'}",d); edge(sub,eid,"has_endpoint")
+                elif category=="params" and d.get("name"):
+                    eid=f"endpoint:{d.get('method','GET')}:{d.get('endpoint','')}"; pid=f"param:{eid}:{d['name']}"; node(pid,"param",str(d['name']),d); edge(eid,pid,"has_param")
+                elif category=="info" and d.get("content"):
+                    parent=d.get("parent_node_id",""); iid=f"info:{parent}"; node(iid,"info",str(d["content"]).splitlines()[0][:80],d); edge(parent,iid,"annotates")
+                elif category=="custom" and d.get("label"):
+                    parent=d.get("parent_node_id",""); cid=f"custom:{result.get('result_key',d['label'])}"; node(cid,"custom",d["label"],d); edge(parent,cid,"linked_to")
+    for item in repo._db.results.find({"session_id":{"$exists":False},"project_id":project_dir.name,"category":"network_manual"}):
+        d=item.get("data",{}); node(item.get("result_key",d.get("label","manual")),d.get("kind","custom"),d.get("label","manual"),d); edge(d.get("parent_id",""),item.get("result_key",""),"linked_to")
+    return NetworkGraph(nodes=list(nodes.values()), edges=list(edges.values()))
+
+
+@router.get("/projects/{project_id}/network", response_model=NetworkGraph, tags=["network"])
+def get_network_graph(project_id: str, store: ProjectStore = Depends(get_project_store), repositories: LegacyRepositoryFactory = Depends(get_repository_factory)) -> NetworkGraph:
+    try:
+        project=store.get(project_id); return _network_graph(store.project_dir(project_id), project.target, repositories)
+    except ProjectNotFoundError as exc: raise HTTPException(status_code=404, detail="Project not found") from exc
+
+
+@router.post("/projects/{project_id}/network/manual", response_model=NetworkNode, tags=["network"])
+def add_network_manual(project_id: str, payload: NetworkManualNode, store: ProjectStore = Depends(get_project_store), repositories: LegacyRepositoryFactory = Depends(get_repository_factory)) -> NetworkNode:
+    try:
+        project_dir=store.project_dir(project_id); repo=repositories(project_dir); key=f"manual:{payload.kind}:{payload.label}:{payload.parent_id}"; data={**payload.data,"kind":payload.kind,"label":payload.label,"parent_id":payload.parent_id}; repo._db.results.update_one({"project_id":project_id,"category":"network_manual","result_key":key},{"$set":{"project_id":project_id,"category":"network_manual","result_key":key,"data":data}},upsert=True); return NetworkNode(id=key,kind=payload.kind,label=payload.label,data=data)
+    except ProjectNotFoundError as exc: raise HTTPException(status_code=404, detail="Project not found") from exc
+
+
 @router.get("/projects/{project_id}/traffic", response_model=list[TrafficEntry], tags=["proxy"])
 def list_traffic(
     project_id: str,
     host: str | None = None,
     method: str | None = None,
-    limit: int = 200,
+    limit: int = 5000,
     store: ProjectStore = Depends(get_project_store),
     repositories: LegacyRepositoryFactory = Depends(get_repository_factory),
 ) -> list[TrafficEntry]:
@@ -638,8 +726,8 @@ def list_traffic(
             query["host"] = host
         if method:
             query["method"] = method.upper()
-        docs = repositories.traffic().find(query).sort("timestamp", -1).limit(max(1, min(limit, 1000)))
-        return [_traffic_entry(doc) for doc in docs]
+        docs = repositories.traffic().find(query).sort("timestamp", -1).limit(max(1, min(limit, 5000)))
+        return [_traffic_summary(doc) for doc in docs]
     except ProjectNotFoundError as exc:
         raise HTTPException(status_code=404, detail="Project not found") from exc
     except PyMongoError as exc:
@@ -1263,8 +1351,14 @@ async def browser_stream(project_id: str, session_id: str, websocket: WebSocket,
             for task in pending:
                 task.cancel()
             if tick_task in done:
-                state, image = await manager.screenshot(session_id)
-                await websocket.send_json({"type": "frame", "session": _browser_model(state).model_dump(mode="json"), "image": base64.b64encode(image).decode()})
+                try:
+                    state, image = await manager.screenshot(session_id)
+                    await websocket.send_json({"type": "frame", "session": _browser_model(state).model_dump(mode="json"), "image": base64.b64encode(image).decode()})
+                except Exception as exc:
+                    # A page can be between commits while Chromium is still
+                    # painting. Keep the stream alive so the next frame can
+                    # expose the partially loaded page instead of disconnecting.
+                    await websocket.send_json({"type": "error", "message": f"Browser frame delayed: {exc}"})
                 continue
             action = receive_task.result()
             if action.get("type") == "close":

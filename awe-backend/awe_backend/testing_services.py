@@ -22,7 +22,7 @@ class IntruderService:
         parts = cls._POSITION_RE.split(f"{request.url}{marker}{request.body}")
         static, originals = parts[0::2], parts[1::2]
         if not originals:
-            return [([payload], request.url, request.body) for payload in request.payloads]
+            return [([payload], request.url.replace(request.placeholder, payload), request.body.replace(request.placeholder, payload)) for payload in request.payloads]
         sets = [values for values in (request.payload_sets or [request.payloads]) if values]
         rows: list[list[str]] = []
         if request.attack_mode == "sniper":

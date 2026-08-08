@@ -99,6 +99,9 @@ export interface TrafficEntry {
   request: Record<string, unknown>
   response: Record<string, unknown>
 }
+export interface NetworkNode { id:string; kind:string; label:string; data:Record<string,unknown> }
+export interface NetworkEdge { source_id:string; target_id:string; kind:string; label:string }
+export interface NetworkGraph { nodes:NetworkNode[]; edges:NetworkEdge[] }
 
 export interface RepeaterResponse { status_code: number; reason: string; headers: Record<string, string>; body: string; elapsed_ms: number; body_truncated: boolean }
 export interface ProjectSettings { default_threads:number;default_rate_limit:number;default_concurrency:number;proxy_port:number;upstream_proxy:string }
@@ -207,6 +210,8 @@ export const api = {
   listResults: (projectId: string, sessionId: string) =>
     request<StoredResult[]>(`/projects/${projectId}/sessions/${sessionId}/results`),
   listTraffic: (projectId: string) => request<TrafficEntry[]>(`/projects/${projectId}/traffic`),
+  getNetworkGraph:(projectId:string)=>request<NetworkGraph>(`/projects/${projectId}/network`),
+  addNetworkManual:(projectId:string,data:{kind:string;label:string;parent_id?:string;data?:Record<string,unknown>})=>request<NetworkNode>(`/projects/${projectId}/network/manual`,{method:'POST',body:JSON.stringify(data)}),
   getTraffic: (projectId:string,trafficId:string)=>request<TrafficEntry>(`/projects/${projectId}/traffic/${trafficId}`),
   deleteTraffic: (projectId:string,trafficId:string)=>request<void>(`/projects/${projectId}/traffic/${trafficId}`,{method:'DELETE'}),
   deleteTrafficSubtree:(projectId:string,host:string,pathPrefix='')=>request<void>(`/projects/${projectId}/traffic?host=${encodeURIComponent(host)}&path_prefix=${encodeURIComponent(pathPrefix)}`,{method:'DELETE'}),

@@ -162,6 +162,32 @@ class TrafficEntry(BaseModel):
     response: dict = Field(default_factory=dict)
 
 
+class NetworkNode(BaseModel):
+    id: str
+    kind: str
+    label: str
+    data: dict = Field(default_factory=dict)
+
+
+class NetworkEdge(BaseModel):
+    source_id: str
+    target_id: str
+    kind: str
+    label: str = ""
+
+
+class NetworkGraph(BaseModel):
+    nodes: list[NetworkNode] = Field(default_factory=list)
+    edges: list[NetworkEdge] = Field(default_factory=list)
+
+
+class NetworkManualNode(BaseModel):
+    kind: Literal["subdomain", "ip", "port", "tech", "vuln", "osint", "endpoint", "cdn", "custom"]
+    label: str = Field(min_length=1, max_length=500)
+    parent_id: str = ""
+    data: dict = Field(default_factory=dict)
+
+
 class RepeaterRequest(BaseModel):
     method: Literal["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"] = "GET"
     url: str = Field(min_length=1, max_length=4096)
