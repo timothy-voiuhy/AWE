@@ -25,6 +25,7 @@ import { ResultsPage } from './features/results/ResultsPage'
 import { TerminalConfigPage } from './features/terminal/TerminalConfigPage'
 import { DockerManagerPage } from './features/operations/DockerManagerPage'
 import { PipelinePage } from './features/pipeline/PipelinePage'
+import { DatabasePage } from './features/operations/DatabasePage'
 
 const workspaceNav = [
   { path: '', label: 'Overview', glyph: '⌂', icon: '/assets/icons/target.png' },
@@ -107,6 +108,7 @@ export function App() {
         <nav className="primary-nav">
           <NavLink onClick={() => setSidebarOpen(false)} title="Projects" className={({ isActive }) => isActive && !projectId ? 'active' : ''} to="/projects"><img src="/assets/icons/target.png" alt="" /><em>Projects</em></NavLink>
           <NavLink onClick={() => setSidebarOpen(false)} title="Vault" className={({ isActive }) => isActive ? 'active' : ''} to="/vault"><img src="/assets/icons/notes.png" alt="" /><em>Vault</em></NavLink>
+          <NavLink onClick={() => setSidebarOpen(false)} title="Database" className={({ isActive }) => isActive ? 'active' : ''} to="/database"><span>▦</span><em>Database</em></NavLink>
           {projectId && <div className="workspace-nav"><small>Workspace</small>{workspaceNav.map((item) => <NavLink onClick={() => setSidebarOpen(false)} title={item.label} end={!item.path} className={({ isActive }) => isActive ? 'active' : ''} to={`/projects/${projectId}${item.path}`} key={item.label}>{item.icon ? <img src={item.icon} alt="" /> : <span>{item.glyph}</span>}<em>{item.label}</em></NavLink>)}</div>}
         </nav>
         <button className="logout-button" title="Sign out" onClick={() => logout.mutate()}><span>⇥</span><em>Sign out</em></button>
@@ -135,6 +137,7 @@ export function App() {
         <Route path="/projects/:projectId/docker" element={<DockerManagerPage />} />
         <Route path="/projects/:projectId/vault" element={<GlobalVaultPage />} />
         <Route path="/vault" element={<GlobalVaultPage />} />
+        <Route path="/database" element={<DatabasePage />} />
         <Route path="/projects/:projectId/settings" element={<SettingsPage />} />
         <Route path="*" element={<Navigate to="/projects" replace />} />
       </Routes>

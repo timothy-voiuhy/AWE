@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useRef, useState } from 'react'
+import { ChangeEvent, FormEvent, useEffect, useRef, useState } from 'react'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import '@xterm/xterm/css/xterm.css'
@@ -6,11 +6,19 @@ import { useMutation, useQuery } from '@tanstack/react-query'
 import { Link, useParams } from 'react-router-dom'
 import { api } from '../../api/client'
 
+const rejectedKeyExtensions = new Set([
+  '7z', 'avi', 'bmp', 'doc', 'docx', 'exe', 'gif', 'gz', 'jpeg', 'jpg', 'mov',
+  'mp3', 'mp4', 'pdf', 'png', 'ppt', 'pptx', 'rar', 'svg', 'tar', 'webp', 'xls',
+  'xlsx', 'zip',
+])
+
 export function TerminalPage() {
   const { projectId = '' } = useParams()
   const profiles = useQuery({ queryKey: ['terminal-profiles', projectId], queryFn: () => api.listTerminalProfiles(projectId) })
   const [index, setIndex] = useState(0)
   const [password, setPassword] = useState('')
+  const [privateKey, setPrivateKey] = useState('')
+  const [passphrase, setPassphrase] = useState('')
   const [trustHostKey, setTrustHostKey] = useState(false)
   const [error, setError] = useState('')
   const [connected, setConnected] = useState(false)
@@ -20,6 +28,21 @@ export function TerminalPage() {
   const socket = useRef<WebSocket | null>(null)
   const intentionalClose = useRef(false)
   const profile = profiles.data?.[index]
+  const keyStorage = (profileId: string) => `awe-terminal-key-${projectId}-${profileId}`
+  const passphraseStorage = (profileId: string) => `awe-terminal-pass-${projectId}-${profileId}`
+
+  useEffect(() => {
+    if (!profile) {
+      setPrivateKey('')
+      setPassphrase('')
+      return
+    }
+    setPrivateKey(sessionStorage.getItem(keyStorage(profile.id)) || '')
+    setPassphrase(sessionStorage.getItem(passphraseStorage(profile.id)) || '')
+    setPassword('')
+    setTrustHostKey(false)
+    setError('')
+  }, [profile?.id, projectId])
 
   function send(message: object) {
     const ws = socket.current
@@ -44,11 +67,15 @@ export function TerminalPage() {
       port: profile!.port,
       username: profile!.username,
       password,
-      private_key: sessionStorage.getItem(`awe-terminal-key-${projectId}-${profile!.id}`) || '',
-      key_passphrase: sessionStorage.getItem(`awe-terminal-pass-${projectId}-${profile!.id}`) || '',
+      private_key: password ? '' : privateKey,
+      key_passphrase: password ? '' : passphrase,
       trust_host_key: trustHostKey,
     }),
     onSuccess: session => {
+      if (profile && privateKey) {
+        sessionStorage.setItem(keyStorage(profile.id), privateKey)
+        sessionStorage.setItem(passphraseStorage(profile.id), passphrase)
+      }
       setPassword(''); setError('')
       const protocol = location.protocol === 'https:' ? 'wss' : 'ws'
       const ws = new WebSocket(`${protocol}://${location.host}/api/v1/projects/${projectId}/terminal/sessions/${session.id}/stream`)
@@ -87,17 +114,36 @@ export function TerminalPage() {
   function submit(e: FormEvent) {
     e.preventDefault()
     if (!profile) return
-    const privateKey = sessionStorage.getItem(`awe-terminal-key-${projectId}-${profile.id}`) || ''
-    if (!password && !privateKey) { setError('Enter a password or load a private key in Terminal configuration.'); return }
+    if (!password && !privateKey) { setError('Enter an SSH password or load a private key.'); return }
     setError(''); connect.mutate()
+  }
+
+  function readKey(e: ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0]
+    if (!file) return
+    e.target.value = ''
+    if (file.size > 100_000) { setError('Private keys are limited to 100 KB.'); return }
+    const extension = file.name.includes('.') ? file.name.split('.').pop()!.toLowerCase() : ''
+    if (rejectedKeyExtensions.has(extension) || /^(image|audio|video)\//.test(file.type)) {
+      setError('That file type is not suitable for an SSH private key.'); return
+    }
+    const reader = new FileReader()
+    reader.onload = () => { setPrivateKey(String(reader.result || '')); setError('') }
+    reader.readAsText(file)
   }
 
   return <main className={`page feature-page terminal-page${connected ? ' terminal-live' : ''}`}>
     {!connected && <><Link className="back-link" to={`/projects/${projectId}`}>← Project workspace</Link>
     <header className="page-header"><div><p className="eyebrow">Remote operations</p><h1>Terminal</h1><p className="muted">Interactive SSH session through the AWE backend broker.</p></div><div className="terminal-actions"><span className="live-dot">Disconnected</span><Link className="button-link" to={`/projects/${projectId}/terminal/config`}>⚙ Configure</Link></div></header>
     <form className="panel terminal-session-bar" onSubmit={submit}>
-      <select value={index} onChange={e => { setIndex(Number(e.target.value)); setTrustHostKey(false) }}>{profiles.data?.map((item, i) => <option value={i} key={item.id}>{item.name} · {item.host}</option>)}</select>
-      <input type="password" value={password} onChange={e => setPassword(e.target.value)} placeholder="Password (only if no key)" />
+      <select value={index} onChange={e => setIndex(Number(e.target.value))}>{profiles.data?.map((item, i) => <option value={i} key={item.id}>{item.name} · {item.host}</option>)}</select>
+      <div className="terminal-auth-choice">
+        <input type="password" value={password} onChange={e => setPassword(e.target.value)} placeholder="SSH password (or use a key)" />
+        <span>or</span>
+        <label className="file-button">Choose private key<input type="file" onChange={readKey} /></label>
+        <textarea value={privateKey} onChange={e => { setPrivateKey(e.target.value); setError('') }} placeholder="Paste private SSH key here" aria-label="Private SSH key" />
+        <input className="terminal-key-passphrase" type="password" value={passphrase} onChange={e => setPassphrase(e.target.value)} placeholder="Key passphrase (optional)" disabled={!privateKey} />
+      </div>
       <label className="host-key-trust"><input type="checkbox" checked={trustHostKey} onChange={e => setTrustHostKey(e.target.checked)} /><span>Trust this host key</span></label>
       <button disabled={!profile || connect.isPending || connected}>{connect.isPending ? 'Connecting…' : connected ? 'Connected' : 'Connect'}</button>
     </form>

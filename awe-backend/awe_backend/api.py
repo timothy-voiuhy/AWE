@@ -9,6 +9,7 @@ from urllib.parse import urlsplit
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, UploadFile, File, WebSocket, WebSocketDisconnect, status
 from fastapi.responses import FileResponse
+from pymongo import MongoClient
 from pymongo.errors import PyMongoError
 from bson import ObjectId
 
@@ -38,6 +39,12 @@ from .schemas import (
     ProjectCreate,
     ProjectUpdate,
     ScopeConfig,
+    ProjectNotes,
+    AuthSessionInput,
+    AuthSessionEntry,
+    MethodologyStateInput,
+    MethodologyCategory,
+    MethodologyDetail,
     PipelineTemplate,
     PipelineJob,
     PipelineRunCreate,
@@ -45,6 +52,10 @@ from .schemas import (
     PipelineToolRun,
     StoredResult,
     TrafficEntry,
+    DatabaseOverview,
+    DatabaseStats,
+    DatabaseCollectionStats,
+    DatabaseCleanupResult,
     NetworkGraph, NetworkNode, NetworkEdge, NetworkManualNode,
     RepeaterRequest,
     RepeaterResponse,
@@ -113,6 +124,88 @@ def download_proxy_certificate(settings: Settings = Depends(get_settings)) -> Fi
     if not certificate.is_file():
         raise HTTPException(status_code=503, detail="Proxy certificate is not available yet")
     return FileResponse(certificate, media_type="application/x-x509-ca-cert", filename="awe-proxy-ca.crt")
+
+
+def _mongo_collection_stats(database, collection_name: str) -> DatabaseCollectionStats:
+    """Return lightweight Mongo collection statistics for the admin page."""
+    stats = database.command("collStats", collection_name)
+    return DatabaseCollectionStats(
+        name=collection_name,
+        documents=int(stats.get("count", 0)),
+        storage_bytes=int(stats.get("storageSize", 0)),
+        index_bytes=int(stats.get("totalIndexSize", 0)),
+    )
+
+
+@router.get("/database/overview", response_model=DatabaseOverview, tags=["database"])
+def database_overview(settings: Settings = Depends(get_settings)) -> DatabaseOverview:
+    """Return database and collection sizes without exposing stored contents."""
+    try:
+        with MongoClient(settings.mongo_uri, serverSelectionTimeoutMS=3000) as client:
+            databases: list[DatabaseStats] = []
+            for database_name in sorted(client.list_database_names()):
+                if database_name in {"admin", "config", "local"}:
+                    continue
+                database = client[database_name]
+                collections: list[DatabaseCollectionStats] = []
+                for collection_name in sorted(database.list_collection_names()):
+                    if collection_name.startswith("system."):
+                        continue
+                    try:
+                        collections.append(_mongo_collection_stats(database, collection_name))
+                    except PyMongoError:
+                        # A collection can disappear while a cleanup operation
+                        # is running. It should not make the whole dashboard fail.
+                        continue
+                if collections:
+                    databases.append(DatabaseStats(
+                        name=database_name,
+                        documents=sum(item.documents for item in collections),
+                        storage_bytes=sum(item.storage_bytes for item in collections),
+                        index_bytes=sum(item.index_bytes for item in collections),
+                        collections=collections,
+                    ))
+            return DatabaseOverview(databases=databases)
+    except PyMongoError as exc:
+        raise HTTPException(status_code=503, detail="Database unavailable") from exc
+
+
+@router.delete("/database/traffic", response_model=DatabaseCleanupResult, tags=["database"])
+def clear_all_proxy_traffic(settings: Settings = Depends(get_settings)) -> DatabaseCleanupResult:
+    """Drop every captured proxy transaction and recreate its indexes.
+
+    This is intentionally global: proxy traffic is shared by projects and can
+    include captures from external devices. The UI must therefore require an
+    explicit confirmation before calling this endpoint.
+    """
+    database_name = "awe_proxy_traffic"
+    collection_name = "traffic"
+    try:
+        with MongoClient(settings.mongo_uri, serverSelectionTimeoutMS=3000) as client:
+            database = client[database_name]
+            try:
+                stats = database.command("collStats", collection_name)
+            except PyMongoError:
+                stats = {}
+            deleted_documents = int(stats.get("count", 0))
+            released_storage = int(stats.get("storageSize", 0)) + int(stats.get("totalIndexSize", 0))
+            database.drop_collection(collection_name)
+
+            # Keep the proxy collection ready for new captures immediately;
+            # dropping the collection also removes its old indexes.
+            traffic = database[collection_name]
+            traffic.create_index("host")
+            traffic.create_index("project_id")
+            traffic.create_index([("host", 1), ("timestamp", -1)])
+            traffic.create_index([("host", 1), ("method", 1), ("path", 1)])
+            return DatabaseCleanupResult(
+                database=database_name,
+                collection=collection_name,
+                deleted_documents=deleted_documents,
+                reclaimed_storage_bytes=released_storage,
+            )
+    except PyMongoError as exc:
+        raise HTTPException(status_code=503, detail="Database unavailable") from exc
 from .intruder_jobs import IntruderJobManager, IntruderJobNotFound
 
 
@@ -348,6 +441,234 @@ def put_project_scope(
         return store.put_scope(project_id, payload)
     except ProjectNotFoundError as exc:
         raise HTTPException(status_code=404, detail="Project not found") from exc
+
+
+@router.get(
+    "/projects/{project_id}/notes", response_model=ProjectNotes, tags=["projects"]
+)
+def get_project_notes(
+    project_id: str, store: ProjectStore = Depends(get_project_store)
+) -> ProjectNotes:
+    try:
+        return ProjectNotes(content=store.get_notes(project_id))
+    except ProjectNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Project not found") from exc
+
+
+@router.put(
+    "/projects/{project_id}/notes", response_model=ProjectNotes, tags=["projects"]
+)
+def put_project_notes(
+    project_id: str,
+    payload: ProjectNotes,
+    store: ProjectStore = Depends(get_project_store),
+) -> ProjectNotes:
+    try:
+        return ProjectNotes(content=store.put_notes(project_id, payload.content))
+    except ProjectNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Project not found") from exc
+
+
+@router.get(
+    "/projects/{project_id}/auth-sessions",
+    response_model=list[AuthSessionEntry],
+    tags=["projects"],
+)
+def list_auth_sessions(
+    project_id: str,
+    store: ProjectStore = Depends(get_project_store),
+    repositories: LegacyRepositoryFactory = Depends(get_repository_factory),
+) -> list[AuthSessionEntry]:
+    try:
+        repository = repositories(store.project_dir(project_id))
+        return [AuthSessionEntry.model_validate(item) for item in repository.list_auth_sessions()]
+    except ProjectNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Project not found") from exc
+    except PyMongoError as exc:
+        raise HTTPException(status_code=503, detail="Database unavailable") from exc
+
+
+@router.post(
+    "/projects/{project_id}/auth-sessions",
+    response_model=AuthSessionEntry,
+    status_code=status.HTTP_201_CREATED,
+    tags=["projects"],
+)
+def create_auth_session(
+    project_id: str,
+    payload: AuthSessionInput,
+    store: ProjectStore = Depends(get_project_store),
+    repositories: LegacyRepositoryFactory = Depends(get_repository_factory),
+) -> AuthSessionEntry:
+    try:
+        repository = repositories(store.project_dir(project_id))
+        session_id = repository.create_auth_session(payload.name, payload.headers, payload.params)
+        session = repository.get_auth_session(session_id)
+        if not session:
+            raise HTTPException(status_code=500, detail="Session could not be created")
+        return AuthSessionEntry.model_validate(session)
+    except ProjectNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Project not found") from exc
+    except PyMongoError as exc:
+        raise HTTPException(status_code=503, detail="Database unavailable") from exc
+
+
+@router.put(
+    "/projects/{project_id}/auth-sessions/{session_id}",
+    response_model=AuthSessionEntry,
+    tags=["projects"],
+)
+def update_auth_session(
+    project_id: str,
+    session_id: str,
+    payload: AuthSessionInput,
+    store: ProjectStore = Depends(get_project_store),
+    repositories: LegacyRepositoryFactory = Depends(get_repository_factory),
+) -> AuthSessionEntry:
+    try:
+        repository = repositories(store.project_dir(project_id))
+        if not repository.get_auth_session(session_id):
+            raise HTTPException(status_code=404, detail="Auth session not found")
+        repository.update_auth_session(session_id, payload.name, payload.headers, payload.params)
+        session = repository.get_auth_session(session_id)
+        return AuthSessionEntry.model_validate(session)
+    except ProjectNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Project not found") from exc
+    except PyMongoError as exc:
+        raise HTTPException(status_code=503, detail="Database unavailable") from exc
+
+
+@router.delete(
+    "/projects/{project_id}/auth-sessions/{session_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    tags=["projects"],
+)
+def delete_auth_session(
+    project_id: str,
+    session_id: str,
+    store: ProjectStore = Depends(get_project_store),
+    repositories: LegacyRepositoryFactory = Depends(get_repository_factory),
+) -> Response:
+    try:
+        repository = repositories(store.project_dir(project_id))
+        if not repository.get_auth_session(session_id):
+            raise HTTPException(status_code=404, detail="Auth session not found")
+        repository.delete_auth_session(session_id)
+    except ProjectNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Project not found") from exc
+    except PyMongoError as exc:
+        raise HTTPException(status_code=503, detail="Database unavailable") from exc
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+def _methodology_registry(settings: Settings) -> list[dict]:
+    import json
+
+    path = settings.legacy_src_dir.resolve().parent / "resources" / "methodology" / "registry.json"
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return data.get("categories", [])
+    except (OSError, ValueError):
+        return []
+
+
+def _methodology_description(settings: Settings, description_file: str) -> str:
+    path = settings.legacy_src_dir.resolve().parent / "resources" / "methodology" / "descriptions" / description_file
+    try:
+        return path.read_text(encoding="utf-8")
+    except (OSError, ValueError):
+        return ""
+
+
+def _methodology_item(settings: Settings, vuln_id: str, states: dict) -> tuple[dict, dict] | None:
+    for category in _methodology_registry(settings):
+        for vuln in category.get("vulnerabilities", []):
+            if vuln.get("id") == vuln_id:
+                state = states.get(vuln_id, {"status": "not_tested", "notes": ""})
+                return {**vuln, "category_id": category["id"], "category_name": category["name"]}, state
+    return None
+
+
+@router.get(
+    "/projects/{project_id}/methodology",
+    response_model=list[MethodologyCategory],
+    tags=["methodology"],
+)
+def list_methodology(
+    project_id: str,
+    store: ProjectStore = Depends(get_project_store),
+    repositories: LegacyRepositoryFactory = Depends(get_repository_factory),
+    settings: Settings = Depends(get_settings),
+) -> list[MethodologyCategory]:
+    try:
+        repository = repositories(store.project_dir(project_id))
+        states = repository.load_methodology_states()
+        categories = []
+        for category in _methodology_registry(settings):
+            vulnerabilities = [
+                {**vuln, **states.get(vuln["id"], {"status": "not_tested", "notes": ""})}
+                for vuln in category.get("vulnerabilities", [])
+            ]
+            categories.append({**category, "vulnerabilities": vulnerabilities})
+        return [MethodologyCategory.model_validate(category) for category in categories]
+    except ProjectNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Project not found") from exc
+    except PyMongoError as exc:
+        raise HTTPException(status_code=503, detail="Database unavailable") from exc
+
+
+@router.get(
+    "/projects/{project_id}/methodology/{vuln_id}",
+    response_model=MethodologyDetail,
+    tags=["methodology"],
+)
+def get_methodology_detail(
+    project_id: str,
+    vuln_id: str,
+    store: ProjectStore = Depends(get_project_store),
+    repositories: LegacyRepositoryFactory = Depends(get_repository_factory),
+    settings: Settings = Depends(get_settings),
+) -> MethodologyDetail:
+    try:
+        repository = repositories(store.project_dir(project_id))
+        item = _methodology_item(settings, vuln_id, repository.load_methodology_states())
+    except ProjectNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Project not found") from exc
+    except PyMongoError as exc:
+        raise HTTPException(status_code=503, detail="Database unavailable") from exc
+    if not item:
+        raise HTTPException(status_code=404, detail="Methodology check not found")
+    vuln, state = item
+    return MethodologyDetail.model_validate({**vuln, **state, "description": _methodology_description(settings, vuln.get("description_file", ""))})
+
+
+@router.put(
+    "/projects/{project_id}/methodology/{vuln_id}",
+    response_model=MethodologyDetail,
+    tags=["methodology"],
+)
+def update_methodology_status(
+    project_id: str,
+    vuln_id: str,
+    payload: MethodologyStateInput,
+    store: ProjectStore = Depends(get_project_store),
+    repositories: LegacyRepositoryFactory = Depends(get_repository_factory),
+    settings: Settings = Depends(get_settings),
+) -> MethodologyDetail:
+    try:
+        repository = repositories(store.project_dir(project_id))
+        states = repository.load_methodology_states()
+        item = _methodology_item(settings, vuln_id, states)
+        if not item:
+            raise HTTPException(status_code=404, detail="Methodology check not found")
+        states[vuln_id] = payload.model_dump()
+        repository.save_methodology_state(states)
+        vuln, state = item
+        return MethodologyDetail.model_validate({**vuln, **payload.model_dump(), "description": _methodology_description(settings, vuln.get("description_file", ""))})
+    except ProjectNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Project not found") from exc
+    except PyMongoError as exc:
+        raise HTTPException(status_code=503, detail="Database unavailable") from exc
 
 
 @router.get(
@@ -652,6 +973,88 @@ def _traffic_summary(doc: dict) -> TrafficEntry:
     return TrafficEntry.model_validate(value)
 
 
+def _traffic_scope_host_patterns(target: str, scope: ScopeConfig) -> list[str]:
+    """Build Mongo host regexes for unassigned external-device captures.
+
+    External clients cannot always send the AWE project marker.  Restricting
+    the Mongo query to scope candidates before sorting/limiting prevents a
+    busy shared proxy from hiding the current project's traffic behind a
+    global newest-record limit.  Final URL/path matching still happens in
+    ``_traffic_belongs_to_project``.
+    """
+    patterns: list[str] = []
+
+    def add_domain(value: str, subdomains: bool = True) -> None:
+        host = value.strip().lower().lstrip("*.")
+        if not host:
+            return
+        suffix = rf"(?:^|\.){re.escape(host)}$" if subdomains else rf"^{re.escape(host)}$"
+        if suffix not in patterns:
+            patterns.append(suffix)
+
+    target_host = (urlsplit(target if "://" in target else f"https://{target}").hostname or "").lower()
+    included = [entry for entry in scope.entries if entry.in_scope]
+    if not included:
+        add_domain(target_host, scope.include_subdomains)
+        return patterns
+
+    for entry in included:
+        value = entry.value.strip()
+        if entry.entry_type == "regex":
+            try:
+                re.compile(value, re.IGNORECASE)
+            except re.error:
+                continue
+            patterns.append(value)
+            continue
+        if entry.entry_type == "url":
+            host = (urlsplit(value if "://" in value else f"https://{value}").hostname or "").lower()
+            add_domain(host, False)
+            continue
+        add_domain(value, entry.entry_type == "wildcard" or scope.include_subdomains)
+    return patterns
+
+
+def _traffic_project_query(
+    project_id: str,
+    target: str | None = None,
+    scope: ScopeConfig | None = None,
+) -> dict:
+    """Match tagged traffic and scoped captures from unmarked devices."""
+    unassigned: dict = {
+        "$or": [
+            {"project_id": None},
+            {"project_id": {"$exists": False}},
+        ]
+    }
+    if target and scope:
+        patterns = _traffic_scope_host_patterns(target, scope)
+        if patterns:
+            unassigned["host"] = {"$regex": "|".join(f"(?:{pattern})" for pattern in patterns), "$options": "i"}
+    return {"$or": [{"project_id": project_id}, unassigned]}
+
+
+def _traffic_belongs_to_project(
+    doc: dict,
+    project_id: str,
+    target: str,
+    scope: ScopeConfig,
+) -> bool:
+    """Apply project isolation to a captured traffic document.
+
+    A proxy-authenticated/embedded-browser capture has an explicit project
+    marker and is accepted only for that exact project.  An unmarked capture
+    can be shown as a convenience for external devices, but only if its URL
+    is within the current project's scope.
+    """
+    marker = doc.get("project_id")
+    if marker:
+        return marker == project_id
+    request = doc.get("request") or {}
+    url = request.get("url") or f"https://{doc.get('host', '')}{doc.get('path', '/') or '/'}"
+    return _host_in_project_scope(str(url), target, scope)
+
+
 def _network_graph(project_dir: Path, target: str, repositories: LegacyRepositoryFactory) -> NetworkGraph:
     """Build the same typed attack-surface graph used by the Qt client."""
     repo = repositories(project_dir); nodes: dict[str, NetworkNode] = {}; edges: dict[tuple[str,str,str], NetworkEdge] = {}
@@ -720,14 +1123,23 @@ def list_traffic(
     repositories: LegacyRepositoryFactory = Depends(get_repository_factory),
 ) -> list[TrafficEntry]:
     try:
-        store.project_dir(project_id)
-        query: dict = {"project_id": project_id}
+        project = store.get(project_id)
+        scope = store.get_scope(project_id)
+        # External browsers do not all support proxy credentials.  The proxy
+        # therefore keeps those captures unassigned instead of guessing a
+        # project.  Include them here only when their URL is in this project's
+        # scope; explicitly tagged captures remain strictly project-scoped.
+        query: dict = _traffic_project_query(project_id, project.target, scope)
         if host:
             query["host"] = host
         if method:
             query["method"] = method.upper()
         docs = repositories.traffic().find(query).sort("timestamp", -1).limit(max(1, min(limit, 5000)))
-        return [_traffic_summary(doc) for doc in docs]
+        return [
+            _traffic_summary(doc)
+            for doc in docs
+            if _traffic_belongs_to_project(doc, project_id, project.target, scope)
+        ]
     except ProjectNotFoundError as exc:
         raise HTTPException(status_code=404, detail="Project not found") from exc
     except PyMongoError as exc:
@@ -742,15 +1154,16 @@ def get_traffic(
     repositories: LegacyRepositoryFactory = Depends(get_repository_factory),
 ) -> TrafficEntry:
     try:
-        store.project_dir(project_id)
-        doc = repositories.traffic().find_one({"_id": ObjectId(traffic_id), "project_id": project_id})
+        project = store.get(project_id)
+        scope = store.get_scope(project_id)
+        doc = repositories.traffic().find_one({"_id": ObjectId(traffic_id)})
     except ProjectNotFoundError as exc:
         raise HTTPException(status_code=404, detail="Project not found") from exc
     except (PyMongoError, ValueError) as exc:
         if isinstance(exc, PyMongoError):
             raise HTTPException(status_code=503, detail="Database unavailable") from exc
         raise HTTPException(status_code=404, detail="Traffic entry not found") from exc
-    if not doc:
+    if not doc or not _traffic_belongs_to_project(doc, project_id, project.target, scope):
         raise HTTPException(status_code=404, detail="Traffic entry not found")
     return _traffic_entry(doc)
 
@@ -763,10 +1176,18 @@ def delete_traffic(
     repositories: LegacyRepositoryFactory = Depends(get_repository_factory),
 ) -> Response:
     try:
-        store.project_dir(project_id)
-        result = repositories.traffic().delete_one({"_id": ObjectId(traffic_id), "project_id": project_id})
+        project = store.get(project_id)
+        scope = store.get_scope(project_id)
+        collection = repositories.traffic()
+        object_id = ObjectId(traffic_id)
+        doc = collection.find_one({"_id": object_id})
+        if not doc or not _traffic_belongs_to_project(doc, project_id, project.target, scope):
+            raise HTTPException(status_code=404, detail="Traffic entry not found")
+        result = collection.delete_one({"_id": object_id})
     except ProjectNotFoundError as exc:
         raise HTTPException(status_code=404, detail="Project not found") from exc
+    except HTTPException:
+        raise
     except (PyMongoError, ValueError) as exc:
         if isinstance(exc, PyMongoError):
             raise HTTPException(status_code=503, detail="Database unavailable") from exc
@@ -785,12 +1206,21 @@ def delete_traffic_subtree(
     repositories: LegacyRepositoryFactory = Depends(get_repository_factory),
 ) -> Response:
     try:
-        store.project_dir(project_id)
-        query: dict = {"host": host, "project_id": project_id}
+        project = store.get(project_id)
+        scope = store.get_scope(project_id)
+        query: dict = _traffic_project_query(project_id, project.target, scope)
+        query["host"] = host
         if path_prefix:
             prefix = "/" + path_prefix.strip("/")
             query["path"] = {"$regex": f"^{re.escape(prefix)}(?:/.*)?$"}
-        repositories.traffic().delete_many(query)
+        collection = repositories.traffic()
+        ids = [
+            doc["_id"]
+            for doc in collection.find(query)
+            if _traffic_belongs_to_project(doc, project_id, project.target, scope)
+        ]
+        if ids:
+            collection.delete_many({"_id": {"$in": ids}})
     except ProjectNotFoundError as exc:
         raise HTTPException(status_code=404, detail="Project not found") from exc
     except PyMongoError as exc:
@@ -817,7 +1247,7 @@ def sync_traffic_results(
         extracted, review_candidates = TrafficExtractor().extract(
             collection,
             LegacyScopeConfig.from_dict(scope_data),
-            query={"project_id": project_id},
+            query=_traffic_project_query(project_id, project.target, store.get_scope(project_id)),
         )
         summary = _write_results(str(project_dir), settings.mongo_uri, project.target, extracted, review_candidates)
         return {**summary, "extracted_counts": {key: len(value) for key, value in extracted.items()}}
@@ -842,6 +1272,11 @@ def _host_in_project_scope(url: str, target: str, scope: ScopeConfig) -> bool:
         value = entry.value
         if entry.entry_type == "url" and url.startswith(value): return True
         if entry.entry_type == "wildcard" and fnmatch.fnmatch(host, value.lower()): return True
+        if entry.entry_type == "regex":
+            try:
+                if re.search(value, host, re.IGNORECASE): return True
+            except re.error:
+                continue
         domain = value.lower().lstrip("*.")
         if host == domain or (scope.include_subdomains and host.endswith(f".{domain}")): return True
     return False

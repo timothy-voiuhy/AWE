@@ -16,6 +16,7 @@ from .schemas import Project, ProjectCreate, ProjectUpdate, ScopeConfig
 _METADATA_FILE = ".awe-project.json"
 _SCOPE_FILE = ".awe-scope.json"
 _SETTINGS_FILE = ".awe-settings.json"
+_NOTES_FILE = "notes.md"
 _PROJECT_ID = re.compile(r"^[a-z0-9]{16}$")
 
 
@@ -101,6 +102,21 @@ class ProjectStore:
         temporary.write_text(scope.model_dump_json(indent=2), encoding="utf-8")
         temporary.replace(scope_file)
         return scope
+
+    def get_notes(self, project_id: str) -> str:
+        project_dir = self.project_dir(project_id)
+        try:
+            return (project_dir / _NOTES_FILE).read_text(encoding="utf-8")
+        except (FileNotFoundError, OSError):
+            return ""
+
+    def put_notes(self, project_id: str, content: str) -> str:
+        project_dir = self.project_dir(project_id)
+        notes_file = project_dir / _NOTES_FILE
+        temporary = notes_file.with_suffix(".tmp")
+        temporary.write_text(content, encoding="utf-8")
+        temporary.replace(notes_file)
+        return content
 
     def get_settings(self, project_id: str) -> dict:
         project_dir = self.project_dir(project_id)

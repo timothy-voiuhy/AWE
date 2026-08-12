@@ -24,6 +24,13 @@ export interface ScopeConfig {
   include_subdomains: boolean
 }
 
+export interface ProjectNotes { content: string }
+export interface AuthSessionEntry { id:string; name:string; headers:string[][]; params:string[][] }
+export type MethodologyStatus = 'not_tested'|'in_progress'|'tested_clean'|'vulnerable'|'na'
+export interface MethodologyVulnerability { id:string; name:string; description_file:string; status:MethodologyStatus; notes:string }
+export interface MethodologyCategory { id:string; name:string; accent:string; icon:string; vulnerabilities:MethodologyVulnerability[] }
+export interface MethodologyDetail extends MethodologyVulnerability { category_id:string; category_name:string; description:string }
+
 export interface PipelineTemplate {
   key: string
   name: string
@@ -99,6 +106,10 @@ export interface TrafficEntry {
   request: Record<string, unknown>
   response: Record<string, unknown>
 }
+export interface DatabaseCollectionStats { name:string; documents:number; storage_bytes:number; index_bytes:number }
+export interface DatabaseStats { name:string; documents:number; storage_bytes:number; index_bytes:number; collections:DatabaseCollectionStats[] }
+export interface DatabaseOverview { databases:DatabaseStats[]; traffic_database:string }
+export interface DatabaseCleanupResult { database:string; collection:string; deleted_documents:number; reclaimed_storage_bytes:number }
 export interface NetworkNode { id:string; kind:string; label:string; data:Record<string,unknown> }
 export interface NetworkEdge { source_id:string; target_id:string; kind:string; label:string }
 export interface NetworkGraph { nodes:NetworkNode[]; edges:NetworkEdge[] }
@@ -194,6 +205,15 @@ export const api = {
       method: 'PUT',
       body: JSON.stringify(scope),
     }),
+  getNotes: (projectId:string) => request<ProjectNotes>(`/projects/${projectId}/notes`),
+  saveNotes: (projectId:string, content:string) => request<ProjectNotes>(`/projects/${projectId}/notes`,{method:'PUT',body:JSON.stringify({content})}),
+  listAuthSessions: (projectId:string) => request<AuthSessionEntry[]>(`/projects/${projectId}/auth-sessions`),
+  createAuthSession: (projectId:string, data:Omit<AuthSessionEntry,'id'>) => request<AuthSessionEntry>(`/projects/${projectId}/auth-sessions`,{method:'POST',body:JSON.stringify(data)}),
+  updateAuthSession: (projectId:string, id:string, data:Omit<AuthSessionEntry,'id'>) => request<AuthSessionEntry>(`/projects/${projectId}/auth-sessions/${id}`,{method:'PUT',body:JSON.stringify(data)}),
+  deleteAuthSession: (projectId:string, id:string) => request<void>(`/projects/${projectId}/auth-sessions/${id}`,{method:'DELETE'}),
+  listMethodology: (projectId:string) => request<MethodologyCategory[]>(`/projects/${projectId}/methodology`),
+  getMethodologyDetail: (projectId:string, vulnId:string) => request<MethodologyDetail>(`/projects/${projectId}/methodology/${encodeURIComponent(vulnId)}`),
+  updateMethodology: (projectId:string, vulnId:string, data:{status:MethodologyStatus;notes:string}) => request<MethodologyDetail>(`/projects/${projectId}/methodology/${encodeURIComponent(vulnId)}`,{method:'PUT',body:JSON.stringify(data)}),
   listPipelines: () => request<PipelineTemplate[]>('/pipelines'),
   listPipelineRuns: (projectId: string) => request<PipelineJob[]>(`/projects/${projectId}/pipeline-runs`),
   startPipelineRun: (projectId: string, pipelineKey: string, options: { session_id?: string; tool_keys?: string[] } = {}) =>
@@ -210,6 +230,8 @@ export const api = {
   listResults: (projectId: string, sessionId: string) =>
     request<StoredResult[]>(`/projects/${projectId}/sessions/${sessionId}/results`),
   listTraffic: (projectId: string) => request<TrafficEntry[]>(`/projects/${projectId}/traffic`),
+  getDatabaseOverview: () => request<DatabaseOverview>('/database/overview'),
+  clearAllProxyTraffic: () => request<DatabaseCleanupResult>('/database/traffic',{method:'DELETE'}),
   getNetworkGraph:(projectId:string)=>request<NetworkGraph>(`/projects/${projectId}/network`),
   addNetworkManual:(projectId:string,data:{kind:string;label:string;parent_id?:string;data?:Record<string,unknown>})=>request<NetworkNode>(`/projects/${projectId}/network/manual`,{method:'POST',body:JSON.stringify(data)}),
   getTraffic: (projectId:string,trafficId:string)=>request<TrafficEntry>(`/projects/${projectId}/traffic/${trafficId}`),

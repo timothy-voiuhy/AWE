@@ -67,6 +67,47 @@ class ScopeConfig(BaseModel):
     include_subdomains: bool = True
 
 
+class ProjectNotes(BaseModel):
+    content: str = Field(default="", max_length=500_000)
+
+
+class AuthSessionInput(BaseModel):
+    name: str = Field(default="Unnamed", min_length=1, max_length=200)
+    headers: list[list[str]] = Field(default_factory=list, max_length=500)
+    params: list[list[str]] = Field(default_factory=list, max_length=500)
+
+
+class AuthSessionEntry(AuthSessionInput):
+    id: str
+
+
+class MethodologyStateInput(BaseModel):
+    status: Literal["not_tested", "in_progress", "tested_clean", "vulnerable", "na"] = "not_tested"
+    notes: str = Field(default="", max_length=50_000)
+
+
+class MethodologyVulnerability(BaseModel):
+    id: str
+    name: str
+    description_file: str = ""
+    status: str = "not_tested"
+    notes: str = ""
+
+
+class MethodologyCategory(BaseModel):
+    id: str
+    name: str
+    accent: str = "#9399B2"
+    icon: str = "◉"
+    vulnerabilities: list[MethodologyVulnerability] = Field(default_factory=list)
+
+
+class MethodologyDetail(MethodologyVulnerability):
+    category_id: str
+    category_name: str
+    description: str = ""
+
+
 class PipelineStep(BaseModel):
     tool_key: str
     stage: int
@@ -160,6 +201,33 @@ class TrafficEntry(BaseModel):
     tool_source: str | None = None
     request: dict = Field(default_factory=dict)
     response: dict = Field(default_factory=dict)
+
+
+class DatabaseCollectionStats(BaseModel):
+    name: str
+    documents: int = 0
+    storage_bytes: int = 0
+    index_bytes: int = 0
+
+
+class DatabaseStats(BaseModel):
+    name: str
+    documents: int = 0
+    storage_bytes: int = 0
+    index_bytes: int = 0
+    collections: list[DatabaseCollectionStats] = Field(default_factory=list)
+
+
+class DatabaseOverview(BaseModel):
+    databases: list[DatabaseStats] = Field(default_factory=list)
+    traffic_database: str = "awe_proxy_traffic"
+
+
+class DatabaseCleanupResult(BaseModel):
+    database: str
+    collection: str
+    deleted_documents: int = 0
+    reclaimed_storage_bytes: int = 0
 
 
 class NetworkNode(BaseModel):

@@ -87,7 +87,7 @@ export function TerminalConfigPage() {
 
   return <main className="page feature-page terminal-config-page">
     <Link className="back-link" to={`/projects/${projectId}/terminal`}>← Terminal</Link>
-    <header className="page-header"><div><p className="eyebrow">Remote operations</p><h1>Terminal configuration</h1><p className="muted">Profiles sync across devices. Private keys remain session-only on the device where they are loaded.</p></div></header>
+    <header className="page-header"><div><p className="eyebrow">Remote operations</p><h1>Terminal configuration</h1><p className="muted">Profiles sync across devices. Load a private key here or directly when connecting; keys remain session-only on each device.</p></div></header>
     <section className="terminal-config-grid">
       <form className="panel terminal-profile-form" onSubmit={submit}>
         <h3>{editingId ? 'Edit connection profile' : 'New connection profile'}</h3>
