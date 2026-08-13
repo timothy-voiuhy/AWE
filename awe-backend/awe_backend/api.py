@@ -116,6 +116,8 @@ def proxy_info(settings: Settings = Depends(get_settings)) -> dict:
         "port": settings.proxy_public_port,
         "certificate_url": "/api/v1/proxy/certificate",
         "scheme": "http",
+        "username": settings.proxy_username,
+        "password_configured": bool(settings.proxy_password),
     }
 
 @router.get("/proxy/certificate", tags=["proxy"])
@@ -1723,7 +1725,7 @@ async def create_browser_session(project_id: str, payload: BrowserViewport = Bro
     _browser_project(project_id, store)
     settings = store.get_settings(project_id)
     try:
-        state = await manager.create(project_id, app_settings.browser_proxy_host, app_settings.browser_proxy_port, payload.width, payload.height, app_settings.browser_proxy_enabled)
+        state = await manager.create(project_id, app_settings.browser_proxy_host, app_settings.browser_proxy_port, payload.width, payload.height, app_settings.proxy_username, app_settings.proxy_password, app_settings.browser_proxy_enabled)
         return _browser_model(state)
     except BrowserUnavailable as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc

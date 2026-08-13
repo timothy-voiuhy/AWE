@@ -30,6 +30,8 @@ class Settings(BaseSettings):
     proxy_control_port: int = 0
     proxy_advertise_host: str = "localhost"
     proxy_public_port: int = 8080
+    proxy_username: str = ""
+    proxy_password: str = ""
     proxy_certificate_path: Path = Path("/data/proxy/AWE/proxycert/CA/rootCACert.pem")
 
     @model_validator(mode="after")

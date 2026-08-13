@@ -53,6 +53,8 @@ services:
       AWE_PROXY_CONTROL_PORT: ${AWE_PROXY_CONTROL_PORT:-8765}
       AWE_PROXY_ADVERTISE_HOST: ${AWE_PROXY_ADVERTISE_HOST:-localhost}
       AWE_PROXY_PUBLIC_PORT: ${AWE_PROXY_PUBLIC_PORT:-8080}
+      AWE_PROXY_USERNAME: ${AWE_PROXY_USERNAME:-}
+      AWE_PROXY_PASSWORD: ${AWE_PROXY_PASSWORD:-}
       AWE_ALLOWED_ORIGINS: '["https://${AWE_HOST:-localhost}"]'
     volumes:
       - ./.awe-projects:/data/projects
@@ -83,6 +85,8 @@ services:
       AWE_PROXY_HOST: 0.0.0.0
       AWE_PROXY_CONTROL_HOST: 0.0.0.0
       AWE_PROXY_CONTROL_PORT: ${AWE_PROXY_CONTROL_PORT:-8765}
+      AWE_PROXY_USERNAME: ${AWE_PROXY_USERNAME:-}
+      AWE_PROXY_PASSWORD: ${AWE_PROXY_PASSWORD:-}
       HOME: /data/proxy
     volumes:
       - proxy_data:/data/proxy

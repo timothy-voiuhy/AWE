@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import hmac
 import logging
 import ssl
 
@@ -47,12 +48,19 @@ log = logging.getLogger(__name__)
 
 _CONNECT_OK   = b"HTTP/1.1 200 Connection Established\r\nProxy-Agent: AWEProxy/1.0\r\n\r\n"
 _CONNECT_FAIL = b"HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\n\r\n"
+_PROXY_AUTH_REQUIRED = (
+    b"HTTP/1.1 407 Proxy Authentication Required\r\n"
+    b"Proxy-Authenticate: Basic realm=\"AWE Proxy\"\r\n"
+    b"Content-Length: 0\r\n"
+    b"Connection: close\r\n\r\n"
+)
 
 
 class ConnectionHandler:
     __slots__ = (
         "_reader", "_writer", "_ca", "_upstream",
         "_traffic", "_ws_store", "_rules", "_intercept",
+        "_proxy_username", "_proxy_password",
     )
 
     def __init__(
@@ -65,6 +73,8 @@ class ConnectionHandler:
         ws_store:  WSStore | None       = None,
         rules:     RulesEngine | None   = None,
         intercept: InterceptGate | None = None,
+        proxy_username: str = "",
+        proxy_password: str = "",
     ) -> None:
         self._reader    = reader
         self._writer    = writer
@@ -74,6 +84,8 @@ class ConnectionHandler:
         self._ws_store  = ws_store
         self._rules     = rules
         self._intercept = intercept
+        self._proxy_username = proxy_username
+        self._proxy_password = proxy_password
 
     # ── entry point ───────────────────────────────────────────────────────────
 
@@ -114,8 +126,15 @@ class ConnectionHandler:
             return
         method, target, version = parts[0].upper(), parts[1], parts[2].strip()
 
+        if self._proxy_username and not _proxy_credentials_match(
+            headers, self._proxy_username, self._proxy_password,
+        ):
+            self._writer.write(_PROXY_AUTH_REQUIRED)
+            await self._writer.drain()
+            return
+
         if method == "CONNECT":
-            _, project_id = _pop_project_marker(headers)
+            _, project_id = _pop_project_marker(headers, allow_proxy_username=False)
             await self._handle_connect(target, project_id)
         else:
             from proxy._http import _read_body
@@ -186,7 +205,7 @@ class ConnectionHandler:
 
             url = _build_url("https", host, port, target)
             headers, tool_source = pop_tool_marker(headers)
-            headers, project_id = _pop_project_marker(headers)
+            headers, project_id = _pop_project_marker(headers, allow_proxy_username=not self._proxy_username)
             project_id = project_id or connection_project_id
 
             # Apply match-and-replace to the request
@@ -270,7 +289,7 @@ class ConnectionHandler:
             host = hmap.get("host", "")
             url  = target if "://" in target else f"http://{host}{target}"
             headers, tool_source = pop_tool_marker(headers)
-            headers, project_id = _pop_project_marker(headers)
+            headers, project_id = _pop_project_marker(headers, allow_proxy_username=not self._proxy_username)
 
             # Apply match-and-replace to the request
             if self._rules:
@@ -358,7 +377,7 @@ class ConnectionHandler:
     ) -> None:
         log.debug("WebSocket intercept: %s:%d%s", host, port, path)
         headers, tool_source = pop_tool_marker(headers)
-        headers, project_id = _pop_project_marker(headers)
+        headers, project_id = _pop_project_marker(headers, allow_proxy_username=not self._proxy_username)
         up_ctx = ssl.create_default_context()
         up_ctx.check_hostname = False
         up_ctx.verify_mode    = ssl.CERT_NONE
@@ -424,21 +443,42 @@ def _strip_ws_compression_from_response(raw: bytes) -> bytes:
         return raw
 
 
-def _pop_project_marker(headers: list[tuple[str, str]]) -> tuple[list[tuple[str, str]], str | None]:
-    """Remove AWE's internal project marker before forwarding upstream."""
+def _proxy_credentials_match(
+    headers: list[tuple[str, str]],
+    expected_username: str,
+    expected_password: str,
+) -> bool:
+    for key, value in headers:
+        if key.lower() != "proxy-authorization" or not value.lower().startswith("basic "):
+            continue
+        try:
+            decoded = base64.b64decode(value.split(None, 1)[1], validate=True).decode("utf-8")
+            username, separator, password = decoded.partition(":")
+            return bool(separator) and hmac.compare_digest(username, expected_username) and hmac.compare_digest(password, expected_password)
+        except (ValueError, UnicodeError):
+            return False
+    return False
+
+
+def _pop_project_marker(
+    headers: list[tuple[str, str]],
+    allow_proxy_username: bool = True,
+) -> tuple[list[tuple[str, str]], str | None]:
+    """Remove AWE markers and proxy credentials before forwarding upstream."""
     project_id = None
     clean = []
     for key, value in headers:
         if key.lower() == "x-awe-project-id":
             project_id = value.strip() or None
-        elif key.lower() == "proxy-authorization" and value.lower().startswith("basic "):
-            try:
-                decoded = base64.b64decode(value.split(None, 1)[1]).decode("utf-8")
-                username = decoded.split(":", 1)[0].strip()
-                if username:
-                    project_id = username
-            except (ValueError, UnicodeError):
-                pass
+        elif key.lower() == "proxy-authorization":
+            if allow_proxy_username and value.lower().startswith("basic "):
+                try:
+                    decoded = base64.b64decode(value.split(None, 1)[1]).decode("utf-8")
+                    username = decoded.split(":", 1)[0].strip()
+                    if username:
+                        project_id = username
+                except (ValueError, UnicodeError):
+                    pass
         else:
             clean.append((key, value))
     return clean, project_id

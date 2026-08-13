@@ -58,11 +58,17 @@ class ProxyServer:
         host: str = "127.0.0.1",
         port: int = 8080,
         upstream_proxy: str | None = None,
+        proxy_username: str = "",
+        proxy_password: str = "",
     ) -> None:
         self._host     = host
         self._port     = port
         self._ca        = CertificateAuthority()
         self._upstream  = UpstreamClient(upstream_proxy=upstream_proxy)
+        if bool(proxy_username) != bool(proxy_password):
+            raise ValueError("AWE_PROXY_USERNAME and AWE_PROXY_PASSWORD must be configured together")
+        self._proxy_username = proxy_username
+        self._proxy_password = proxy_password
         self._traffic   = TrafficStore()
         self._ws_store  = WSStore()
         self._rules     = RulesEngine()
@@ -144,6 +150,7 @@ class ProxyServer:
                 reader, writer, self._ca, self._upstream,
                 self._traffic, self._ws_store,
                 self._rules, self._intercept,
+                self._proxy_username, self._proxy_password,
             )
             await handler.handle()
         except asyncio.CancelledError:
@@ -175,8 +182,13 @@ def _setup_logging(verbose: bool) -> None:
 
 
 async def _run(args: argparse.Namespace) -> None:
-    proxy = ProxyServer(host=args.host, port=args.port,
-                        upstream_proxy=args.upstream_proxy)
+    proxy = ProxyServer(
+        host=args.host,
+        port=args.port,
+        upstream_proxy=args.upstream_proxy,
+        proxy_username=os.environ.get("AWE_PROXY_USERNAME", ""),
+        proxy_password=os.environ.get("AWE_PROXY_PASSWORD", ""),
+    )
     try:
         await proxy.start()
     except (KeyboardInterrupt, asyncio.CancelledError):

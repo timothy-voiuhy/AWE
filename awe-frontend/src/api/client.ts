@@ -116,7 +116,7 @@ export interface NetworkGraph { nodes:NetworkNode[]; edges:NetworkEdge[] }
 
 export interface RepeaterResponse { status_code: number; reason: string; headers: Record<string, string>; body: string; elapsed_ms: number; body_truncated: boolean }
 export interface ProjectSettings { default_threads:number;default_rate_limit:number;default_concurrency:number;proxy_port:number;upstream_proxy:string }
-export interface ProxyInfo { host:string;port:number;certificate_url:string;scheme:string }
+export interface ProxyInfo { host:string;port:number;certificate_url:string;scheme:string;username:string;password_configured:boolean }
 export interface DockerContainer { id:string;name:string;image:string;status:string;created:string;is_service:boolean }
 export interface DockerImage { id:string;tags:string[];size_mb:number }
 export interface DockerTool { key:string;display_name:string;category:string;image:string;description:string;param_specs:Array<{key:string;label?:string;type?:'text'|'check'|'combo';default?:unknown;options?:string[]}>;source:'build'|'hub';image_present:boolean;is_custom:boolean;status:string;command_template:string;dockerfile:string;parser:string }

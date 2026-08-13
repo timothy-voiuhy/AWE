@@ -42,7 +42,7 @@ class BrowserSessionManager:
         self._sessions: dict[str, _ManagedBrowser] = {}
         self._lock = asyncio.Lock()
 
-    async def _ensure_browser(self, proxy_host: str, proxy_port: int, proxy_enabled: bool = True) -> None:
+    async def _ensure_browser(self, proxy_host: str, proxy_port: int, proxy_username: str = "", proxy_password: str = "", proxy_enabled: bool = True) -> None:
         if self._browser is not None:
             return
         try:
@@ -50,15 +50,18 @@ class BrowserSessionManager:
             self._playwright = await async_playwright().start()
             options = {"headless": True, "args": ["--disable-gpu", "--no-sandbox"]}
             if proxy_enabled:
-                options["proxy"] = {"server": f"http://{proxy_host}:{proxy_port}"}
+                options["proxy"] = {
+                    "server": f"http://{proxy_host}:{proxy_port}",
+                    **({"username": proxy_username, "password": proxy_password} if proxy_username else {}),
+                }
             self._browser = await self._playwright.chromium.launch(**options)
         except Exception as exc:
             await self.shutdown()
             raise BrowserUnavailable("Managed Chromium is unavailable; run `playwright install chromium`.") from exc
 
-    async def create(self, project_id: str, proxy_host: str, proxy_port: int, width: int, height: int, proxy_enabled: bool = True) -> BrowserState:
+    async def create(self, project_id: str, proxy_host: str, proxy_port: int, width: int, height: int, proxy_username: str = "", proxy_password: str = "", proxy_enabled: bool = True) -> BrowserState:
         async with self._lock:
-            await self._ensure_browser(proxy_host, proxy_port, proxy_enabled)
+            await self._ensure_browser(proxy_host, proxy_port, proxy_username, proxy_password, proxy_enabled)
             context = await self._browser.new_context(
                 viewport={"width": width, "height": height},
                 ignore_https_errors=True,
