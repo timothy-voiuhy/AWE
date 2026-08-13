@@ -11,7 +11,8 @@ import { ComparerPage } from './features/utilities/ComparerPage'
 import { GraphqlPage } from './features/utilities/GraphqlPage'
 import { DecoderPage } from './features/utilities/DecoderPage'
 import { JwtPage } from './features/utilities/JwtPage'
-import { HttpHistoryPage, NetworkPage, SiteMapPage } from './features/proxy/TrafficPages'
+import { HttpHistoryPage, SiteMapPage } from './features/proxy/TrafficPages'
+import { NetworkGraphPage } from './features/network/NetworkGraphPage'
 import { RepeaterPage } from './features/testing/RepeaterPage'
 import { DockerPage, SettingsPage } from './features/operations/OperationsPages'
 import { InterceptPage, WebSocketsPage } from './features/testing/SecurityTestingPages'
@@ -114,6 +115,7 @@ export function App() {
         <button className="logout-button" title="Sign out" onClick={() => logout.mutate()}><span>⇥</span><em>Sign out</em></button>
         <small>Attack Workspace Environment</small>
       </aside>
+      <div className="route-content">
       <Routes>
         <Route path="/projects" element={<ProjectList />} />
         <Route path="/projects/:projectId" element={<ProjectWorkspace />} />
@@ -129,7 +131,7 @@ export function App() {
         <Route path="/projects/:projectId/graphql" element={<GraphqlPage />} />
         <Route path="/projects/:projectId/history" element={<HttpHistoryPage />} />
         <Route path="/projects/:projectId/sitemap" element={<SiteMapPage />} />
-        <Route path="/projects/:projectId/network" element={<NetworkPage />} />
+        <Route path="/projects/:projectId/network" element={<NetworkGraphPage />} />
         <Route path="/projects/:projectId/repeater" element={<RepeaterPage />} />
         <Route path="/projects/:projectId/intruder" element={<IntruderPage />} />
         <Route path="/projects/:projectId/intercept" element={<InterceptPage />} />
@@ -141,6 +143,7 @@ export function App() {
         <Route path="/projects/:projectId/settings" element={<SettingsPage />} />
         <Route path="*" element={<Navigate to="/projects" replace />} />
       </Routes>
+      </div>
     </div>
   )
 }

@@ -22,12 +22,15 @@ export function TerminalPage() {
   const [trustHostKey, setTrustHostKey] = useState(false)
   const [error, setError] = useState('')
   const [connected, setConnected] = useState(false)
+  const [configuringId, setConfiguringId] = useState<string | null>(null)
   const hostRef = useRef<HTMLDivElement>(null)
   const termRef = useRef<Terminal | null>(null)
   const fitRef = useRef<FitAddon | null>(null)
   const socket = useRef<WebSocket | null>(null)
   const intentionalClose = useRef(false)
   const profile = profiles.data?.[index]
+  const configuringProfile = profiles.data?.find(item => item.id === configuringId)
+  const activeProfile = configuringProfile || profile
   const keyStorage = (profileId: string) => `awe-terminal-key-${projectId}-${profileId}`
   const passphraseStorage = (profileId: string) => `awe-terminal-pass-${projectId}-${profileId}`
 
@@ -63,20 +66,20 @@ export function TerminalPage() {
 
   const connect = useMutation({
     mutationFn: () => api.createTerminalSession(projectId, {
-      host: profile!.host,
-      port: profile!.port,
-      username: profile!.username,
+      host: activeProfile!.host,
+      port: activeProfile!.port,
+      username: activeProfile!.username,
       password,
       private_key: password ? '' : privateKey,
       key_passphrase: password ? '' : passphrase,
       trust_host_key: trustHostKey,
     }),
     onSuccess: session => {
-      if (profile && privateKey) {
-        sessionStorage.setItem(keyStorage(profile.id), privateKey)
-        sessionStorage.setItem(passphraseStorage(profile.id), passphrase)
+      if (activeProfile && privateKey) {
+        sessionStorage.setItem(keyStorage(activeProfile.id), privateKey)
+        sessionStorage.setItem(passphraseStorage(activeProfile.id), passphrase)
       }
-      setPassword(''); setError('')
+      setPassword(''); setError(''); setConfiguringId(null)
       const protocol = location.protocol === 'https:' ? 'wss' : 'ws'
       const ws = new WebSocket(`${protocol}://${location.host}/api/v1/projects/${projectId}/terminal/sessions/${session.id}/stream`)
       intentionalClose.current = false
@@ -113,7 +116,7 @@ export function TerminalPage() {
 
   function submit(e: FormEvent) {
     e.preventDefault()
-    if (!profile) return
+    if (!activeProfile) return
     if (!password && !privateKey) { setError('Enter an SSH password or load a private key.'); return }
     setError(''); connect.mutate()
   }
@@ -134,22 +137,32 @@ export function TerminalPage() {
 
   return <main className={`page feature-page terminal-page${connected ? ' terminal-live' : ''}`}>
     {!connected && <><Link className="back-link" to={`/projects/${projectId}`}>← Project workspace</Link>
-    <header className="page-header"><div><p className="eyebrow">Remote operations</p><h1>Terminal</h1><p className="muted">Interactive SSH session through the AWE backend broker.</p></div><div className="terminal-actions"><span className="live-dot">Disconnected</span><Link className="button-link" to={`/projects/${projectId}/terminal/config`}>⚙ Configure</Link></div></header>
-    <form className="panel terminal-session-bar" onSubmit={submit}>
-      <select value={index} onChange={e => setIndex(Number(e.target.value))}>{profiles.data?.map((item, i) => <option value={i} key={item.id}>{item.name} · {item.host}</option>)}</select>
-      <div className="terminal-auth-choice">
-        <input type="password" value={password} onChange={e => setPassword(e.target.value)} placeholder="SSH password (or use a key)" />
-        <span>or</span>
-        <label className="file-button">Choose private key<input type="file" onChange={readKey} /></label>
-        <textarea value={privateKey} onChange={e => { setPrivateKey(e.target.value); setError('') }} placeholder="Paste private SSH key here" aria-label="Private SSH key" />
-        <input className="terminal-key-passphrase" type="password" value={passphrase} onChange={e => setPassphrase(e.target.value)} placeholder="Key passphrase (optional)" disabled={!privateKey} />
-      </div>
-      <label className="host-key-trust"><input type="checkbox" checked={trustHostKey} onChange={e => setTrustHostKey(e.target.checked)} /><span>Trust this host key</span></label>
-      <button disabled={!profile || connect.isPending || connected}>{connect.isPending ? 'Connecting…' : connected ? 'Connected' : 'Connect'}</button>
-    </form>
-    {trustHostKey && <p className="muted host-key-warning">Only enable this after confirming the target address. It bypasses SSH host identity verification for this connection.</p>}
-    {!profiles.data?.length && <div className="panel empty">Create a connection profile first.</div>}
-    {(error || connect.isError) && <p className="error">{error || ((connect.error as Error)?.message)}</p>}</>}
+    <header className="page-header"><div><p className="eyebrow">Remote operations</p><h1>Terminal</h1><p className="muted">Interactive SSH session through the AWE backend broker.</p></div><div className="terminal-actions"><span className="live-dot">Disconnected</span><Link className="button-link" to={`/projects/${projectId}/terminal/config`}>＋ New profile</Link></div></header>
+    <section className="panel terminal-profile-picker">
+      <header><div><p className="eyebrow">Connections</p><h2>Saved profiles</h2></div><span>{profiles.data?.length || 0} saved</span></header>
+      {profiles.data?.map((item, i) => <article className={`terminal-profile-row${item.id === profile?.id ? ' selected' : ''}`} key={item.id}>
+        <button type="button" className="terminal-profile-select" onClick={() => setIndex(i)}><span className="terminal-profile-status" /><span><b>{item.name}</b><small>{item.username}@{item.host}:{item.port}</small></span></button>
+        <button type="button" className="terminal-profile-configure" onClick={() => { setIndex(i); setConfiguringId(item.id) }}>Configure profile</button>
+      </article>)}
+      {!profiles.data?.length && <div className="terminal-profile-empty">Create a connection profile to start an SSH session.</div>}
+    </section>
+    {(error || connect.isError) && <p className="error">{error || ((connect.error as Error)?.message)}</p>}
+    {configuringProfile && <div className="terminal-dialog-backdrop" role="presentation" onClick={event => { if (event.target === event.currentTarget) setConfiguringId(null) }}>
+      <section className="panel terminal-dialog" role="dialog" aria-modal="true" aria-labelledby="terminal-dialog-title">
+        <header><div><p className="eyebrow">Connection settings</p><h2 id="terminal-dialog-title">{configuringProfile.name}</h2><small>{configuringProfile.username}@{configuringProfile.host}:{configuringProfile.port}</small></div><button type="button" className="terminal-dialog-close" onClick={() => setConfiguringId(null)} aria-label="Close configuration">×</button></header>
+        <form onSubmit={submit}>
+          <div className="terminal-dialog-fields">
+            <label>SSH password<input type="password" value={password} onChange={e => setPassword(e.target.value)} placeholder="Use a password or private key" autoFocus /></label>
+            <div className="terminal-key-field"><div><span>Private key</span><label className="file-button">Choose file<input type="file" onChange={readKey} /></label></div><textarea value={privateKey} onChange={e => { setPrivateKey(e.target.value); setError('') }} placeholder="Paste private SSH key here" aria-label="Private SSH key" /></div>
+            <label>Key passphrase<input type="password" value={passphrase} onChange={e => setPassphrase(e.target.value)} placeholder="Optional" disabled={!privateKey} /></label>
+            <label className="host-key-trust"><input type="checkbox" checked={trustHostKey} onChange={e => setTrustHostKey(e.target.checked)} /><span>Trust this host key</span></label>
+          </div>
+          {trustHostKey && <p className="muted host-key-warning">Only enable this after confirming the target address. It bypasses SSH host identity verification for this connection.</p>}
+          <footer><button type="button" className="subtle" onClick={() => setConfiguringId(null)}>Cancel</button><button type="submit" disabled={connect.isPending}>{connect.isPending ? 'Connecting…' : 'Connect'}</button></footer>
+        </form>
+      </section>
+    </div>}
+    </>}
     {connected && <header className="terminal-live-toolbar"><div><span className="live-dot active">Connected</span><b>{profile?.username}@{profile?.host}:{profile?.port}</b></div><small>Scroll history with the mouse wheel · click anywhere to focus</small><nav><Link to={`/projects/${projectId}/terminal/config`} onClick={disconnect}>Configure</Link><button className="subtle" onClick={fitTerminal}>Fit</button><button className="danger" onClick={disconnect}>Disconnect</button></nav></header>}
     <section className="panel terminal-panel" onClick={() => termRef.current?.focus()} onWheel={() => termRef.current?.focus()}><div ref={hostRef} /></section>
   </main>

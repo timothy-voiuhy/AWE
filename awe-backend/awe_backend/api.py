@@ -2,12 +2,17 @@ import asyncio
 import base64
 import fnmatch
 import re
+import json
+import secrets
+import sys
+from dataclasses import asdict, is_dataclass
+from datetime import datetime, timezone
 import docker.errors
 from pathlib import Path
 from functools import lru_cache
 from urllib.parse import urlsplit
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Response, UploadFile, File, WebSocket, WebSocketDisconnect, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, UploadFile, File, WebSocket, WebSocketDisconnect, status
 from fastapi.responses import FileResponse
 from pymongo import MongoClient
 from pymongo.errors import PyMongoError
@@ -28,6 +33,7 @@ from .ai_service import AIService
 from .terminal import TerminalManager
 from .terminal_profiles import TerminalProfileStore
 from .testing_services import IntruderService, ProxyControlService, WebSocketClientService
+from .graph_store import GraphRevisionError, InvestigationNotFoundError, InvestigationStore
 import docker
 from .schemas import (
     HealthResponse,
@@ -57,6 +63,9 @@ from .schemas import (
     DatabaseCollectionStats,
     DatabaseCleanupResult,
     NetworkGraph, NetworkNode, NetworkEdge, NetworkManualNode,
+    GraphBundle, GraphEntity, GraphRelationship, GraphInvestigation,
+    InvestigationCreate, GraphEntityInput, GraphRelationshipInput,
+    GraphPreferencesInput, TransformManifest, TransformStart, TransformJob,
     RepeaterRequest,
     RepeaterResponse,
     ProjectSettings,
@@ -84,6 +93,74 @@ from .schemas import (
 )
 
 router = APIRouter()
+
+_GRAPH_TRANSFORM_JOBS: dict[str, TransformJob] = {}
+
+
+def _graph_store(project_dir: Path) -> InvestigationStore:
+    return InvestigationStore(project_dir)
+
+
+def _transform_seed(entity: GraphEntity, parameter: str) -> str:
+    """Turn graph values into the input shape expected by legacy tools."""
+    raw = entity.value or entity.label
+    if parameter in {"domain", "host"}:
+        candidate = str(raw).strip()
+        parsed = urlsplit(candidate if "://" in candidate else f"https://{candidate}")
+        return parsed.hostname or candidate.split("/", 1)[0]
+    if parameter in {"url", "endpoint"}:
+        candidate = str(raw).strip()
+        return candidate if "://" in candidate else f"https://{candidate}"
+    return str(raw)
+
+
+def _graph_transforms(settings: Settings) -> list[TransformManifest]:
+    """Expose safe graph adapters over the existing Docker tool registry."""
+    source = str(settings.legacy_src_dir)
+    if source not in sys.path:
+        sys.path.insert(0, source)
+    try:
+        from containers.tool_registry import TOOL_REGISTRY
+    except Exception:
+        TOOL_REGISTRY = {}
+    builtin = {
+        "subfinder": ("Enumerate subdomains", ["target", "domain", "subdomain"], ["subdomain"], "passive"),
+        "amass": ("Map related domains", ["target", "domain", "subdomain"], ["subdomain"], "passive"),
+        "dnsx": ("Resolve DNS records", ["domain", "subdomain"], ["dns_record", "ip"], "passive"),
+        "httpx": ("Probe HTTP services", ["domain", "subdomain", "ip"], ["url", "tech", "port"], "safe_active"),
+        "naabu": ("Discover open ports", ["ip", "domain", "subdomain"], ["port"], "active"),
+        "nmap": ("Fingerprint services", ["ip", "port"], ["port", "technology"], "active"),
+        "katana": ("Crawl endpoints", ["url", "domain", "subdomain"], ["endpoint"], "safe_active"),
+        "gospider": ("Discover linked endpoints", ["url", "domain", "subdomain"], ["endpoint"], "safe_active"),
+        "arjun": ("Discover URL parameters", ["url", "endpoint"], ["param"], "active"),
+        "nuclei": ("Scan for vulnerabilities", ["url", "endpoint", "subdomain"], ["vuln"], "active"),
+        "wafw00f": ("Detect WAF and CDN", ["url", "domain", "subdomain"], ["cdn", "tech"], "safe_active"),
+        "gowitness": ("Capture a screenshot", ["url", "endpoint"], ["screenshot"], "safe_active"),
+        "github_recon": ("Search GitHub intelligence", ["target", "domain", "organization"], ["repository", "osint"], "passive"),
+        "cloud_enum": ("Enumerate cloud assets", ["target", "domain"], ["cloud_asset", "osint"], "passive"),
+    }
+    manifests: list[TransformManifest] = []
+    for key, (label, inputs, outputs, mode) in builtin.items():
+        tool = TOOL_REGISTRY.get(key)
+        if not tool:
+            continue
+        manifests.append(TransformManifest(
+            id=f"docker:{key}", tool_key=key, display_name=label,
+            description=getattr(tool, "description", ""), input_types=inputs,
+            output_types=outputs, relationship_types=["discovered_by"], mode=mode,
+            requires_approval=mode in {"active", "high_risk"},
+            parameters=tool.param_spec(),
+        ))
+        transform_path = getattr(tool, "tool_dir", "")
+        if transform_path:
+            manifest_file = Path(transform_path) / "transform.json"
+            if manifest_file.is_file():
+                try:
+                    raw = json.loads(manifest_file.read_text(encoding="utf-8"))
+                    manifests[-1] = TransformManifest.model_validate({**manifests[-1].model_dump(), **raw, "id": raw.get("id", f"docker:{key}"), "tool_key": key})
+                except (OSError, ValueError):
+                    pass
+    return manifests
 
 @router.post("/jwt/scan", tags=["jwt"])
 def scan_jwt(payload: JwtScanRequest) -> dict:
@@ -1060,6 +1137,22 @@ def _traffic_belongs_to_project(
 def _network_graph(project_dir: Path, target: str, repositories: LegacyRepositoryFactory) -> NetworkGraph:
     """Build the same typed attack-surface graph used by the Qt client."""
     repo = repositories(project_dir); nodes: dict[str, NetworkNode] = {}; edges: dict[tuple[str,str,str], NetworkEdge] = {}
+    sessions = sorted(repo.list_sessions(limit=0), key=lambda x: x.get("started_at", ""))
+    live_hosts: set[str] = set()
+
+    def hostname(value: str) -> str:
+        parsed = urlsplit(value if "://" in value else f"https://{value}")
+        return (parsed.hostname or "").rstrip(".").lower()
+
+    for session in sessions:
+        for result in repo.get_results(session["id"], "http"):
+            url = str(result.get("data", {}).get("url") or "")
+            if url and hostname(url):
+                live_hosts.add(hostname(url))
+
+    def is_live(value: str) -> bool:
+        return hostname(value) in live_hosts
+
     def node(nid: str, kind: str, label: str, data: dict | None = None):
         if nid not in nodes: nodes[nid] = NetworkNode(id=nid, kind=kind, label=label, data=data or {})
         elif data:
@@ -1067,29 +1160,47 @@ def _network_graph(project_dir: Path, target: str, repositories: LegacyRepositor
     def edge(src: str, dst: str, kind: str, label: str = ""):
         if src in nodes and dst in nodes: edges[(src,dst,kind)] = NetworkEdge(source_id=src,target_id=dst,kind=kind,label=label)
     root=f"target:{target}"; node(root,"target",target,{"domain":target})
-    default=f"subdomain:{target}"; node(default,"subdomain",target,{"domain":target}); edge(root,default,"has_subdomain")
-    for session in sorted(repo.list_sessions(limit=0), key=lambda x:x.get("started_at", "")):
+    default = f"subdomain:{target}"
+    if is_live(target):
+        node(default, "subdomain", target, {"domain": target, "live": True})
+        edge(root, default, "has_subdomain")
+    for session in sessions:
         sid=session["id"]
         for category in ("subdomain","portscan","http","cdn","vuln","osint","crawl","params","info","custom"):
             for result in repo.get_results(sid, category):
                 d=result.get("data",{}); sources=result.get("sources",[])
                 if category=="subdomain" and d.get("domain"):
-                    dom=d["domain"]; sid2=f"subdomain:{dom}"; node(sid2,"subdomain",dom,{"domain":dom,"ips":d.get("ip_addresses",[]),"sources":sources}); edge(root,sid2,"has_subdomain")
+                    dom=str(d["domain"])
+                    if not is_live(dom):
+                        continue
+                    sid2=f"subdomain:{hostname(dom)}"; node(sid2,"subdomain",dom,{"domain":dom,"live":True,"ips":d.get("ip_addresses",[]),"sources":sources}); edge(root,sid2,"has_subdomain")
                     for ip in d.get("ip_addresses",[]): node(f"ip:{ip}","ip",ip,{"ip":ip}); edge(sid2,f"ip:{ip}","resolves_to")
                 elif category=="portscan" and d.get("host") and d.get("port"):
                     host=str(d["host"]); ip=f"ip:{host}"; node(ip,"ip",host,{"ip":host}); pid=f"port:{host}:{d['port']}"; node(pid,"port",f"{d['port']}/{d.get('protocol','tcp')} {d.get('service','')}",d); edge(ip,pid,"has_port")
                 elif category=="http" and d.get("url"):
-                    parsed=urlsplit(d["url"]); host=parsed.hostname or ""; sub=f"subdomain:{host}"; node(sub,"subdomain",host,{"domain":host,"live":True,"status":d.get("status_code"),"title":d.get("title","")}); edge(root,sub,"has_subdomain")
+                    parsed=urlsplit(d["url"]); host=hostname(d["url"])
+                    if not host:
+                        continue
+                    sub=f"subdomain:{host}"; node(sub,"subdomain",host,{"domain":host,"live":True,"status":d.get("status_code"),"title":d.get("title","")}); edge(root,sub,"has_subdomain")
                     for tech in d.get("technologies",[]): tid=f"tech:{tech}"; node(tid,"tech",tech,{"tech":tech}); edge(sub,tid,"uses_tech")
                     port=int(d.get("port") or (443 if parsed.scheme=="https" else 80)); pid=f"port:{host}:{port}"; node(pid,"port",f"{port}/tcp",{"host":host,"port":port,"url":d["url"],"status":d.get("status_code")}); edge(sub,pid,"has_port")
                 elif category=="cdn" and d.get("provider"):
-                    sub=f"subdomain:{d.get('subdomain',target)}"; node(sub,"subdomain",d.get("subdomain",target),{"domain":d.get("subdomain",target)}); cid=f"cdn:{d['provider']}:{d.get('subdomain',target)}"; node(cid,"cdn",d["provider"],d); edge(sub,cid,"proxied_by")
+                    subdomain=str(d.get("subdomain", target))
+                    if not is_live(subdomain):
+                        continue
+                    sub=f"subdomain:{hostname(subdomain)}"; node(sub,"subdomain",subdomain,{"domain":subdomain,"live":True}); cid=f"cdn:{d['provider']}:{hostname(subdomain)}"; node(cid,"cdn",d["provider"],d); edge(sub,cid,"proxied_by")
                 elif category=="vuln" and d.get("name"):
-                    host=urlsplit(d.get("url","")).hostname or target; sub=f"subdomain:{host}"; node(sub,"subdomain",host,{"domain":host}); vid=f"vuln:{d.get('template_id',d['name'])}:{host}"; node(vid,"vuln",d["name"],d); edge(sub,vid,"has_vuln")
+                    host=hostname(d.get("url", "")) or hostname(target)
+                    if not is_live(host):
+                        continue
+                    sub=f"subdomain:{host}"; node(sub,"subdomain",host,{"domain":host,"live":True}); vid=f"vuln:{d.get('template_id',d['name'])}:{host}"; node(vid,"vuln",d["name"],d); edge(sub,vid,"has_vuln")
                 elif category=="osint" and d.get("value"):
-                    oid=f"osint:{d.get('result_type','hit')}:{d['value']}"; node(oid,"osint",str(d['value'])[:80],d); edge(default,oid,"is_osint")
+                    oid=f"osint:{d.get('result_type','hit')}:{d['value']}"; node(oid,"osint",str(d['value'])[:80],d); edge(root,oid,"is_osint")
                 elif category=="crawl" and d.get("url"):
-                    parsed=urlsplit(d["url"]); host=parsed.hostname or target; sub=f"subdomain:{host}"; node(sub,"subdomain",host,{"domain":host}); eid=f"endpoint:{d.get('method','GET')}:{d['url']}"; node(eid,"endpoint",f"{d.get('method','GET')} {parsed.path or '/'}",d); edge(sub,eid,"has_endpoint")
+                    parsed=urlsplit(d["url"]); host=hostname(d["url"])
+                    if not is_live(host):
+                        continue
+                    sub=f"subdomain:{host}"; node(sub,"subdomain",host,{"domain":host,"live":True}); eid=f"endpoint:{d.get('method','GET')}:{d['url']}"; node(eid,"endpoint",f"{d.get('method','GET')} {parsed.path or '/'}",d); edge(sub,eid,"has_endpoint")
                 elif category=="params" and d.get("name"):
                     eid=f"endpoint:{d.get('method','GET')}:{d.get('endpoint','')}"; pid=f"param:{eid}:{d['name']}"; node(pid,"param",str(d['name']),d); edge(eid,pid,"has_param")
                 elif category=="info" and d.get("content"):
@@ -1113,6 +1224,249 @@ def add_network_manual(project_id: str, payload: NetworkManualNode, store: Proje
     try:
         project_dir=store.project_dir(project_id); repo=repositories(project_dir); key=f"manual:{payload.kind}:{payload.label}:{payload.parent_id}"; data={**payload.data,"kind":payload.kind,"label":payload.label,"parent_id":payload.parent_id}; repo._db.results.update_one({"project_id":project_id,"category":"network_manual","result_key":key},{"$set":{"project_id":project_id,"category":"network_manual","result_key":key,"data":data}},upsert=True); return NetworkNode(id=key,kind=payload.kind,label=payload.label,data=data)
     except ProjectNotFoundError as exc: raise HTTPException(status_code=404, detail="Project not found") from exc
+
+
+def _ensure_investigation(project_id: str, project_dir: Path, target: str, repositories: LegacyRepositoryFactory) -> GraphInvestigation:
+    graph_store = _graph_store(project_dir)
+    rows = graph_store.list(project_id)
+    if rows:
+        return rows[0]
+    return graph_store.create(project_id, InvestigationCreate(name="Default investigation"), [f"target:{target}"] if target else [])
+
+
+def _graph_provenance(data: dict) -> list[dict[str, str]]:
+    raw_sources = data.get("sources", [])
+    sources = raw_sources if isinstance(raw_sources, (list, tuple, set)) else [raw_sources]
+    return [{"source": str(source)} for source in sources if source]
+
+
+def _graph_bundle(project_id: str, project_dir: Path, target: str, repositories: LegacyRepositoryFactory, investigation_id: str = "", focus_id: str = "", depth: int = 1, limit: int = 0) -> GraphBundle:
+    graph_store = _graph_store(project_dir)
+    investigation = graph_store.get(project_id, investigation_id) if investigation_id else _ensure_investigation(project_id, project_dir, target, repositories)
+    derived = _network_graph(project_dir, target, repositories)
+    entities = [GraphEntity(id=node.id, kind=node.kind, label=node.label, value=str(node.data.get("domain") or node.data.get("url") or node.label), data=node.data, source="derived", scope="unknown", provenance=_graph_provenance(node.data)) for node in derived.nodes]
+    relationships = [GraphRelationship(id=f"derived:{edge.source_id}:{edge.target_id}:{edge.kind}", source_id=edge.source_id, target_id=edge.target_id, kind=edge.kind, label=edge.label, source="derived") for edge in derived.edges]
+    manual_entities = graph_store.entities(investigation)
+    manual_relationships = graph_store.relationships(investigation)
+    existing_entities = {item.id for item in entities}
+    entities.extend(item for item in manual_entities if item.id not in existing_entities)
+    existing_relationships = {item.id for item in relationships}
+    relationships.extend(item for item in manual_relationships if item.id not in existing_relationships)
+    if focus_id and any(entity.id == focus_id for entity in entities):
+        adjacency: dict[str, set[str]] = {entity.id: set() for entity in entities}
+        for relationship in relationships:
+            adjacency.setdefault(relationship.source_id, set()).add(relationship.target_id)
+            adjacency.setdefault(relationship.target_id, set()).add(relationship.source_id)
+        included = {focus_id}
+        frontier = {focus_id}
+        for _ in range(depth):
+            frontier = {neighbor for current in frontier for neighbor in adjacency.get(current, set())} - included
+            included.update(frontier)
+        entities = [entity for entity in entities if entity.id in included]
+        relationships = [relationship for relationship in relationships if relationship.source_id in included and relationship.target_id in included]
+    if limit and len(entities) > limit:
+        ordered_entities = entities
+        if focus_id:
+            ordered_entities = [entity for entity in entities if entity.id == focus_id] + [entity for entity in entities if entity.id != focus_id]
+        entity_ids = {entity.id for entity in ordered_entities[:limit]}
+        entities = [entity for entity in entities if entity.id in entity_ids]
+        relationships = [relationship for relationship in relationships if relationship.source_id in entity_ids and relationship.target_id in entity_ids]
+    return GraphBundle(investigation=investigation, entities=entities, relationships=relationships, revision=investigation.revision)
+
+
+@router.get("/projects/{project_id}/investigations", response_model=list[GraphInvestigation], tags=["network"])
+def list_investigations(project_id: str, store: ProjectStore = Depends(get_project_store), repositories: LegacyRepositoryFactory = Depends(get_repository_factory)) -> list[GraphInvestigation]:
+    try:
+        project_dir = store.project_dir(project_id)
+        return _graph_store(project_dir).list(project_id) or [_ensure_investigation(project_id, project_dir, store.get(project_id).target, repositories)]
+    except ProjectNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Project not found") from exc
+
+
+@router.post("/projects/{project_id}/investigations", response_model=GraphInvestigation, status_code=201, tags=["network"])
+def create_investigation(project_id: str, payload: InvestigationCreate, store: ProjectStore = Depends(get_project_store)) -> GraphInvestigation:
+    try:
+        project = store.get(project_id)
+        return _graph_store(store.project_dir(project_id)).create(project_id, payload, [f"target:{project.target}"] if project.target else [])
+    except ProjectNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Project not found") from exc
+
+
+@router.delete("/projects/{project_id}/investigations/{investigation_id}", status_code=204, tags=["network"])
+def delete_investigation(project_id: str, investigation_id: str, store: ProjectStore = Depends(get_project_store)) -> None:
+    try:
+        _graph_store(store.project_dir(project_id)).delete(project_id, investigation_id)
+    except (ProjectNotFoundError, InvestigationNotFoundError) as exc:
+        raise HTTPException(status_code=404, detail="Investigation not found") from exc
+
+
+@router.get("/projects/{project_id}/investigations/{investigation_id}/graph", response_model=GraphBundle, tags=["network"])
+def get_investigation_graph(project_id: str, investigation_id: str, focus_id: str = Query(default="", max_length=300), depth: int = Query(default=1, ge=0, le=5), limit: int = Query(default=0, ge=0, le=5000), store: ProjectStore = Depends(get_project_store), repositories: LegacyRepositoryFactory = Depends(get_repository_factory)) -> GraphBundle:
+    try:
+        project = store.get(project_id)
+        return _graph_bundle(project_id, store.project_dir(project_id), project.target, repositories, investigation_id, focus_id, depth, limit)
+    except (ProjectNotFoundError, InvestigationNotFoundError) as exc:
+        raise HTTPException(status_code=404, detail="Investigation not found") from exc
+
+
+@router.post("/projects/{project_id}/investigations/{investigation_id}/entities", response_model=GraphEntity, status_code=201, tags=["network"])
+def create_graph_entity(project_id: str, investigation_id: str, payload: GraphEntityInput, store: ProjectStore = Depends(get_project_store)) -> GraphEntity:
+    try:
+        project_dir = store.project_dir(project_id); graph_store = _graph_store(project_dir); row = graph_store.get(project_id, investigation_id)
+        entity = GraphEntity(id=f"manual:{secrets.token_hex(10)}", source="manual", **payload.model_dump())
+        graph_store.add_entity(row, entity)
+        graph_store.save(row.model_copy(update={"entity_ids": [*row.entity_ids, entity.id]}), row.revision)
+        return entity
+    except (ProjectNotFoundError, InvestigationNotFoundError) as exc:
+        raise HTTPException(status_code=404, detail="Investigation not found") from exc
+    except GraphRevisionError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.post("/projects/{project_id}/investigations/{investigation_id}/relationships", response_model=GraphRelationship, status_code=201, tags=["network"])
+def create_graph_relationship(project_id: str, investigation_id: str, payload: GraphRelationshipInput, store: ProjectStore = Depends(get_project_store), repositories: LegacyRepositoryFactory = Depends(get_repository_factory)) -> GraphRelationship:
+    try:
+        project = store.get(project_id); project_dir = store.project_dir(project_id); graph_store = _graph_store(project_dir); row = graph_store.get(project_id, investigation_id)
+        bundle = _graph_bundle(project_id, project_dir, project.target, repositories, investigation_id)
+        ids = {entity.id for entity in bundle.entities}
+        if payload.source_id not in ids or payload.target_id not in ids:
+            raise HTTPException(status_code=422, detail="Both relationship endpoints must exist in the investigation")
+        relationship = GraphRelationship(id=f"manual:{secrets.token_hex(10)}", source="manual", **payload.model_dump())
+        graph_store.add_relationship(row, relationship)
+        graph_store.save(row.model_copy(update={"relationship_ids": [*row.relationship_ids, relationship.id]}), row.revision)
+        return relationship
+    except (ProjectNotFoundError, InvestigationNotFoundError) as exc:
+        raise HTTPException(status_code=404, detail="Investigation not found") from exc
+
+
+@router.delete("/projects/{project_id}/investigations/{investigation_id}/entities/{entity_id}", status_code=204, tags=["network"])
+def delete_graph_entity(project_id: str, investigation_id: str, entity_id: str, store: ProjectStore = Depends(get_project_store)) -> None:
+    try:
+        graph_store = _graph_store(store.project_dir(project_id)); row = graph_store.get(project_id, investigation_id)
+        graph_store.delete_entity(row, entity_id)
+        graph_store.save(row.model_copy(update={"entity_ids": [item for item in row.entity_ids if item != entity_id]}), row.revision)
+    except (ProjectNotFoundError, InvestigationNotFoundError) as exc:
+        raise HTTPException(status_code=404, detail="Investigation not found") from exc
+
+
+@router.delete("/projects/{project_id}/investigations/{investigation_id}/relationships/{relationship_id}", status_code=204, tags=["network"])
+def delete_graph_relationship(project_id: str, investigation_id: str, relationship_id: str, store: ProjectStore = Depends(get_project_store)) -> None:
+    try:
+        graph_store = _graph_store(store.project_dir(project_id)); row = graph_store.get(project_id, investigation_id)
+        graph_store.delete_relationship(row, relationship_id)
+        graph_store.save(row.model_copy(update={"relationship_ids": [item for item in row.relationship_ids if item != relationship_id]}), row.revision)
+    except (ProjectNotFoundError, InvestigationNotFoundError) as exc:
+        raise HTTPException(status_code=404, detail="Investigation not found") from exc
+
+
+@router.put("/projects/{project_id}/investigations/{investigation_id}/preferences", response_model=GraphInvestigation, tags=["network"])
+def save_graph_preferences(project_id: str, investigation_id: str, payload: GraphPreferencesInput, store: ProjectStore = Depends(get_project_store)) -> GraphInvestigation:
+    try:
+        graph_store = _graph_store(store.project_dir(project_id)); row = graph_store.get(project_id, investigation_id)
+        return graph_store.save(row.model_copy(update={"preferences": payload.preferences}), payload.revision)
+    except (ProjectNotFoundError, InvestigationNotFoundError) as exc:
+        raise HTTPException(status_code=404, detail="Investigation not found") from exc
+    except GraphRevisionError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.get("/projects/{project_id}/transforms", response_model=list[TransformManifest], tags=["network"])
+def list_graph_transforms(project_id: str, store: ProjectStore = Depends(get_project_store), settings: Settings = Depends(get_settings)) -> list[TransformManifest]:
+    try:
+        store.project_dir(project_id)
+        return _graph_transforms(settings)
+    except ProjectNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Project not found") from exc
+
+
+@router.post("/projects/{project_id}/transforms", response_model=TransformJob, status_code=202, tags=["network"])
+def start_graph_transform(project_id: str, payload: TransformStart, store: ProjectStore = Depends(get_project_store), settings: Settings = Depends(get_settings), docker_operations: DockerOperationManager = Depends(get_docker_operation_manager), docker_service: DockerService = Depends(get_docker_service), repositories: LegacyRepositoryFactory = Depends(get_repository_factory)) -> TransformJob:
+    try:
+        project = store.get(project_id); project_dir = store.project_dir(project_id); graph_store = _graph_store(project_dir)
+        investigation = _ensure_investigation(project_id, project_dir, project.target, repositories) if not payload.investigation_id else graph_store.get(project_id, payload.investigation_id)
+        bundle = _graph_bundle(project_id, project_dir, project.target, repositories, investigation.id)
+        entities = {entity.id: entity for entity in bundle.entities}
+        manifests = {item.id: item for item in _graph_transforms(settings)}
+        transform = manifests.get(payload.transform_id)
+        if not transform:
+            raise HTTPException(status_code=404, detail="Transform not found")
+        selected = [entities[item] for item in payload.entity_ids if item in entities]
+        if not selected or any(entity.kind not in transform.input_types for entity in selected):
+            raise HTTPException(status_code=422, detail="Transform input types do not match the selected entities")
+        if transform.requires_approval and not payload.approved:
+            raise HTTPException(status_code=409, detail="This transform requires explicit approval")
+        job_id = secrets.token_hex(12)
+        params = dict(payload.parameters)
+        for parameter in ("domain", "host", "url", "endpoint"):
+            params.setdefault(parameter, _transform_seed(selected[0], parameter))
+        output_dir = project_dir / ".awe-transform-runs" / job_id
+        operation = docker_operations.start_tool(transform.tool_key, params, output_dir, docker_service)
+        job = TransformJob(id=job_id, project_id=project_id, investigation_id=investigation.id, transform_id=transform.id, status="queued", entity_ids=payload.entity_ids, operation_id=operation.id, parameters=params, created_at=datetime.now(timezone.utc))
+        _GRAPH_TRANSFORM_JOBS[job.id] = job
+        return job
+    except ProjectNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Project not found") from exc
+    except InvestigationNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Investigation not found") from exc
+
+
+@router.get("/projects/{project_id}/transforms/{job_id}", response_model=TransformJob, tags=["network"])
+def get_graph_transform(project_id: str, job_id: str, docker_operations: DockerOperationManager = Depends(get_docker_operation_manager)) -> TransformJob:
+    job = _GRAPH_TRANSFORM_JOBS.get(job_id)
+    if not job or job.project_id != project_id:
+        raise HTTPException(status_code=404, detail="Transform job not found")
+    if job.operation_id:
+        try:
+            operation = docker_operations.get(job.operation_id)
+            status_map = {"queued": "queued", "running": "running", "completed": "completed", "failed": "failed", "cancelled": "cancelled", "cancelling": "running"}
+            if operation.status != "queued" or job.status == "queued":
+                job = job.model_copy(update={"status": status_map.get(operation.status, "failed"), "message": operation.message or job.message, "completed_at": datetime.now(timezone.utc) if operation.status in {"completed", "failed", "cancelled"} else None})
+                if operation.status == "completed" and not job.outputs_ingested:
+                    try:
+                        from containers.parsers import PARSERS
+                        from containers.tool_registry import TOOL_REGISTRY
+                        from .config import get_settings
+                        from .projects import ProjectStore
+                        settings = get_settings(); project_store = ProjectStore(settings.workspace_dir)
+                        project = project_store.get(project_id); project_dir = project_store.project_dir(project_id)
+                        manifest = next((item for item in _graph_transforms(settings) if item.id == job.transform_id), None)
+                        parser = PARSERS.get(manifest.tool_key) if manifest else None
+                        if parser and operation.result.get("output_dir"):
+                            parsed = parser(operation.result["output_dir"]) or []
+                            graph_store = _graph_store(project_dir); investigation = graph_store.get(project_id, job.investigation_id)
+                            created_entity_ids: list[str] = []
+                            created_relationship_ids: list[str] = []
+                            for index, result in enumerate(parsed[:1000]):
+                                data = asdict(result) if is_dataclass(result) else (result if isinstance(result, dict) else {"value": str(result)})
+                                label = str(data.get("domain") or data.get("url") or data.get("name") or data.get("host") or data.get("value") or result)
+                                entity = GraphEntity(id=f"transform:{job.id}:{index}", kind=(manifest.output_types[0] if manifest and manifest.output_types else "custom"), label=label[:500], value=label[:4096], data=data, source="transform", provenance=[{"transform_job_id": job.id, "tool_key": manifest.tool_key if manifest else ""}])
+                                graph_store.add_entity(investigation, entity)
+                                relationship = GraphRelationship(id=f"transform:{job.id}:edge:{index}", source_id=job.entity_ids[0], target_id=entity.id, kind="discovered_by", source="transform", provenance=[{"transform_job_id": job.id}])
+                                graph_store.add_relationship(investigation, relationship)
+                                created_entity_ids.append(entity.id)
+                                created_relationship_ids.append(relationship.id)
+                            if created_entity_ids or created_relationship_ids:
+                                graph_store.save(investigation.model_copy(update={"entity_ids": [*investigation.entity_ids, *created_entity_ids], "relationship_ids": [*investigation.relationship_ids, *created_relationship_ids]}), investigation.revision)
+                            job = job.model_copy(update={"outputs_ingested": True, "message": f"Completed and ingested {len(parsed)} outputs"})
+                    except Exception as exc:
+                        job = job.model_copy(update={"message": f"Completed; output ingestion skipped: {exc}"})
+                _GRAPH_TRANSFORM_JOBS[job_id] = job
+        except DockerOperationNotFound:
+            pass
+    return job
+
+
+@router.post("/projects/{project_id}/transforms/{job_id}/cancel", response_model=TransformJob, tags=["network"])
+def cancel_graph_transform(project_id: str, job_id: str, docker_operations: DockerOperationManager = Depends(get_docker_operation_manager)) -> TransformJob:
+    job = _GRAPH_TRANSFORM_JOBS.get(job_id)
+    if not job or job.project_id != project_id:
+        raise HTTPException(status_code=404, detail="Transform job not found")
+    if job.operation_id:
+        try: docker_operations.cancel(job.operation_id)
+        except DockerOperationNotFound: pass
+    job = job.model_copy(update={"status": "cancelled", "message": "Cancellation requested"})
+    _GRAPH_TRANSFORM_JOBS[job_id] = job
+    return job
 
 
 @router.get("/projects/{project_id}/traffic", response_model=list[TrafficEntry], tags=["proxy"])

@@ -249,6 +249,122 @@ class NetworkGraph(BaseModel):
     edges: list[NetworkEdge] = Field(default_factory=list)
 
 
+class GraphEntity(BaseModel):
+    id: str
+    kind: str
+    label: str
+    value: str = ""
+    data: dict = Field(default_factory=dict)
+    source: Literal["derived", "manual", "imported", "transform"] = "derived"
+    confidence: float = Field(default=1.0, ge=0, le=1)
+    severity: str = ""
+    scope: Literal["in", "out", "unknown"] = "unknown"
+    pinned: bool = False
+    bookmarked: bool = False
+    x: float = 0
+    y: float = 0
+    provenance: list[dict] = Field(default_factory=list)
+
+
+class GraphRelationship(BaseModel):
+    id: str
+    source_id: str
+    target_id: str
+    kind: str
+    label: str = ""
+    data: dict = Field(default_factory=dict)
+    source: Literal["derived", "manual", "imported", "transform"] = "derived"
+    confidence: float = Field(default=1.0, ge=0, le=1)
+    provenance: list[dict] = Field(default_factory=list)
+
+
+class GraphInvestigation(BaseModel):
+    id: str
+    project_id: str
+    name: str
+    revision: int = 1
+    created_at: datetime
+    updated_at: datetime
+    root_ids: list[str] = Field(default_factory=list)
+    entity_ids: list[str] = Field(default_factory=list)
+    relationship_ids: list[str] = Field(default_factory=list)
+    preferences: dict = Field(default_factory=dict)
+
+
+class GraphBundle(BaseModel):
+    investigation: GraphInvestigation
+    entities: list[GraphEntity] = Field(default_factory=list)
+    relationships: list[GraphRelationship] = Field(default_factory=list)
+    revision: int = 1
+
+
+class InvestigationCreate(BaseModel):
+    name: str = Field(default="Untitled investigation", min_length=1, max_length=200)
+
+
+class GraphEntityInput(BaseModel):
+    kind: str = Field(min_length=1, max_length=80)
+    label: str = Field(min_length=1, max_length=500)
+    value: str = Field(default="", max_length=4096)
+    data: dict = Field(default_factory=dict)
+    confidence: float = Field(default=1.0, ge=0, le=1)
+    severity: str = Field(default="", max_length=30)
+    scope: Literal["in", "out", "unknown"] = "unknown"
+    x: float = 0
+    y: float = 0
+
+
+class GraphRelationshipInput(BaseModel):
+    source_id: str = Field(min_length=1, max_length=200)
+    target_id: str = Field(min_length=1, max_length=200)
+    kind: str = Field(min_length=1, max_length=100)
+    label: str = Field(default="", max_length=500)
+    data: dict = Field(default_factory=dict)
+    confidence: float = Field(default=1.0, ge=0, le=1)
+
+
+class GraphPreferencesInput(BaseModel):
+    preferences: dict = Field(default_factory=dict)
+    revision: int = Field(default=1, ge=1)
+
+
+class TransformManifest(BaseModel):
+    id: str
+    tool_key: str
+    display_name: str
+    description: str = ""
+    input_types: list[str] = Field(default_factory=list)
+    output_types: list[str] = Field(default_factory=list)
+    relationship_types: list[str] = Field(default_factory=list)
+    mode: Literal["passive", "safe_active", "active", "high_risk"] = "passive"
+    requires_approval: bool = False
+    scope_required: bool = True
+    parameters: list[dict] = Field(default_factory=list)
+
+
+class TransformStart(BaseModel):
+    transform_id: str
+    entity_ids: list[str] = Field(default_factory=list, min_length=1, max_length=100)
+    parameters: dict = Field(default_factory=dict)
+    investigation_id: str = ""
+    approved: bool = False
+
+
+class TransformJob(BaseModel):
+    id: str
+    project_id: str
+    investigation_id: str
+    transform_id: str
+    status: Literal["queued", "running", "completed", "failed", "cancelled", "approval_required"]
+    entity_ids: list[str] = Field(default_factory=list)
+    operation_id: str = ""
+    parameters: dict = Field(default_factory=dict)
+    message: str = ""
+    created_at: datetime
+    completed_at: datetime | None = None
+    outputs_ingested: bool = False
+
+
 class NetworkManualNode(BaseModel):
     kind: Literal["subdomain", "ip", "port", "tech", "vuln", "osint", "endpoint", "cdn", "custom"]
     label: str = Field(min_length=1, max_length=500)

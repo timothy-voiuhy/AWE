@@ -113,6 +113,12 @@ export interface DatabaseCleanupResult { database:string; collection:string; del
 export interface NetworkNode { id:string; kind:string; label:string; data:Record<string,unknown> }
 export interface NetworkEdge { source_id:string; target_id:string; kind:string; label:string }
 export interface NetworkGraph { nodes:NetworkNode[]; edges:NetworkEdge[] }
+export interface GraphEntity { id:string; kind:string; label:string; value:string; data:Record<string,unknown>; source:'derived'|'manual'|'imported'|'transform'; confidence:number; severity:string; scope:'in'|'out'|'unknown'; pinned:boolean; bookmarked:boolean; x:number; y:number; provenance:Array<Record<string,unknown>> }
+export interface GraphRelationship { id:string; source_id:string; target_id:string; kind:string; label:string; data:Record<string,unknown>; source:'derived'|'manual'|'imported'|'transform'; confidence:number; provenance:Array<Record<string,unknown>> }
+export interface GraphInvestigation { id:string; project_id:string; name:string; revision:number; created_at:string; updated_at:string; root_ids:string[]; entity_ids:string[]; relationship_ids:string[]; preferences:Record<string,unknown> }
+export interface GraphBundle { investigation:GraphInvestigation; entities:GraphEntity[]; relationships:GraphRelationship[]; revision:number }
+export interface TransformManifest { id:string; tool_key:string; display_name:string; description:string; input_types:string[]; output_types:string[]; relationship_types:string[]; mode:'passive'|'safe_active'|'active'|'high_risk'; requires_approval:boolean; scope_required:boolean; parameters:Array<Record<string,unknown>> }
+export interface TransformJob { id:string; project_id:string; investigation_id:string; transform_id:string; status:'queued'|'running'|'completed'|'failed'|'cancelled'|'approval_required'; entity_ids:string[]; operation_id:string; parameters:Record<string,unknown>; message:string; created_at:string; completed_at:string|null }
 
 export interface RepeaterResponse { status_code: number; reason: string; headers: Record<string, string>; body: string; elapsed_ms: number; body_truncated: boolean }
 export interface ProjectSettings { default_threads:number;default_rate_limit:number;default_concurrency:number;proxy_port:number;upstream_proxy:string }
@@ -234,6 +240,26 @@ export const api = {
   clearAllProxyTraffic: () => request<DatabaseCleanupResult>('/database/traffic',{method:'DELETE'}),
   getNetworkGraph:(projectId:string)=>request<NetworkGraph>(`/projects/${projectId}/network`),
   addNetworkManual:(projectId:string,data:{kind:string;label:string;parent_id?:string;data?:Record<string,unknown>})=>request<NetworkNode>(`/projects/${projectId}/network/manual`,{method:'POST',body:JSON.stringify(data)}),
+  listInvestigations:(projectId:string)=>request<GraphInvestigation[]>(`/projects/${projectId}/investigations`),
+  createInvestigation:(projectId:string,name:string)=>request<GraphInvestigation>(`/projects/${projectId}/investigations`,{method:'POST',body:JSON.stringify({name})}),
+  deleteInvestigation:(projectId:string,id:string)=>request<void>(`/projects/${projectId}/investigations/${id}`,{method:'DELETE'}),
+  getInvestigationGraph:(projectId:string,id:string,options:{focus_id?:string;depth?:number;limit?:number}={})=>{
+    const params = new URLSearchParams()
+    if (options.focus_id) params.set('focus_id', options.focus_id)
+    if (options.depth !== undefined) params.set('depth', String(options.depth))
+    if (options.limit !== undefined) params.set('limit', String(options.limit))
+    const suffix = params.toString() ? `?${params.toString()}` : ''
+    return request<GraphBundle>(`/projects/${projectId}/investigations/${id}/graph${suffix}`)
+  },
+  createGraphEntity:(projectId:string,id:string,data:Pick<GraphEntity,'kind'|'label'|'value'|'data'|'confidence'|'severity'|'scope'|'x'|'y'>)=>request<GraphEntity>(`/projects/${projectId}/investigations/${id}/entities`,{method:'POST',body:JSON.stringify(data)}),
+  createGraphRelationship:(projectId:string,id:string,data:Pick<GraphRelationship,'source_id'|'target_id'|'kind'|'label'|'data'|'confidence'>)=>request<GraphRelationship>(`/projects/${projectId}/investigations/${id}/relationships`,{method:'POST',body:JSON.stringify(data)}),
+  deleteGraphEntity:(projectId:string,id:string,entityId:string)=>request<void>(`/projects/${projectId}/investigations/${id}/entities/${encodeURIComponent(entityId)}`,{method:'DELETE'}),
+  deleteGraphRelationship:(projectId:string,id:string,relationshipId:string)=>request<void>(`/projects/${projectId}/investigations/${id}/relationships/${encodeURIComponent(relationshipId)}`,{method:'DELETE'}),
+  saveGraphPreferences:(projectId:string,id:string,data:{preferences:Record<string,unknown>;revision:number})=>request<GraphInvestigation>(`/projects/${projectId}/investigations/${id}/preferences`,{method:'PUT',body:JSON.stringify(data)}),
+  listGraphTransforms:(projectId:string)=>request<TransformManifest[]>(`/projects/${projectId}/transforms`),
+  startGraphTransform:(projectId:string,data:{transform_id:string;entity_ids:string[];parameters?:Record<string,unknown>;investigation_id?:string;approved?:boolean})=>request<TransformJob>(`/projects/${projectId}/transforms`,{method:'POST',body:JSON.stringify(data)}),
+  getGraphTransform:(projectId:string,id:string)=>request<TransformJob>(`/projects/${projectId}/transforms/${id}`),
+  cancelGraphTransform:(projectId:string,id:string)=>request<TransformJob>(`/projects/${projectId}/transforms/${id}/cancel`,{method:'POST'}),
   getTraffic: (projectId:string,trafficId:string)=>request<TrafficEntry>(`/projects/${projectId}/traffic/${trafficId}`),
   deleteTraffic: (projectId:string,trafficId:string)=>request<void>(`/projects/${projectId}/traffic/${trafficId}`,{method:'DELETE'}),
   deleteTrafficSubtree:(projectId:string,host:string,pathPrefix='')=>request<void>(`/projects/${projectId}/traffic?host=${encodeURIComponent(host)}&path_prefix=${encodeURIComponent(pathPrefix)}`,{method:'DELETE'}),
