@@ -363,6 +363,9 @@ class TransformJob(BaseModel):
     created_at: datetime
     completed_at: datetime | None = None
     outputs_ingested: bool = False
+    progress_completed: int = 0
+    progress_total: int = 0
+    logs: list[str] = Field(default_factory=list)
 
 
 class NetworkManualNode(BaseModel):

@@ -1246,7 +1246,10 @@ def _graph_bundle(project_id: str, project_dir: Path, target: str, repositories:
     derived = _network_graph(project_dir, target, repositories)
     entities = [GraphEntity(id=node.id, kind=node.kind, label=node.label, value=str(node.data.get("domain") or node.data.get("url") or node.label), data=node.data, source="derived", scope="unknown", provenance=_graph_provenance(node.data)) for node in derived.nodes]
     relationships = [GraphRelationship(id=f"derived:{edge.source_id}:{edge.target_id}:{edge.kind}", source_id=edge.source_id, target_id=edge.target_id, kind=edge.kind, label=edge.label, source="derived") for edge in derived.edges]
-    manual_entities = graph_store.entities(investigation)
+    manual_entities = [
+        item for item in graph_store.entities(investigation)
+        if not (item.source == "transform" and item.kind == "subdomain" and item.data.get("live") is not True)
+    ]
     manual_relationships = graph_store.relationships(investigation)
     existing_entities = {item.id for item in entities}
     entities.extend(item for item in manual_entities if item.id not in existing_entities)
@@ -1420,7 +1423,7 @@ def get_graph_transform(project_id: str, job_id: str, docker_operations: DockerO
             operation = docker_operations.get(job.operation_id)
             status_map = {"queued": "queued", "running": "running", "completed": "completed", "failed": "failed", "cancelled": "cancelled", "cancelling": "running"}
             if operation.status != "queued" or job.status == "queued":
-                job = job.model_copy(update={"status": status_map.get(operation.status, "failed"), "message": operation.message or job.message, "completed_at": datetime.now(timezone.utc) if operation.status in {"completed", "failed", "cancelled"} else None})
+                job = job.model_copy(update={"status": status_map.get(operation.status, "failed"), "message": operation.message or job.message, "completed_at": datetime.now(timezone.utc) if operation.status in {"completed", "failed", "cancelled"} else None, "progress_completed": operation.progress_completed, "progress_total": operation.progress_total, "logs": operation.logs[-100:]})
                 if operation.status == "completed" and not job.outputs_ingested:
                     try:
                         from containers.parsers import PARSERS
