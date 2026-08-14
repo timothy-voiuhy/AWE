@@ -261,6 +261,8 @@ class GraphEntity(BaseModel):
     scope: Literal["in", "out", "unknown"] = "unknown"
     pinned: bool = False
     bookmarked: bool = False
+    canonical_id: str = ""
+    aliases: list[str] = Field(default_factory=list)
     x: float = 0
     y: float = 0
     provenance: list[dict] = Field(default_factory=list)
@@ -312,6 +314,24 @@ class GraphEntityInput(BaseModel):
     scope: Literal["in", "out", "unknown"] = "unknown"
     x: float = 0
     y: float = 0
+
+
+class GraphIdentityInput(BaseModel):
+    canonical_id: str = Field(default="", max_length=200)
+    aliases: list[str] = Field(default_factory=list, max_length=100)
+    confidence: float | None = Field(default=None, ge=0, le=1)
+
+
+class GraphMergeInput(BaseModel):
+    target_id: str = Field(min_length=1, max_length=200)
+
+
+class GraphMergeResult(BaseModel):
+    entity: GraphEntity
+    merged_entity_ids: list[str] = Field(default_factory=list)
+    rewired_relationships: int = 0
+    removed_relationships: int = 0
+    revision: int = 1
 
 
 class GraphRelationshipInput(BaseModel):

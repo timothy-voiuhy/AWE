@@ -140,6 +140,54 @@ class InvestigationStore:
                     return entity
         raise KeyError(entity.id)
 
+    def merge_entities(self, row: GraphInvestigation, source_id: str, target_id: str) -> tuple[GraphEntity, int, int]:
+        with self._lock:
+            data = self._read()
+            entities = data.setdefault("entities", {}).setdefault(row.id, [])
+            source_raw = next((item for item in entities if item.get("id") == source_id), None)
+            target_raw = next((item for item in entities if item.get("id") == target_id), None)
+            if not source_raw or not target_raw:
+                raise KeyError(source_id if not source_raw else target_id)
+            source = GraphEntity.model_validate(source_raw)
+            target = GraphEntity.model_validate(target_raw)
+            aliases: list[str] = []
+            for value in [*target.aliases, source.label, source.value, *source.aliases]:
+                clean = str(value).strip()
+                if clean and clean not in aliases and clean not in {target.label, target.value}:
+                    aliases.append(clean)
+            provenance = [*target.provenance]
+            for item in source.provenance:
+                if item not in provenance:
+                    provenance.append(item)
+            merged = target.model_copy(update={
+                "canonical_id": target.canonical_id or source.canonical_id or target.id,
+                "aliases": aliases[:100],
+                "confidence": max(target.confidence, source.confidence),
+                "provenance": provenance,
+                "data": {**source.data, **target.data, "merged_entity_ids": [*target.data.get("merged_entity_ids", []), source.id]},
+            })
+            entities[:] = [merged.model_dump(mode="json") if item.get("id") == target_id else item for item in entities if item.get("id") != source_id]
+            relationships = data.setdefault("relationships", {}).setdefault(row.id, [])
+            rewired = 0
+            removed = 0
+            seen: set[tuple[str, str, str]] = set()
+            updated_relationships: list[dict] = []
+            for raw in relationships:
+                relationship = dict(raw)
+                if relationship.get("source_id") == source_id:
+                    relationship["source_id"] = target_id; rewired += 1
+                if relationship.get("target_id") == source_id:
+                    relationship["target_id"] = target_id; rewired += 1
+                if relationship.get("source_id") == relationship.get("target_id"):
+                    removed += 1; continue
+                key = (str(relationship.get("source_id")), str(relationship.get("target_id")), str(relationship.get("kind")))
+                if key in seen:
+                    removed += 1; continue
+                seen.add(key); updated_relationships.append(relationship)
+            data.setdefault("relationships", {})[row.id] = updated_relationships
+            self._write(data)
+            return merged, rewired, removed
+
     def delete_entity(self, row: GraphInvestigation, entity_id: str) -> None:
         with self._lock:
             data = self._read()
@@ -163,4 +211,3 @@ class InvestigationStore:
             relationships = data.setdefault("relationships", {}).setdefault(row.id, [])
             data["relationships"][row.id] = [item for item in relationships if item.get("id") != relationship_id]
             self._write(data)
-

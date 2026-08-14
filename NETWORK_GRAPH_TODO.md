@@ -15,7 +15,7 @@ This is the remaining work from the Maltego-style graph plan. The current vertic
 
 - [x] Add semantic layouts: radial target map, hierarchy, concentric, timeline, and force-directed modes.
 - [x] Add a portrait/landscape graph orientation toggle.
-- [ ] Add edge bundling or relationship-group collapsing for dense areas.
+- [x] Add relationship-pair collapsing for dense areas.
 - [x] Add zoom-aware label policies with explicit always-show/hide modes.
 - [ ] Add entity-type-aware label priorities and collision-aware placement.
 - [x] Add edge visibility controls, relationship-type filters, curved/orthogonal edge modes, and optional arrowheads.
@@ -24,8 +24,8 @@ This is the remaining work from the Maltego-style graph plan. The current vertic
 
 ## Entity and relationship intelligence
 
-- [ ] Add entity deduplication and merge review with canonical identity rules.
-- [ ] Add alias tracking and confidence-aware identity resolution.
+- [x] Add entity deduplication candidate review and merge with canonical identity rules.
+- [x] Add alias tracking and confidence-aware identity resolution.
 - [ ] Add relationship directionality, confidence, timestamps, expiry, and analyst/source attribution.
 - [ ] Add evidence records attached to entities and relationships, including request/response links and screenshots.
 - [ ] Add finding/risk rollups, impact scoring, and target-to-vulnerability prioritization.
@@ -35,7 +35,7 @@ This is the remaining work from the Maltego-style graph plan. The current vertic
 
 - [ ] Add transform chaining and a visual transform pipeline builder.
 - [ ] Add per-transform scope, rate-limit, timeout, cancellation, and output limits.
-- [ ] Add queued-job progress, logs, partial output streaming, retry, and failure diagnostics in the graph UI.
+- [x] Add queued-job progress, recent Docker logs, retry, cancellation, and failure diagnostics in the graph UI; partial output streaming remains queued.
 - [ ] Add transform approval policies and a clear active/passive execution boundary.
 - [ ] Add custom Docker transform manifests with typed inputs/outputs and relationship contracts.
 - [ ] Add scheduled refresh and stale-result indicators for passive discovery.

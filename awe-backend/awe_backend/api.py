@@ -65,7 +65,7 @@ from .schemas import (
     NetworkGraph, NetworkNode, NetworkEdge, NetworkManualNode,
     GraphBundle, GraphEntity, GraphRelationship, GraphInvestigation,
     InvestigationCreate, GraphEntityInput, GraphRelationshipInput,
-    GraphPreferencesInput, TransformManifest, TransformStart, TransformJob,
+    GraphPreferencesInput, TransformManifest, TransformStart, TransformJob, GraphIdentityInput, GraphMergeInput, GraphMergeResult,
     RepeaterRequest,
     RepeaterResponse,
     ProjectSettings,
@@ -1324,6 +1324,49 @@ def create_graph_entity(project_id: str, investigation_id: str, payload: GraphEn
         raise HTTPException(status_code=404, detail="Investigation not found") from exc
     except GraphRevisionError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.put("/projects/{project_id}/investigations/{investigation_id}/entities/{entity_id}/identity", response_model=GraphEntity, tags=["network"])
+def update_graph_identity(project_id: str, investigation_id: str, entity_id: str, payload: GraphIdentityInput, store: ProjectStore = Depends(get_project_store)) -> GraphEntity:
+    try:
+        graph_store = _graph_store(store.project_dir(project_id)); row = graph_store.get(project_id, investigation_id)
+        entity = next((item for item in graph_store.entities(row) if item.id == entity_id), None)
+        if not entity:
+            raise HTTPException(status_code=404, detail="Only persisted analyst or transform entities can have identity metadata changed")
+        aliases: list[str] = []
+        for value in payload.aliases:
+            clean = str(value).strip()
+            if clean and clean not in aliases and clean not in {entity.label, entity.value}:
+                aliases.append(clean)
+        updated = entity.model_copy(update={"canonical_id": payload.canonical_id.strip() or entity.canonical_id or entity.id, "aliases": aliases[:100], "confidence": payload.confidence if payload.confidence is not None else entity.confidence})
+        graph_store.update_entity(row, updated)
+        graph_store.save(row, row.revision)
+        return updated
+    except (ProjectNotFoundError, InvestigationNotFoundError) as exc:
+        raise HTTPException(status_code=404, detail="Investigation not found") from exc
+    except GraphRevisionError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.post("/projects/{project_id}/investigations/{investigation_id}/entities/{entity_id}/merge", response_model=GraphMergeResult, tags=["network"])
+def merge_graph_entity(project_id: str, investigation_id: str, entity_id: str, payload: GraphMergeInput, store: ProjectStore = Depends(get_project_store)) -> GraphMergeResult:
+    try:
+        graph_store = _graph_store(store.project_dir(project_id)); row = graph_store.get(project_id, investigation_id)
+        persisted = {item.id: item for item in graph_store.entities(row)}
+        if entity_id not in persisted or payload.target_id not in persisted:
+            raise HTTPException(status_code=404, detail="Both entities must be persisted analyst or transform entities")
+        if entity_id == payload.target_id:
+            raise HTTPException(status_code=422, detail="An entity cannot be merged into itself")
+        merged, rewired, removed = graph_store.merge_entities(row, entity_id, payload.target_id)
+        relationships = graph_store.relationships(row)
+        saved = graph_store.save(row.model_copy(update={"entity_ids": [item for item in row.entity_ids if item != entity_id], "relationship_ids": [item.id for item in relationships]}), row.revision)
+        return GraphMergeResult(entity=merged, merged_entity_ids=[entity_id], rewired_relationships=rewired, removed_relationships=removed, revision=saved.revision)
+    except (ProjectNotFoundError, InvestigationNotFoundError) as exc:
+        raise HTTPException(status_code=404, detail="Investigation not found") from exc
+    except GraphRevisionError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=f"Entity not found: {exc.args[0]}") from exc
 
 
 @router.post("/projects/{project_id}/investigations/{investigation_id}/relationships", response_model=GraphRelationship, status_code=201, tags=["network"])
