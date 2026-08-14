@@ -13,6 +13,7 @@ import { DecoderPage } from './features/utilities/DecoderPage'
 import { JwtPage } from './features/utilities/JwtPage'
 import { HttpHistoryPage, SiteMapPage } from './features/proxy/TrafficPages'
 import { NetworkGraphPage } from './features/network/NetworkGraphPage'
+import { GraphToolsPage } from './features/network/GraphToolsPage'
 import { RepeaterPage } from './features/testing/RepeaterPage'
 import { DockerPage, SettingsPage } from './features/operations/OperationsPages'
 import { InterceptPage, WebSocketsPage } from './features/testing/SecurityTestingPages'
@@ -38,6 +39,7 @@ const workspaceNav = [
   { path: '/history', label: 'History', glyph: '⊟', icon: '/assets/icons/http.png' },
   { path: '/sitemap', label: 'Site Map', glyph: '◫', icon: '/assets/icons/sitemap.png' },
   { path: '/network', label: 'Network', glyph: '⊗', icon: '/assets/icons/network.png' },
+  { path: '/graph-tools', label: 'Graph Tools', glyph: '⚙', icon: '/assets/icons/docker.png' },
   { path: '/repeater', label: 'Repeater', glyph: '↻', icon: '/assets/icons/repeater.png' },
   { path: '/intruder', label: 'Intruder', glyph: '⚡', icon: '/assets/icons/intruder.png' },
   { path: '/intercept', label: 'Intercept', glyph: '⏸', icon: '/assets/icons/intercept.png' },
@@ -132,6 +134,7 @@ export function App() {
         <Route path="/projects/:projectId/history" element={<HttpHistoryPage />} />
         <Route path="/projects/:projectId/sitemap" element={<SiteMapPage />} />
         <Route path="/projects/:projectId/network" element={<NetworkGraphPage />} />
+        <Route path="/projects/:projectId/graph-tools" element={<GraphToolsPage />} />
         <Route path="/projects/:projectId/repeater" element={<RepeaterPage />} />
         <Route path="/projects/:projectId/intruder" element={<IntruderPage />} />
         <Route path="/projects/:projectId/intercept" element={<InterceptPage />} />

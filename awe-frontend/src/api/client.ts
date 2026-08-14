@@ -126,9 +126,15 @@ export interface ProjectSettings { default_threads:number;default_rate_limit:num
 export interface ProxyInfo { host:string;port:number;certificate_url:string;scheme:string;username:string;password_configured:boolean }
 export interface DockerContainer { id:string;name:string;image:string;status:string;created:string;is_service:boolean }
 export interface DockerImage { id:string;tags:string[];size_mb:number }
-export interface DockerTool { key:string;display_name:string;category:string;image:string;description:string;param_specs:Array<{key:string;label?:string;type?:'text'|'check'|'combo';default?:unknown;options?:string[]}>;source:'build'|'hub';image_present:boolean;is_custom:boolean;status:string;command_template:string;dockerfile:string;parser:string }
+export interface ToolParamSpec { key:string;label?:string;type?:'text'|'check'|'combo'|'secret';default?:unknown;options?:string[] }
+export interface DockerTool { key:string;display_name:string;category:string;image:string;description:string;param_specs:ToolParamSpec[];source:'build'|'hub';image_present:boolean;is_custom:boolean;status:string;command_template:string;dockerfile:string;parser:string;input_types:string[];output_types:string[];relationship_types:string[];execution_mode:'passive'|'safe_active'|'active'|'high_risk';credential_fields:string[];graph_enabled:boolean }
 export interface DockerOperation { id:string;kind:string;status:'queued'|'running'|'completed'|'failed'|'cancelling'|'cancelled';progress_completed:number;progress_total:number;message:string;logs:string[];result:Record<string,unknown> }
-export interface DockerToolInput { key:string;display_name:string;category:string;image:string;description:string;command_template:string;param_specs:DockerTool['param_specs'];dockerfile:string;parser:string }
+export interface DockerToolInput {
+  key:string; display_name:string; category:string; image:string; description:string;
+  command_template:string; param_specs:ToolParamSpec[]; dockerfile:string; parser:string;
+  input_types:string[]; output_types:string[]; relationship_types:string[];
+  execution_mode:'passive'|'safe_active'|'active'|'high_risk'; credential_fields:string[];
+}
 export interface VaultItem { id:string;name:string;value:string;kind:'credential'|'api_key'|'token'|'note';created_at:string }
 export interface VaultCategory { id:string;name:string;accent:string;created_at:string;order:number }
 export interface VaultItemRecord { id:string;category_id:string;type:'image'|'pdf'|'file'|'link'|'note';title:string;created_at:string;url?:string;text?:string;lang?:string;filename?:string }
@@ -223,7 +229,7 @@ export const api = {
   updateMethodology: (projectId:string, vulnId:string, data:{status:MethodologyStatus;notes:string}) => request<MethodologyDetail>(`/projects/${projectId}/methodology/${encodeURIComponent(vulnId)}`,{method:'PUT',body:JSON.stringify(data)}),
   listPipelines: () => request<PipelineTemplate[]>('/pipelines'),
   listPipelineRuns: (projectId: string) => request<PipelineJob[]>(`/projects/${projectId}/pipeline-runs`),
-  startPipelineRun: (projectId: string, pipelineKey: string, options: { session_id?: string; tool_keys?: string[] } = {}) =>
+  startPipelineRun: (projectId: string, pipelineKey: string, options: { session_id?: string; tool_keys?: string[]; params?: Record<string, unknown>; approved?: boolean } = {}) =>
     request<PipelineJob>(`/projects/${projectId}/pipeline-runs`, {
       method: 'POST',
       body: JSON.stringify({ pipeline_key: pipelineKey, params: {}, ...options }),
@@ -260,7 +266,7 @@ export const api = {
   deleteGraphRelationship:(projectId:string,id:string,relationshipId:string)=>request<void>(`/projects/${projectId}/investigations/${id}/relationships/${encodeURIComponent(relationshipId)}`,{method:'DELETE'}),
   saveGraphPreferences:(projectId:string,id:string,data:{preferences:Record<string,unknown>;revision:number})=>request<GraphInvestigation>(`/projects/${projectId}/investigations/${id}/preferences`,{method:'PUT',body:JSON.stringify(data)}),
   listGraphTransforms:(projectId:string)=>request<TransformManifest[]>(`/projects/${projectId}/transforms`),
-  startGraphTransform:(projectId:string,data:{transform_id:string;entity_ids:string[];parameters?:Record<string,unknown>;investigation_id?:string;approved?:boolean})=>request<TransformJob>(`/projects/${projectId}/transforms`,{method:'POST',body:JSON.stringify(data)}),
+  startGraphTransform:(projectId:string,data:{transform_id:string;entity_ids:string[];parameters?:Record<string,unknown>;investigation_id?:string;approved?:boolean;source_job_id?:string})=>request<TransformJob>(`/projects/${projectId}/transforms`,{method:'POST',body:JSON.stringify(data)}),
   getGraphTransform:(projectId:string,id:string)=>request<TransformJob>(`/projects/${projectId}/transforms/${id}`),
   cancelGraphTransform:(projectId:string,id:string)=>request<TransformJob>(`/projects/${projectId}/transforms/${id}/cancel`,{method:'POST'}),
   getTraffic: (projectId:string,trafficId:string)=>request<TrafficEntry>(`/projects/${projectId}/traffic/${trafficId}`),
@@ -289,7 +295,7 @@ export const api = {
   dockerStatus:()=>request<{available:boolean;version:string;message:string}>('/docker/status'),
   dockerOperation:(id:string)=>request<DockerOperation>(`/docker/operations/${id}`),
   cancelDockerOperation:(id:string)=>request<DockerOperation>(`/docker/operations/${id}/cancel`,{method:'POST'}),
-  runDockerTool:(projectId:string,key:string,params:Record<string,unknown>,output_subdir:string)=>request<DockerOperation>(`/projects/${projectId}/docker/tools/${encodeURIComponent(key)}/runs`,{method:'POST',body:JSON.stringify({params,output_subdir})}),
+  runDockerTool:(projectId:string,key:string,params:Record<string,unknown>,output_subdir:string,options:{investigation_id?:string;ingest_to_graph?:boolean;approved?:boolean}={})=>request<DockerOperation>(`/projects/${projectId}/docker/tools/${encodeURIComponent(key)}/runs`,{method:'POST',body:JSON.stringify({params,output_subdir,...options})}),
   listVault:(id:string)=>request<VaultItem[]>(`/projects/${id}/vault`),
   createVault:(id:string,data:Omit<VaultItem,'id'|'created_at'>)=>request<VaultItem>(`/projects/${id}/vault`,{method:'POST',body:JSON.stringify(data)}),
   deleteVault:(id:string,item:string)=>request<void>(`/projects/${id}/vault/${item}`,{method:'DELETE'}),

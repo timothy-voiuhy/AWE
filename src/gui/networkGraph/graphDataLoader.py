@@ -319,7 +319,7 @@ class GraphDataLoader(QThread):
                 _edge(parent, vid, "has_vuln")
 
             # ── OSINT ─────────────────────────────────────────────────────────
-            for r in repo.get_results(sid, "osint"):
+            for r in (repo.get_results(sid, "osint") + repo.get_results(sid, "architecture")):
                 d     = r.get("data", {})
                 rtype = d.get("result_type", "")
                 value = d.get("value", "")
@@ -337,13 +337,107 @@ class GraphDataLoader(QThread):
                     osint_host = value
                 if osint_host and scope is not None and not scope.matches(osint_host):
                     continue
-                oid = f"osint:{rtype}:{value}"
-                _node(oid, "osint", value[:24], {
-                    "type": rtype, "value": value,
-                    "extra": d.get("extra", ""),
-                    "provider": d.get("provider", ""),
-                })
-                _edge(default_sub_id, oid, "is_osint")
+                metadata = d.get("metadata", {}) or {}
+                related_host = str(d.get("related_host", "") or metadata.get("input", ""))
+                parent = (f"subdomain:{related_host}"
+                          if f"subdomain:{related_host}" in nodes else default_sub_id)
+
+                # New intelligence transforms get typed graph contracts here,
+                # while older OSINT tools retain the generic fallback below.
+                if rtype == "asn":
+                    oid = f"asn:{value}"
+                    _node(oid, "asn", value, {
+                        "asn": value, "organization": d.get("extra", ""),
+                        "country": metadata.get("country", ""),
+                        "sources": r.get("sources", []),
+                    })
+                    _edge(parent, oid, "owned_by")
+                    for network in metadata.get("ranges", []) or []:
+                        net_id = f"netblock:{network}"
+                        _node(net_id, "netblock", str(network), {
+                            "cidr": network, "asn": value,
+                        })
+                        _edge(oid, net_id, "announces")
+                elif rtype == "netblock":
+                    oid = f"netblock:{value}"
+                    _node(oid, "netblock", value, {
+                        "cidr": value, "asn": d.get("extra", ""),
+                    })
+                    asn_id = f"asn:{d.get('extra', '')}"
+                    _edge(asn_id if asn_id in nodes else parent, oid, "contains")
+                elif rtype == "certificate":
+                    oid = f"certificate:{value}"
+                    _node(oid, "certificate", (d.get("extra") or value)[:32], {
+                        "fingerprint": value, "host": related_host,
+                        "certificate": metadata,
+                    })
+                    _edge(parent, oid, "has_certificate")
+                    for san in metadata.get("sans", []) or []:
+                        san_id = f"subdomain:{san}"
+                        _node(san_id, "subdomain", str(san), {"domain": san})
+                        _edge(oid, san_id, "has_san")
+                elif rtype in {
+                    "platform", "component", "vulnerability", "misconfiguration",
+                    "cloud_account", "cloud_resource", "cloudflare_zone", "dns_record",
+                    "cluster", "workload", "container_image", "identity_provider",
+                    "oidc_endpoint", "endpoint", "secret", "email", "person",
+                    "repository", "cloud_bucket", "cloud_asset",
+                }:
+                    if rtype in {"vulnerability", "misconfiguration"}:
+                        kind = "vuln" if rtype == "vulnerability" else "misconfiguration"
+                    elif rtype in {"cloud_account", "cloud_resource", "cloudflare_zone", "cloud_bucket", "cloud_asset"}:
+                        kind = "cloud_asset"
+                    elif rtype in {"container_image"}:
+                        kind = "container_image"
+                    elif rtype in {"identity_provider"}:
+                        kind = "identity_provider"
+                    elif rtype in {"oidc_endpoint", "dns_record", "endpoint"}:
+                        kind = rtype
+                    else:
+                        kind = rtype
+                    oid = f"{kind}:{value}"
+                    _node(oid, kind, value[:48], {
+                        "type": rtype, "value": value,
+                        "extra": d.get("extra", ""),
+                        "provider": d.get("provider", ""),
+                        "metadata": metadata,
+                    })
+                    edge_kind = {
+                        "platform": "runs",
+                        "component": "has_component",
+                        "vulnerability": "has_finding",
+                        "misconfiguration": "has_finding",
+                        "cloud_account": "contains",
+                        "cloud_resource": "has_resource",
+                        "cloudflare_zone": "contains",
+                        "dns_record": "has_dns",
+                        "cluster": "contains",
+                        "workload": "contains",
+                        "container_image": "uses_image",
+                        "identity_provider": "uses_identity_provider",
+                        "oidc_endpoint": "exposes",
+                        "endpoint": "exposes",
+                        "email": "has_email",
+                        "person": "mentions",
+                        "repository": "has_repository",
+                        "secret": "contains_secret",
+                        "cloud_bucket": "has_cloud_asset",
+                        "cloud_asset": "has_cloud_asset",
+                    }.get(rtype, "is_architecture")
+                    _edge(parent, oid, edge_kind)
+                elif rtype == "ip":
+                    oid = f"ip:{value}"
+                    _node(oid, "ip", value, {"ip": value, "sources": r.get("sources", [])})
+                    _edge(parent, oid, "resolves_to")
+                else:
+                    oid = f"osint:{rtype}:{value}"
+                    _node(oid, "osint", value[:24], {
+                        "type": rtype, "value": value,
+                        "extra": d.get("extra", ""),
+                        "provider": d.get("provider", ""),
+                        "metadata": metadata,
+                    })
+                    _edge(parent, oid, "is_osint")
 
             # ── Info notes ────────────────────────────────────────────────────
             for r in repo.get_results(sid, "info"):
@@ -425,4 +519,3 @@ class GraphDataLoader(QThread):
                 _edge(ep_id, param_id, "has_param")
 
         return GraphData(nodes=list(nodes.values()), edges=list(edges.values()))
-

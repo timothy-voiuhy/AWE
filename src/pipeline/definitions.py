@@ -67,6 +67,8 @@ def _osint_tools(stage: int = 7) -> list[PipelineStep]:
     return [
         PipelineStep("github_recon", stage=stage),
         PipelineStep("cloud_enum",   stage=stage),
+        PipelineStep("asnmap",        stage=stage),
+        PipelineStep("theharvester",  stage=stage),
     ]
 
 
@@ -131,10 +133,68 @@ VULN_SCAN = PipelineTemplate(
 
 OSINT_ONLY = PipelineTemplate(
     key="osint",
-    name="OSINT",
-    description="GitHub recon + cloud bucket enumeration",
+    name="OSINT & Ownership",
+    description="GitHub, cloud, ASN ownership, email, person, and network intelligence",
     category="osint",
     steps=_osint_tools(stage=0),
+)
+
+
+ECOSYSTEM_INTEL = PipelineTemplate(
+    key="ecosystem_intel",
+    name="Ecosystem Intelligence",
+    description=(
+        "ASN ownership + passive OSINT → TLS certificate collection → "
+        "web technology fingerprinting → TLS assessment"
+    ),
+    category="osint",
+    steps=[
+        *_osint_tools(stage=0),
+        PipelineStep("tlsx", stage=1),
+        PipelineStep("whatweb", stage=1),
+        PipelineStep("testssl", stage=2),
+    ],
+)
+
+
+CMS_AUDIT = PipelineTemplate(
+    key="cms_audit",
+    name="CMS Architecture Audit",
+    description="Live host discovery → web fingerprinting → WordPress/Drupal-specific enumeration",
+    category="architecture",
+    steps=[
+        PipelineStep("subfinder", stage=0),
+        _httpx_step(stage=1),
+        PipelineStep("whatweb", stage=2, condition="if:http"),
+        PipelineStep("wpscan", stage=3, condition="if:http"),
+        PipelineStep("droopescan", stage=3, condition="if:http"),
+    ],
+)
+
+
+CLOUD_POSTURE = PipelineTemplate(
+    key="cloud_posture",
+    name="Cloud & Identity Posture",
+    description="Public cloud asset discovery plus optional read-only Prowler and Cloudflare inventory",
+    category="architecture",
+    steps=[
+        PipelineStep("cloud_enum", stage=0),
+        PipelineStep("prowler", stage=2),
+        PipelineStep("cloudflare_audit", stage=2),
+        PipelineStep("oidc_probe", stage=2),
+    ],
+)
+
+
+KUBERNETES_CONTAINER_AUDIT = PipelineTemplate(
+    key="kubernetes_container_audit",
+    name="Kubernetes & Container Audit",
+    description="Kubescape posture checks plus Trivy image/filesystem/IaC findings",
+    category="architecture",
+    steps=[
+        PipelineStep("kubescape", stage=0),
+        PipelineStep("trivy", stage=0),
+    ],
 )
 
 FULL_PIPELINE = PipelineTemplate(
@@ -355,6 +415,10 @@ PIPELINE_REGISTRY: dict[str, PipelineTemplate] = {
         CONTENT_DISCOVERY,
         VULN_SCAN,
         OSINT_ONLY,
+        ECOSYSTEM_INTEL,
+        CMS_AUDIT,
+        CLOUD_POSTURE,
+        KUBERNETES_CONTAINER_AUDIT,
         FULL_PIPELINE,
         # vulnerability pipelines
         XSS_SCAN,

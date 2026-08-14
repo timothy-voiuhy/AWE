@@ -129,6 +129,7 @@ class PipelineRunCreate(BaseModel):
     params: dict = Field(default_factory=dict)
     session_id: str = Field(default="", max_length=100)
     tool_keys: list[str] = Field(default_factory=list, max_length=200)
+    approved: bool = False
 
 
 class PipelineEvent(BaseModel):
@@ -368,6 +369,7 @@ class TransformStart(BaseModel):
     parameters: dict = Field(default_factory=dict)
     investigation_id: str = ""
     approved: bool = False
+    source_job_id: str = Field(default="", max_length=100)
 
 
 class TransformJob(BaseModel):
@@ -449,6 +451,12 @@ class DockerTool(BaseModel):
     command_template: str = ""
     dockerfile: str = ""
     parser: str = ""
+    input_types: list[str] = Field(default_factory=list)
+    output_types: list[str] = Field(default_factory=list)
+    relationship_types: list[str] = Field(default_factory=list)
+    execution_mode: str = "passive"
+    credential_fields: list[str] = Field(default_factory=list)
+    graph_enabled: bool = False
 
 
 class DockerImagePull(BaseModel):
@@ -468,11 +476,19 @@ class DockerToolCreate(BaseModel):
     param_specs: list[dict] = Field(default_factory=list)
     dockerfile: str = Field(min_length=1, max_length=200_000)
     parser: str = Field(min_length=1, max_length=500_000)
+    input_types: list[str] = Field(default_factory=list, max_length=100)
+    output_types: list[str] = Field(default_factory=list, max_length=100)
+    relationship_types: list[str] = Field(default_factory=list, max_length=100)
+    execution_mode: Literal["passive", "safe_active", "active", "high_risk"] = "passive"
+    credential_fields: list[str] = Field(default_factory=list, max_length=100)
 
 
 class DockerToolRun(BaseModel):
     params: dict[str, object] = Field(default_factory=dict)
     output_subdir: str = Field(default="docker-output", max_length=200)
+    investigation_id: str = Field(default="", max_length=100)
+    ingest_to_graph: bool = False
+    approved: bool = False
 
 
 class DockerOperation(BaseModel):

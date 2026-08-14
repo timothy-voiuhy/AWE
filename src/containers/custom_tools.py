@@ -133,6 +133,11 @@ def _load_one(tool_dir: str, strict_parser: bool) -> str:
         dockerfile=dockerfile_path if os.path.exists(dockerfile_path) else None,
         command_template=meta.get("command_template", ""),
         param_specs=meta.get("param_specs", []),
+        input_types=tuple(meta.get("input_types", []) or ()),
+        output_types=tuple(meta.get("output_types", []) or ()),
+        relationship_types=tuple(meta.get("relationship_types", []) or ()),
+        execution_mode=str(meta.get("execution_mode", "passive")),
+        credential_fields=tuple(meta.get("credential_fields", []) or ()),
         tool_dir=tool_dir,
         parser_path=parser_path,
     )

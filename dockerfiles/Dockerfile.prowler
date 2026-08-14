@@ -1,0 +1,2 @@
+FROM prowlercloud/prowler:stable
+ENTRYPOINT ["/home/prowler/.venv/bin/prowler"]

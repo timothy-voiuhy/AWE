@@ -1,0 +1,10 @@
+FROM golang:1.26-alpine AS builder
+RUN apk add --no-cache ca-certificates git
+RUN git clone --depth 1 https://github.com/kubescape/kubescape.git /src/kubescape
+WORKDIR /src/kubescape
+RUN go build -o /out/kubescape .
+
+FROM alpine:3.21
+RUN apk add --no-cache ca-certificates
+COPY --from=builder /out/kubescape /usr/local/bin/kubescape
+ENTRYPOINT ["/usr/local/bin/kubescape"]

@@ -1,0 +1,6 @@
+FROM python:3.12-slim
+
+RUN pip install --no-cache-dir cloudflare
+COPY cloudflare_audit.py /usr/local/bin/cloudflare-audit
+RUN chmod +x /usr/local/bin/cloudflare-audit && mkdir -p /output
+ENTRYPOINT ["cloudflare-audit"]

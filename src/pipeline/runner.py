@@ -196,7 +196,7 @@ class PipelineRunner:
                 pipeline_name=self._template.name,
                 target=self._target,
                 output_dir=output_dir,
-                params=self._params,
+                params=self._safe_session_params(self._params),
                 in_scope=self._in_scope,
                 out_of_scope=self._out_of_scope,
             )
@@ -347,7 +347,7 @@ class PipelineRunner:
                     command = tool.build_command(**params)
                 volumes = tool.get_volumes(self._docker_host_path(output_dir), self._docker_host_path(input_dir_host) if input_dir_host else None)
                 self._emit(step.tool_key, f"▶ {command[:140]}")
-                self._run_container(step.tool_key, tool, command, volumes)
+                self._run_container(step.tool_key, tool, command, volumes, params)
 
                 if self._stop_event.is_set():
                     repo.update_tool_run_done(run_id, "stopped", 0, "pipeline stopped by user")
@@ -384,7 +384,8 @@ class PipelineRunner:
                 except Exception:
                     pass
 
-    def _run_container(self, tool_key: str, tool, command: str, volumes: dict):
+    def _run_container(self, tool_key: str, tool, command: str, volumes: dict,
+                       params: dict | None = None):
         import docker
         client = docker.from_env()
 
@@ -419,6 +420,7 @@ class PipelineRunner:
             command=["sh", "-c", command],
             entrypoint="",
             volumes=volumes,
+            environment=tool.build_environment(**(params or {})) or None,
             name=tool.container_name(),
             detach=True,
             remove=False,
@@ -487,6 +489,19 @@ class PipelineRunner:
         base.update(self._params)
         base.update(step.extra_params)
         return base
+
+    @staticmethod
+    def _safe_session_params(params: dict) -> dict:
+        """Keep credentials out of the persisted session document."""
+        try:
+            from containers.tool_registry import TOOL_REGISTRY
+            secret_keys = set()
+            for tool in TOOL_REGISTRY.values():
+                secret_keys.update(getattr(tool, "credential_fields", ()) or ())
+                secret_keys.update(str(spec.get("key")) for spec in tool.param_spec() if spec.get("type") == "secret")
+        except Exception:
+            secret_keys = set()
+        return {key: ("[redacted]" if key in secret_keys else value) for key, value in params.items()}
 
     def _check_condition(
         self, step: PipelineStep, repo: AweRepository, session_id: str

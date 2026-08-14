@@ -278,6 +278,8 @@ class OSINTResult(BaseResult):
     value: str = ""
     extra: str = ""         # URL, CIDR, org name, etc.
     provider: str = ""      # aws | azure | gcp | github
+    related_host: str = ""  # host/domain the artifact was discovered from
+    metadata: dict = field(default_factory=dict)
 
     @property
     def key(self) -> str:
@@ -390,6 +392,7 @@ CATEGORY_MODEL = {
     "fuzz":       FuzzResult,
     "vuln":       VulnFinding,
     "osint":      OSINTResult,
+    "architecture": OSINTResult,
     "cdn":        CdnResult,
     "info":       InfoNote,
     "custom":     CustomNode,

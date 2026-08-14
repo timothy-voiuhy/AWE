@@ -50,6 +50,17 @@ from containers.parsers.secretfinder import parse_secretfinder
 from containers.parsers.kiterunner import parse_kiterunner
 from containers.parsers.github_recon import parse_github_recon
 from containers.parsers.cloud_enum import parse_cloud_enum
+from containers.parsers.asnmap import parse_asnmap
+from containers.parsers.tlsx import parse_tlsx
+from containers.parsers.testssl import parse_testssl
+from containers.parsers.theharvester import parse_theharvester
+from containers.parsers.gitleaks import parse_gitleaks
+from containers.parsers.whatweb import parse_whatweb
+from containers.parsers.s3scanner import parse_s3scanner
+from containers.parsers.architecture import (
+    parse_wpscan, parse_droopescan, parse_prowler, parse_kubescape,
+    parse_trivy, parse_cloudflare_audit, parse_oidc_probe,
+)
 
 # ── Master parser registry ────────────────────────────────────────────────────
 # Mutable on purpose — containers.custom_tools adds/removes entries in place
@@ -110,4 +121,18 @@ PARSERS: dict[str, callable] = {
     # osint
     "github_recon":  parse_github_recon,
     "cloud_enum":    parse_cloud_enum,
+    "asnmap":        parse_asnmap,
+    "tlsx":          parse_tlsx,
+    "testssl":       parse_testssl,
+    "theharvester":  parse_theharvester,
+    "gitleaks":      parse_gitleaks,
+    "whatweb":       parse_whatweb,
+    "s3scanner":     parse_s3scanner,
+    "wpscan":        parse_wpscan,
+    "droopescan":    parse_droopescan,
+    "prowler":       parse_prowler,
+    "kubescape":     parse_kubescape,
+    "trivy":         parse_trivy,
+    "cloudflare_audit": parse_cloudflare_audit,
+    "oidc_probe":    parse_oidc_probe,
 }

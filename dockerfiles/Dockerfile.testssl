@@ -1,0 +1,9 @@
+FROM debian:bookworm-slim
+
+RUN apt-get update -qq && apt-get install -y --no-install-recommends \
+    bash bsdextrautils ca-certificates git openssl procps \
+    && rm -rf /var/lib/apt/lists/*
+RUN git clone --depth 1 https://github.com/testssl/testssl.sh.git /opt/testssl
+RUN mkdir -p /output
+WORKDIR /opt/testssl
+ENTRYPOINT ["/opt/testssl/testssl.sh"]

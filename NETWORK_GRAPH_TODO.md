@@ -33,11 +33,13 @@ This is the remaining work from the Maltego-style graph plan. The current vertic
 
 ## Transform and Docker workflow
 
+- [x] Add ecosystem-intelligence Docker tools for ASN ownership, TLS/certificates, email/person OSINT, repository secrets, technology fingerprinting, and cloud bucket exposure.
+- [x] Add architecture-specific adapters for WordPress, Drupal, cloud posture, Cloudflare zones/DNS, Kubernetes, container/IaC scanning, and OIDC identity discovery.
 - [ ] Add transform chaining and a visual transform pipeline builder.
 - [ ] Add per-transform scope, rate-limit, timeout, cancellation, and output limits.
 - [x] Add queued-job progress, recent Docker logs, retry, cancellation, and failure diagnostics in the graph UI; partial output streaming remains queued.
-- [ ] Add transform approval policies and a clear active/passive execution boundary.
-- [ ] Add custom Docker transform manifests with typed inputs/outputs and relationship contracts.
+- [x] Add transform approval policies and a clear active/passive execution boundary.
+- [x] Add custom Docker transform manifests with typed inputs/outputs and relationship contracts.
 - [ ] Add scheduled refresh and stale-result indicators for passive discovery.
 
 ## Investigation management

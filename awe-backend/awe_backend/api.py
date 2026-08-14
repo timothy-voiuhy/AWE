@@ -95,6 +95,7 @@ from .schemas import (
 router = APIRouter()
 
 _GRAPH_TRANSFORM_JOBS: dict[str, TransformJob] = {}
+_GRAPH_TRANSFORM_SECRETS: dict[str, dict] = {}
 
 
 def _graph_store(project_dir: Path) -> InvestigationStore:
@@ -138,6 +139,20 @@ def _graph_transforms(settings: Settings) -> list[TransformManifest]:
         "gowitness": ("Capture a screenshot", ["url", "endpoint"], ["screenshot"], "safe_active"),
         "github_recon": ("Search GitHub intelligence", ["target", "domain", "organization"], ["repository", "osint"], "passive"),
         "cloud_enum": ("Enumerate cloud assets", ["target", "domain"], ["cloud_asset", "osint"], "passive"),
+        "asnmap": ("Map ASN ownership and network ranges", ["target", "domain", "organization", "asn", "ip"], ["asn", "netblock"], "passive"),
+        "tlsx": ("Collect TLS certificates and fingerprints", ["domain", "subdomain", "ip", "url"], ["certificate", "tls_finding"], "safe_active"),
+        "testssl": ("Assess TLS protocols and cryptographic weaknesses", ["domain", "subdomain", "ip", "url"], ["tls_finding"], "safe_active"),
+        "theharvester": ("Collect email, name, IP, URL, and subdomain OSINT", ["target", "domain", "organization"], ["email", "person", "ip", "url", "subdomain"], "passive"),
+        "gitleaks": ("Find redacted secrets in repository history", ["repository", "file"], ["secret", "repository"], "passive"),
+        "whatweb": ("Fingerprint web technologies and versions", ["url", "endpoint", "domain", "subdomain"], ["url", "technology"], "safe_active"),
+        "s3scanner": ("Check cloud bucket permissions", ["target", "organization", "cloud_asset"], ["cloud_asset", "cloud_finding"], "safe_active"),
+        "wpscan": ("Enumerate WordPress components and findings", ["url", "domain", "subdomain", "technology"], ["platform", "component", "identity", "vuln"], "safe_active"),
+        "droopescan": ("Enumerate Drupal components and findings", ["url", "domain", "subdomain", "technology"], ["platform", "component", "endpoint", "misconfiguration"], "safe_active"),
+        "prowler": ("Audit cloud, Kubernetes, GitHub, and identity posture", ["cloud_asset", "cluster", "repository", "identity_provider"], ["cloud_asset", "component", "misconfiguration", "vuln"], "active"),
+        "kubescape": ("Scan Kubernetes clusters, manifests, and images", ["cluster", "workload", "container_image", "file"], ["cluster", "workload", "container_image", "misconfiguration", "vulnerability"], "active"),
+        "trivy": ("Scan container images, repositories, filesystems, and IaC", ["container_image", "repository", "file"], ["container_image", "component", "misconfiguration", "vulnerability", "secret"], "safe_active"),
+        "cloudflare_audit": ("Inventory Cloudflare zones and DNS", ["domain", "cloud_asset"], ["cloudflare_zone", "dns_record", "cloud_asset"], "active"),
+        "oidc_probe": ("Discover OpenID Connect issuer metadata", ["url", "identity_provider", "domain"], ["identity_provider", "oidc_endpoint", "component"], "safe_active"),
     }
     manifests: list[TransformManifest] = []
     for key, (label, inputs, outputs, mode) in builtin.items():
@@ -147,7 +162,9 @@ def _graph_transforms(settings: Settings) -> list[TransformManifest]:
         manifests.append(TransformManifest(
             id=f"docker:{key}", tool_key=key, display_name=label,
             description=getattr(tool, "description", ""), input_types=inputs,
-            output_types=outputs, relationship_types=["discovered_by"], mode=mode,
+            output_types=outputs,
+            relationship_types=list(getattr(tool, "relationship_types", ())) or ["discovered_by"],
+            mode=mode,
             requires_approval=mode in {"active", "high_risk"},
             parameters=tool.param_spec(),
         ))
@@ -160,7 +177,109 @@ def _graph_transforms(settings: Settings) -> list[TransformManifest]:
                     manifests[-1] = TransformManifest.model_validate({**manifests[-1].model_dump(), **raw, "id": raw.get("id", f"docker:{key}"), "tool_key": key})
                 except (OSError, ValueError):
                     pass
+    # Custom tools opt into graph transforms by declaring graph contracts in
+    # tool.json. They remain invisible to the graph until both input and
+    # output types are present, which prevents an arbitrary Docker helper from
+    # being mistaken for a typed transform.
+    existing = {item.tool_key for item in manifests}
+    for key, tool in TOOL_REGISTRY.items():
+        if key in existing or not getattr(tool, "input_types", ()) or not getattr(tool, "output_types", ()):
+            continue
+        manifests.append(TransformManifest(
+            id=f"docker:{key}", tool_key=key, display_name=tool.display_name,
+            description=getattr(tool, "description", ""),
+            input_types=list(tool.input_types), output_types=list(tool.output_types),
+            relationship_types=list(getattr(tool, "relationship_types", ())) or ["discovered_by"],
+            mode=getattr(tool, "execution_mode", "passive"),
+            requires_approval=getattr(tool, "execution_mode", "passive") in {"active", "high_risk"},
+            parameters=tool.param_spec(),
+        ))
     return manifests
+
+
+def _graph_result_kind(data: dict, manifest: TransformManifest) -> str:
+    """Resolve a parser result to the graph vocabulary advertised by a manifest."""
+    raw = str(data.get("result_type") or data.get("kind") or "").strip()
+    aliases = {"vulnerability": "vuln", "technology": "tech", "parameter": "param"}
+    candidate = aliases.get(raw, raw)
+    if candidate in manifest.output_types:
+        return candidate
+    if raw in manifest.output_types:
+        return raw
+    if len(manifest.output_types) == 1:
+        return manifest.output_types[0]
+    for option in manifest.output_types:
+        if option in data or option.rstrip("s") in data:
+            return option
+    return manifest.output_types[0] if manifest.output_types else "custom"
+
+
+def _graph_result_value(data: dict) -> str:
+    return str(data.get("value") or data.get("domain") or data.get("url") or data.get("name") or data.get("host") or data.get("label") or "")
+
+
+def _graph_result_edge(kind: str) -> str:
+    return {
+        "platform": "runs", "component": "has_component", "vuln": "has_finding",
+        "vulnerability": "has_finding", "misconfiguration": "has_finding",
+        "cloud_asset": "has_cloud_asset", "cloudflare_zone": "contains", "dns_record": "has_dns",
+        "cluster": "contains", "workload": "contains", "container_image": "uses_image",
+        "identity_provider": "uses_identity_provider", "oidc_endpoint": "exposes",
+        "endpoint": "exposes", "secret": "contains_secret", "repository": "has_repository",
+    }.get(kind, "discovered_by")
+
+
+def _redact_transform_params(manifest: TransformManifest, params: dict) -> tuple[dict, dict]:
+    secret_keys = {str(item.get("key")) for item in manifest.parameters if item.get("type") == "secret" or item.get("default") == "secret"}
+    return (
+        {key: ("[redacted]" if key in secret_keys else value) for key, value in params.items()},
+        {key: value for key, value in params.items() if key in secret_keys and value not in (None, "", "[redacted]")},
+    )
+
+
+def _ingest_graph_results(
+    project_id: str,
+    project_dir: Path,
+    investigation_id: str,
+    target: str,
+    repositories: LegacyRepositoryFactory,
+    manifest: TransformManifest,
+    parsed: list,
+    source_id: str = "",
+    provenance_id: str = "",
+) -> int:
+    """Persist typed parser output and relationships into an investigation."""
+    graph_store = _graph_store(project_dir)
+    investigation = graph_store.get(project_id, investigation_id)
+    parent_id = source_id or f"target:{target}"
+    created_entities: list[str] = []
+    created_relationships: list[str] = []
+    for index, result in enumerate(parsed[:1000]):
+        data = asdict(result) if is_dataclass(result) else (result if isinstance(result, dict) else {"value": str(result)})
+        value = _graph_result_value(data)
+        if not value:
+            continue
+        kind = _graph_result_kind(data, manifest)
+        entity_id = f"transform:{provenance_id or secrets.token_hex(8)}:{index}"
+        entity = GraphEntity(
+            id=entity_id, kind=kind, label=value[:500], value=value[:4096], data=data,
+            source="transform", provenance=[{"transform_job_id": provenance_id, "tool_key": manifest.tool_key}],
+        )
+        graph_store.add_entity(investigation, entity)
+        relationship = GraphRelationship(
+            id=f"{entity_id}:edge", source_id=parent_id, target_id=entity_id,
+            kind=_graph_result_edge(kind), source="transform",
+            provenance=[{"transform_job_id": provenance_id, "tool_key": manifest.tool_key}],
+        )
+        graph_store.add_relationship(investigation, relationship)
+        created_entities.append(entity_id)
+        created_relationships.append(relationship.id)
+    if created_entities or created_relationships:
+        graph_store.save(investigation.model_copy(update={
+            "entity_ids": [*investigation.entity_ids, *created_entities],
+            "relationship_ids": [*investigation.relationship_ids, *created_relationships],
+        }), investigation.revision)
+    return len(created_entities)
 
 @router.post("/jwt/scan", tags=["jwt"])
 def scan_jwt(payload: JwtScanRequest) -> dict:
@@ -795,6 +914,19 @@ def start_pipeline_run(
     target = session.get("target", "") if session else project.target
     if not target:
         raise HTTPException(status_code=409, detail="Configure a target before running a pipeline")
+    source = str(get_settings().legacy_src_dir.resolve())
+    if source not in sys.path: sys.path.insert(0, source)
+    try:
+        from containers.tool_registry import TOOL_REGISTRY
+        template = PipelineCatalog(get_settings().legacy_src_dir).get_legacy_template(payload.pipeline_key)
+        requested = set(payload.tool_keys or [step.tool_key for step in (template.steps if template else [])])
+        active_tools = sorted(key for key in requested if getattr(TOOL_REGISTRY.get(key), "execution_mode", "passive") in {"active", "high_risk"})
+        if active_tools and not payload.approved:
+            raise HTTPException(status_code=409, detail=f"Explicit approval required for active tools: {', '.join(active_tools)}")
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Could not validate pipeline tools: {exc}") from exc
     try:
         return jobs.start(
             project_id=project_id,
@@ -1153,6 +1285,24 @@ def _network_graph(project_dir: Path, target: str, repositories: LegacyRepositor
     def is_live(value: str) -> bool:
         return hostname(value) in live_hosts
 
+    def architecture_kind(result_type: str) -> str:
+        return {
+            "vulnerability": "vuln", "technology": "tech", "parameter": "param",
+            "cloud_account": "cloud_asset", "cloud_resource": "cloud_asset",
+            "cloud_bucket": "cloud_asset", "cloud_asset": "cloud_asset",
+        }.get(result_type, result_type)
+
+    def architecture_edge(result_type: str) -> str:
+        return {
+            "platform": "runs", "component": "has_component", "vulnerability": "has_finding",
+            "vuln": "has_finding", "misconfiguration": "has_finding", "cloud_account": "contains",
+            "cloud_resource": "has_resource", "cloud_asset": "has_cloud_asset", "cloudflare_zone": "contains",
+            "dns_record": "has_dns", "cluster": "contains", "workload": "contains",
+            "container_image": "uses_image", "identity_provider": "uses_identity_provider",
+            "oidc_endpoint": "exposes", "endpoint": "exposes", "secret": "contains_secret",
+            "repository": "has_repository", "email": "has_email", "person": "mentions",
+        }.get(result_type, "is_architecture")
+
     def node(nid: str, kind: str, label: str, data: dict | None = None):
         if nid not in nodes: nodes[nid] = NetworkNode(id=nid, kind=kind, label=label, data=data or {})
         elif data:
@@ -1166,7 +1316,7 @@ def _network_graph(project_dir: Path, target: str, repositories: LegacyRepositor
         edge(root, default, "has_subdomain")
     for session in sessions:
         sid=session["id"]
-        for category in ("subdomain","portscan","http","cdn","vuln","osint","crawl","params","info","custom"):
+        for category in ("subdomain","portscan","http","cdn","vuln","osint","architecture","crawl","params","info","custom"):
             for result in repo.get_results(sid, category):
                 d=result.get("data",{}); sources=result.get("sources",[])
                 if category=="subdomain" and d.get("domain"):
@@ -1196,6 +1346,19 @@ def _network_graph(project_dir: Path, target: str, repositories: LegacyRepositor
                     sub=f"subdomain:{host}"; node(sub,"subdomain",host,{"domain":host,"live":True}); vid=f"vuln:{d.get('template_id',d['name'])}:{host}"; node(vid,"vuln",d["name"],d); edge(sub,vid,"has_vuln")
                 elif category=="osint" and d.get("value"):
                     oid=f"osint:{d.get('result_type','hit')}:{d['value']}"; node(oid,"osint",str(d['value'])[:80],d); edge(root,oid,"is_osint")
+                elif category=="architecture" and d.get("value"):
+                    result_type = str(d.get("result_type") or d.get("kind") or "architecture")
+                    value = str(d.get("value"))
+                    kind = architecture_kind(result_type)
+                    related = hostname(str(d.get("related_host") or d.get("metadata", {}).get("input") or ""))
+                    parent = root
+                    if related and is_live(related):
+                        parent = f"subdomain:{related}"
+                        node(parent, "subdomain", related, {"domain": related, "live": True})
+                        edge(root, parent, "has_subdomain")
+                    node_id = f"{kind}:{value}"
+                    node(node_id, kind, value[:80], {**d, "architecture_type": result_type})
+                    edge(parent, node_id, architecture_edge(result_type))
                 elif category=="crawl" and d.get("url"):
                     parsed=urlsplit(d["url"]); host=hostname(d["url"])
                     if not is_live(host):
@@ -1443,11 +1606,15 @@ def start_graph_transform(project_id: str, payload: TransformStart, store: Proje
             raise HTTPException(status_code=409, detail="This transform requires explicit approval")
         job_id = secrets.token_hex(12)
         params = dict(payload.parameters)
+        if payload.source_job_id:
+            params = {**_GRAPH_TRANSFORM_SECRETS.get(payload.source_job_id, {}), **params}
         for parameter in ("domain", "host", "url", "endpoint"):
             params.setdefault(parameter, _transform_seed(selected[0], parameter))
         output_dir = project_dir / ".awe-transform-runs" / job_id
         operation = docker_operations.start_tool(transform.tool_key, params, output_dir, docker_service)
-        job = TransformJob(id=job_id, project_id=project_id, investigation_id=investigation.id, transform_id=transform.id, status="queued", entity_ids=payload.entity_ids, operation_id=operation.id, parameters=params, created_at=datetime.now(timezone.utc))
+        safe_params, secret_params = _redact_transform_params(transform, params)
+        _GRAPH_TRANSFORM_SECRETS[job_id] = secret_params
+        job = TransformJob(id=job_id, project_id=project_id, investigation_id=investigation.id, transform_id=transform.id, status="queued", entity_ids=payload.entity_ids, operation_id=operation.id, parameters=safe_params, created_at=datetime.now(timezone.utc))
         _GRAPH_TRANSFORM_JOBS[job.id] = job
         return job
     except ProjectNotFoundError as exc:
@@ -1479,21 +1646,8 @@ def get_graph_transform(project_id: str, job_id: str, docker_operations: DockerO
                         parser = PARSERS.get(manifest.tool_key) if manifest else None
                         if parser and operation.result.get("output_dir"):
                             parsed = parser(operation.result["output_dir"]) or []
-                            graph_store = _graph_store(project_dir); investigation = graph_store.get(project_id, job.investigation_id)
-                            created_entity_ids: list[str] = []
-                            created_relationship_ids: list[str] = []
-                            for index, result in enumerate(parsed[:1000]):
-                                data = asdict(result) if is_dataclass(result) else (result if isinstance(result, dict) else {"value": str(result)})
-                                label = str(data.get("domain") or data.get("url") or data.get("name") or data.get("host") or data.get("value") or result)
-                                entity = GraphEntity(id=f"transform:{job.id}:{index}", kind=(manifest.output_types[0] if manifest and manifest.output_types else "custom"), label=label[:500], value=label[:4096], data=data, source="transform", provenance=[{"transform_job_id": job.id, "tool_key": manifest.tool_key if manifest else ""}])
-                                graph_store.add_entity(investigation, entity)
-                                relationship = GraphRelationship(id=f"transform:{job.id}:edge:{index}", source_id=job.entity_ids[0], target_id=entity.id, kind="discovered_by", source="transform", provenance=[{"transform_job_id": job.id}])
-                                graph_store.add_relationship(investigation, relationship)
-                                created_entity_ids.append(entity.id)
-                                created_relationship_ids.append(relationship.id)
-                            if created_entity_ids or created_relationship_ids:
-                                graph_store.save(investigation.model_copy(update={"entity_ids": [*investigation.entity_ids, *created_entity_ids], "relationship_ids": [*investigation.relationship_ids, *created_relationship_ids]}), investigation.revision)
-                            job = job.model_copy(update={"outputs_ingested": True, "message": f"Completed and ingested {len(parsed)} outputs"})
+                            ingested = _ingest_graph_results(project_id, project_dir, job.investigation_id, project.target, repositories, manifest, parsed, job.entity_ids[0] if job.entity_ids else "", job.id)
+                            job = job.model_copy(update={"outputs_ingested": True, "message": f"Completed and ingested {ingested} typed outputs"})
                     except Exception as exc:
                         job = job.model_copy(update={"message": f"Completed; output ingestion skipped: {exc}"})
                 _GRAPH_TRANSFORM_JOBS[job_id] = job
@@ -1811,7 +1965,10 @@ def _docker_tool_detail(key: str) -> DockerTool:
     from containers.parsers import PARSERS
     tool = TOOL_REGISTRY[key]
     is_custom = isinstance(tool, CustomToolConfig)
-    return DockerTool(key=key, display_name=tool.display_name, category=tool.category, image=tool.image, description=tool.description, param_specs=tool.param_spec(), source="build" if tool.dockerfile else "hub", is_custom=is_custom, status="ok" if key in PARSERS else "no parser", command_template=getattr(tool, "command_template", ""), dockerfile=Path(tool.dockerfile).read_text(errors="replace") if is_custom and tool.dockerfile and Path(tool.dockerfile).exists() else "", parser=Path(tool.parser_path).read_text(errors="replace") if is_custom and tool.parser_path and Path(tool.parser_path).exists() else "")
+    input_types = list(getattr(tool, "input_types", ()) or ())
+    output_types = list(getattr(tool, "output_types", ()) or ())
+    relationship_types = list(getattr(tool, "relationship_types", ()) or ())
+    return DockerTool(key=key, display_name=tool.display_name, category=tool.category, image=tool.image, description=tool.description, param_specs=tool.param_spec(), source="build" if tool.dockerfile else "hub", is_custom=is_custom, status="ok" if key in PARSERS else "no parser", command_template=getattr(tool, "command_template", ""), dockerfile=Path(tool.dockerfile).read_text(errors="replace") if is_custom and tool.dockerfile and Path(tool.dockerfile).exists() else "", parser=Path(tool.parser_path).read_text(errors="replace") if is_custom and tool.parser_path and Path(tool.parser_path).exists() else "", input_types=input_types, output_types=output_types, relationship_types=relationship_types, execution_mode=getattr(tool, "execution_mode", "passive"), credential_fields=list(getattr(tool, "credential_fields", ()) or ()), graph_enabled=bool(input_types and output_types and key in PARSERS))
 
 
 @router.put("/docker/tools/{key}", response_model=DockerTool, tags=["docker"])
@@ -1894,11 +2051,33 @@ def cancel_docker_operation(operation_id: str, manager: DockerOperationManager =
 
 
 @router.post("/projects/{project_id}/docker/tools/{key}/runs", response_model=DockerOperation, status_code=202, tags=["docker"])
-def run_docker_tool(project_id: str, key: str, payload: DockerToolRun, store: ProjectStore = Depends(get_project_store), service: DockerService = Depends(get_docker_service), manager: DockerOperationManager = Depends(get_docker_operation_manager)) -> DockerOperation:
+def run_docker_tool(project_id: str, key: str, payload: DockerToolRun, store: ProjectStore = Depends(get_project_store), service: DockerService = Depends(get_docker_service), manager: DockerOperationManager = Depends(get_docker_operation_manager), repositories: LegacyRepositoryFactory = Depends(get_repository_factory), settings: Settings = Depends(get_settings)) -> DockerOperation:
+    project = store.get(project_id)
     project_dir = store.project_dir(project_id).resolve()
+    source = str(settings.legacy_src_dir.resolve())
+    if source not in sys.path: sys.path.insert(0, source)
+    from containers.tool_registry import TOOL_REGISTRY
+    tool = TOOL_REGISTRY.get(key)
+    if not tool:
+        raise HTTPException(status_code=404, detail="Tool not found")
+    if getattr(tool, "execution_mode", "passive") in {"active", "high_risk"} and not payload.approved:
+        raise HTTPException(status_code=409, detail="This tool requires explicit approval before execution")
+    callback = None
+    if payload.ingest_to_graph:
+        investigation_id = payload.investigation_id
+        if not investigation_id:
+            investigation_id = _ensure_investigation(project_id, project_dir, project.target, repositories).id
+        manifests = {item.tool_key: item for item in _graph_transforms(settings)}
+        manifest = manifests.get(key)
+        if not manifest:
+            raise HTTPException(status_code=422, detail="This tool has no graph contract and cannot be ingested")
+        def on_complete(parsed: list, _output_dir: Path) -> dict:
+            count = _ingest_graph_results(project_id, project_dir, investigation_id, project.target, repositories, manifest, parsed, "", f"docker-{key}-{secrets.token_hex(6)}")
+            return {"ingested_count": count, "investigation_id": investigation_id}
+        callback = on_complete
     relative = Path(payload.output_subdir)
     if relative.is_absolute() or ".." in relative.parts: raise HTTPException(status_code=422, detail="Output directory must be relative to the project")
-    return manager.start_tool(key, payload.params, project_dir / relative, service)
+    return manager.start_tool(key, payload.params, project_dir / relative, service, callback)
 
 
 @router.get("/projects/{project_id}/vault", response_model=list[VaultItem], tags=["vault"])

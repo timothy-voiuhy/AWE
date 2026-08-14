@@ -10,6 +10,7 @@ Each ToolConfig defines:
   - get_volumes(output_dir) → dict: volume mounts
 """
 import os
+import shlex
 import time
 from dataclasses import dataclass, field
 from typing import Optional
@@ -29,6 +30,15 @@ class ToolConfig:
     description: str = ""
     category: str = "misc"
     dockerfile: Optional[str] = None
+    # Graph contracts consumed by the web graph transform adapter. These are
+    # deliberately descriptive: parsers remain responsible for producing the
+    # typed result objects, while the graph layer uses these values to label
+    # the transform's expected output and relationship families.
+    output_types: tuple[str, ...] = ()
+    relationship_types: tuple[str, ...] = ()
+    input_types: tuple[str, ...] = ()
+    execution_mode: str = "passive"
+    credential_fields: tuple[str, ...] = ()
 
     def container_name(self) -> str:
         return f"awe_{self.key}_{int(time.time())}"
@@ -42,6 +52,10 @@ class ToolConfig:
 
     def build_command(self, **kwargs) -> str:
         raise NotImplementedError
+
+    def build_environment(self, **kwargs) -> dict[str, str]:
+        """Return secret-bearing environment variables without putting them in commands/logs."""
+        return {}
 
     def param_spec(self) -> list[dict]:
         """
@@ -772,6 +786,391 @@ class _CloudEnum(ToolConfig):
         ]
 
 
+# ── Network ownership / certificates ─────────────────────────────────────────
+
+@dataclass
+class _Asnmap(ToolConfig):
+    key: str = "asnmap"
+    display_name: str = "ASNMap"
+    image: str = "awe/asnmap"
+    description: str = "Map domains, organisations, ASNs, and IPs to announced network ranges"
+    category: str = "osint"
+    dockerfile: str = _DF + "Dockerfile.asnmap"
+    output_types: tuple[str, ...] = ("asn", "netblock")
+    relationship_types: tuple[str, ...] = ("owned_by", "announces", "contains")
+
+    def build_command(self, target: str = "", target_type: str = "domain",
+                      input_file: str = "", **_) -> str:
+        if input_file:
+            source = f"-f {input_file}"
+        else:
+            flag = {"domain": "-d", "asn": "-a", "ip": "-i", "org": "-org"}.get(target_type, "-d")
+            source = f"{flag} '{target}'"
+        return f"asnmap {source} -json -silent -o /output/asnmap_results.jsonl"
+
+    def param_spec(self):
+        return [
+            {"key": "target",      "label": "Domain / ASN / IP / organisation", "type": "text",  "default": ""},
+            {"key": "target_type", "label": "Input type",                       "type": "combo",
+             "options": ["domain", "asn", "ip", "org"],                         "default": "domain"},
+        ]
+
+
+@dataclass
+class _Tlsx(ToolConfig):
+    key: str = "tlsx"
+    display_name: str = "tlsx"
+    image: str = "awe/tlsx"
+    description: str = "TLS certificate, protocol, cipher, and fingerprint collection"
+    category: str = "osint"
+    dockerfile: str = _DF + "Dockerfile.tlsx"
+    output_types: tuple[str, ...] = ("certificate", "tls_finding")
+    relationship_types: tuple[str, ...] = ("has_certificate", "has_tls_finding")
+
+    def build_command(self, target: str = "", input_file: str = "", ports: str = "443",
+                      concurrency: str = "25", **_) -> str:
+        source = f"-list {input_file}" if input_file else f"-host '{target}'"
+        return (
+            f"tlsx {source} -port {ports} -json -san -cn -so -tls-version"
+            f" -cipher -hash sha256 -jarm -ja3 -serial -probe-status"
+            f" -expired -self-signed -mismatched -untrusted"
+            f" -c {concurrency} -timeout 8 -o /output/tlsx_results.jsonl"
+        )
+
+    def param_spec(self):
+        return [
+            {"key": "target",      "label": "Target host",       "type": "text", "default": ""},
+            {"key": "ports",       "label": "TLS ports",          "type": "text", "default": "443"},
+            {"key": "concurrency", "label": "Concurrency",        "type": "text", "default": "25"},
+        ]
+
+
+# ── TLS assessment ───────────────────────────────────────────────────────────
+
+@dataclass
+class _Testssl(ToolConfig):
+    key: str = "testssl"
+    display_name: str = "testssl.sh"
+    image: str = "awe/testssl"
+    description: str = "Detailed TLS protocol, cipher, certificate, and cryptographic weakness assessment"
+    category: str = "vuln"
+    dockerfile: str = _DF + "Dockerfile.testssl"
+    output_types: tuple[str, ...] = ("tls_finding",)
+    relationship_types: tuple[str, ...] = ("has_tls_finding",)
+
+    def build_command(self, target: str = "", **_) -> str:
+        return (
+            f"testssl.sh --quiet --warnings batch --jsonfile /output/testssl_results.json"
+            f" '{target}'"
+        )
+
+    def param_spec(self):
+        return [
+            {"key": "target", "label": "TLS host or URL", "type": "text", "default": ""},
+        ]
+
+
+# ── Architecture-specific adapters ──────────────────────────────────────────
+
+@dataclass
+class _Wpscan(ToolConfig):
+    key: str = "wpscan"
+    display_name: str = "WPScan"
+    image: str = "awe/wpscan"
+    description: str = "WordPress core, plugin, theme, user, and vulnerability enumeration"
+    category: str = "architecture"
+    dockerfile: str = _DF + "Dockerfile.wpscan"
+    output_types: tuple[str, ...] = ("platform", "component", "identity", "misconfiguration", "vulnerability")
+    relationship_types: tuple[str, ...] = ("runs", "has_component", "has_finding")
+    input_types: tuple[str, ...] = ("url", "domain", "subdomain", "technology")
+    execution_mode: str = "safe_active"
+    credential_fields: tuple[str, ...] = ("api_token",)
+
+    def build_command(self, url: str = "", enumerate: str = "vp,vt,u", **_) -> str:
+        return (f"wpscan --url {shlex.quote(url)} --format json "
+                f"--output /output/wpscan_results.json --enumerate {shlex.quote(enumerate)} --no-update")
+
+    def build_environment(self, api_token: str = "", **_) -> dict[str, str]:
+        return {"WPSCAN_API_TOKEN": api_token} if api_token else {}
+
+    def param_spec(self):
+        return [
+            {"key": "url", "label": "WordPress URL", "type": "text", "default": ""},
+            {"key": "enumerate", "label": "Enumeration (vp,vt,u)", "type": "text", "default": "vp,vt,u"},
+            {"key": "api_token", "label": "WPScan API token (optional)", "type": "text", "default": "secret"},
+        ]
+
+
+@dataclass
+class _Droopescan(ToolConfig):
+    key: str = "droopescan"
+    display_name: str = "Droopescan"
+    image: str = "awe/droopescan"
+    description: str = "Drupal version, module, theme, and endpoint discovery"
+    category: str = "architecture"
+    dockerfile: str = _DF + "Dockerfile.droopescan"
+    output_types: tuple[str, ...] = ("platform", "component", "endpoint", "misconfiguration")
+    relationship_types: tuple[str, ...] = ("runs", "has_component", "has_finding")
+    input_types: tuple[str, ...] = ("url", "domain", "subdomain", "technology")
+    execution_mode: str = "safe_active"
+
+    def build_command(self, url: str = "", **_) -> str:
+        return (f"droopescan scan drupal -u {shlex.quote(url)} "
+                "-o json > /output/droopescan_results.json")
+
+    def param_spec(self):
+        return [{"key": "url", "label": "Drupal URL", "type": "text", "default": ""}]
+
+
+@dataclass
+class _Prowler(ToolConfig):
+    key: str = "prowler"
+    display_name: str = "Prowler"
+    image: str = "awe/prowler"
+    description: str = "Authenticated read-only posture assessment for cloud, Kubernetes, GitHub, and identity providers"
+    category: str = "architecture"
+    dockerfile: str = _DF + "Dockerfile.prowler"
+    output_types: tuple[str, ...] = ("cloud_account", "cloud_resource", "component", "misconfiguration", "vulnerability")
+    relationship_types: tuple[str, ...] = ("contains", "has_resource", "has_finding", "uses_component")
+    input_types: tuple[str, ...] = ("cloud_asset", "cluster", "repository", "identity_provider")
+    execution_mode: str = "active"
+    credential_fields: tuple[str, ...] = ("access_key", "secret_key", "session_token", "api_token")
+
+    def build_command(self, provider: str = "aws", profile: str = "", region: str = "", **_) -> str:
+        flags = "-M json-ocsf --output-directory /output --no-banner"
+        if profile:
+            flags += f" --profile {shlex.quote(profile)}"
+        if region:
+            flags += f" --region {shlex.quote(region)}"
+        return f"prowler {shlex.quote(provider)} {flags}"
+
+    def build_environment(self, access_key: str = "", secret_key: str = "",
+                          session_token: str = "", api_token: str = "", **_) -> dict[str, str]:
+        env = {}
+        if access_key: env["AWS_ACCESS_KEY_ID"] = access_key
+        if secret_key: env["AWS_SECRET_ACCESS_KEY"] = secret_key
+        if session_token: env["AWS_SESSION_TOKEN"] = session_token
+        if api_token: env["PROWLER_API_TOKEN"] = api_token
+        return env
+
+    def param_spec(self):
+        return [
+            {"key": "provider", "label": "Provider", "type": "combo", "default": "aws", "options": ["aws", "azure", "gcp", "kubernetes", "github", "cloudflare", "okta", "iac"]},
+            {"key": "profile", "label": "Cloud profile (optional)", "type": "text", "default": ""},
+            {"key": "region", "label": "Region (optional)", "type": "text", "default": ""},
+            {"key": "access_key", "label": "AWS access key (optional)", "type": "text", "default": "secret"},
+            {"key": "secret_key", "label": "AWS secret key (optional)", "type": "text", "default": "secret"},
+            {"key": "session_token", "label": "AWS session token (optional)", "type": "text", "default": "secret"},
+            {"key": "api_token", "label": "Provider API token (optional)", "type": "secret", "default": "secret"},
+        ]
+
+
+@dataclass
+class _Kubescape(ToolConfig):
+    key: str = "kubescape"
+    display_name: str = "Kubescape"
+    image: str = "awe/kubescape"
+    description: str = "Kubernetes cluster, manifest, Helm, and image security posture scanning"
+    category: str = "architecture"
+    dockerfile: str = _DF + "Dockerfile.kubescape"
+    output_types: tuple[str, ...] = ("cluster", "workload", "container_image", "misconfiguration", "vulnerability")
+    relationship_types: tuple[str, ...] = ("contains", "runs", "uses_image", "has_finding")
+    input_types: tuple[str, ...] = ("cluster", "workload", "container_image", "file")
+    execution_mode: str = "active"
+
+    def build_command(self, target: str = "", target_type: str = "cluster", framework: str = "nsa", **_) -> str:
+        source = "" if target_type == "cluster" else shlex.quote(target)
+        command = f"scan {source}".strip()
+        if target_type == "cluster" and framework:
+            command = f"scan framework {shlex.quote(framework)}"
+        return f"{command} --format json --output /output/kubescape_results.json"
+
+    def param_spec(self):
+        return [
+            {"key": "target", "label": "Manifest directory / image", "type": "text", "default": ""},
+            {"key": "target_type", "label": "Target type", "type": "combo", "default": "cluster", "options": ["cluster", "manifest", "image"]},
+            {"key": "framework", "label": "Framework", "type": "combo", "default": "nsa", "options": ["nsa", "mitre", "cis-v1.23-t1.0.1"]},
+        ]
+
+
+@dataclass
+class _Trivy(ToolConfig):
+    key: str = "trivy"
+    display_name: str = "Trivy"
+    image: str = "awe/trivy"
+    description: str = "Container image, filesystem, repository, and IaC vulnerability/configuration scanning"
+    category: str = "architecture"
+    dockerfile: str = _DF + "Dockerfile.trivy"
+    output_types: tuple[str, ...] = ("container_image", "component", "misconfiguration", "vulnerability", "secret")
+    relationship_types: tuple[str, ...] = ("contains", "has_component", "has_finding", "contains_secret")
+    input_types: tuple[str, ...] = ("container_image", "repository", "file")
+    execution_mode: str = "safe_active"
+
+    def build_command(self, target: str = "", target_type: str = "image", **_) -> str:
+        return (f"{shlex.quote(target_type)} {shlex.quote(target)} --format json "
+                "--output /output/trivy_results.json --scanners vuln,misconfig,secret --no-progress")
+
+    def param_spec(self):
+        return [
+            {"key": "target", "label": "Image / path / repository", "type": "text", "default": ""},
+            {"key": "target_type", "label": "Scan type", "type": "combo", "default": "image", "options": ["image", "fs", "repo", "config"]},
+        ]
+
+
+@dataclass
+class _CloudflareAudit(ToolConfig):
+    key: str = "cloudflare_audit"
+    display_name: str = "Cloudflare Inventory"
+    image: str = "awe/cloudflare_audit"
+    description: str = "Read-only Cloudflare zone, DNS, proxy, plan, and account inventory"
+    category: str = "architecture"
+    dockerfile: str = _DF + "Dockerfile.cloudflare_audit"
+    output_types: tuple[str, ...] = ("cloudflare_zone", "dns_record", "cloud_resource", "misconfiguration")
+    relationship_types: tuple[str, ...] = ("contains", "has_dns", "proxied_by", "has_finding")
+    input_types: tuple[str, ...] = ("domain", "cloud_asset")
+    execution_mode: str = "active"
+    credential_fields: tuple[str, ...] = ("api_token",)
+
+    def build_command(self, zone: str = "", **_) -> str:
+        command = f"--zone {shlex.quote(zone)}" if zone else ""
+        return f"{command} --output /output/cloudflare_results.json".strip()
+
+    def build_environment(self, api_token: str = "", **_) -> dict[str, str]:
+        return {"CLOUDFLARE_API_TOKEN": api_token} if api_token else {}
+
+    def param_spec(self):
+        return [
+            {"key": "zone", "label": "Zone (optional)", "type": "text", "default": ""},
+            {"key": "api_token", "label": "Cloudflare API token", "type": "text", "default": "secret"},
+        ]
+
+
+@dataclass
+class _OidcProbe(ToolConfig):
+    key: str = "oidc_probe"
+    display_name: str = "OIDC Discovery Probe"
+    image: str = "awe/oidc_probe"
+    description: str = "Safe OpenID Connect issuer metadata and identity-provider discovery"
+    category: str = "architecture"
+    dockerfile: str = _DF + "Dockerfile.oidc_probe"
+    output_types: tuple[str, ...] = ("identity_provider", "oidc_endpoint", "component")
+    relationship_types: tuple[str, ...] = ("exposes", "uses_endpoint", "has_component")
+    input_types: tuple[str, ...] = ("url", "identity_provider", "domain")
+    execution_mode: str = "safe_active"
+
+    def build_command(self, issuer: str = "", **_) -> str:
+        return f"{shlex.quote(issuer)} --output /output/oidc_results.json"
+
+    def param_spec(self):
+        return [{"key": "issuer", "label": "OIDC issuer URL", "type": "text", "default": ""}]
+
+
+# ── Email / person OSINT ──────────────────────────────────────────────────────
+
+@dataclass
+class _TheHarvester(ToolConfig):
+    key: str = "theharvester"
+    display_name: str = "theHarvester"
+    image: str = "awe/theharvester"
+    description: str = "Passive OSINT collection for emails, names, IPs, subdomains, and URLs"
+    category: str = "osint"
+    dockerfile: str = _DF + "Dockerfile.theharvester"
+    output_types: tuple[str, ...] = ("email", "person", "ip", "subdomain", "url")
+    relationship_types: tuple[str, ...] = ("has_email", "mentions", "discovers", "resolves_to")
+
+    def build_command(self, domain: str = "", sources: str = "all", **_) -> str:
+        return f"theHarvester -d '{domain}' -b '{sources}' -f /output/theharvester_results"
+
+    def param_spec(self):
+        return [
+            {"key": "domain",  "label": "Target domain",       "type": "text", "default": ""},
+            {"key": "sources", "label": "Data sources",        "type": "text", "default": "all"},
+        ]
+
+
+# ── Repository / file secrets ─────────────────────────────────────────────────
+
+@dataclass
+class _Gitleaks(ToolConfig):
+    key: str = "gitleaks"
+    display_name: str = "Gitleaks"
+    image: str = "awe/gitleaks"
+    description: str = "Detect exposed secrets in repositories, files, and commit history"
+    category: str = "osint"
+    dockerfile: str = _DF + "Dockerfile.gitleaks"
+    output_types: tuple[str, ...] = ("secret", "repository")
+    relationship_types: tuple[str, ...] = ("contains_secret", "found_in")
+
+    def build_command(self, source: str = "/input", **_) -> str:
+        return (
+            f"gitleaks dir --source '{source}' --report-format json"
+            f" --report-path /output/gitleaks_results.json --no-banner"
+        )
+
+    def param_spec(self):
+        return [
+            {"key": "source", "label": "Repository path (container path)", "type": "text", "default": "/input"},
+        ]
+
+
+# ── Technology fingerprinting ────────────────────────────────────────────────
+
+@dataclass
+class _Whatweb(ToolConfig):
+    key: str = "whatweb"
+    display_name: str = "WhatWeb"
+    image: str = "awe/whatweb"
+    description: str = "Web technology and version fingerprinting across CMS, frameworks, servers, and libraries"
+    category: str = "http"
+    dockerfile: str = _DF + "Dockerfile.whatweb"
+    output_types: tuple[str, ...] = ("url", "technology")
+    relationship_types: tuple[str, ...] = ("uses_technology", "fingerprints")
+
+    def build_command(self, target: str = "", aggression: str = "1",
+                      threads: str = "10", **_) -> str:
+        return (
+            f"whatweb --log-json=/output/whatweb_results.json --no-errors"
+            f" --color=never --aggression={aggression} --max-threads={threads} '{target}'"
+        )
+
+    def param_spec(self):
+        return [
+            {"key": "target",     "label": "Target URL",  "type": "text",  "default": ""},
+            {"key": "aggression", "label": "Aggression",  "type": "combo", "options": ["1", "3", "4"], "default": "1"},
+            {"key": "threads",    "label": "Threads",     "type": "text",  "default": "10"},
+        ]
+
+
+# ── Cloud bucket exposure ─────────────────────────────────────────────────────
+
+@dataclass
+class _S3Scanner(ToolConfig):
+    key: str = "s3scanner"
+    display_name: str = "S3Scanner"
+    image: str = "awe/s3scanner"
+    description: str = "Check S3-compatible bucket permissions across AWS and other storage providers"
+    category: str = "osint"
+    dockerfile: str = _DF + "Dockerfile.s3scanner"
+    output_types: tuple[str, ...] = ("cloud_bucket", "cloud_finding")
+    relationship_types: tuple[str, ...] = ("has_cloud_asset", "has_cloud_finding")
+
+    def build_command(self, bucket: str = "", provider: str = "aws",
+                      threads: str = "4", enumerate_objects: bool = False,
+                      input_file: str = "", **_) -> str:
+        source = f"-bucket-file '{input_file}'" if input_file else f"-bucket '{bucket}'"
+        enum_flag = " -enumerate" if enumerate_objects else ""
+        return f"s3scanner {source} -provider {provider} -threads {threads} -json{enum_flag} > /output/s3scanner_results.jsonl"
+
+    def param_spec(self):
+        return [
+            {"key": "bucket",            "label": "Bucket name",       "type": "text",  "default": ""},
+            {"key": "provider",          "label": "Provider",           "type": "combo",
+             "options": ["aws", "gcp", "digitalocean", "linode", "scaleway", "custom"], "default": "aws"},
+            {"key": "threads",           "label": "Threads",            "type": "text",  "default": "4"},
+            {"key": "enumerate_objects", "label": "Enumerate objects",   "type": "check", "default": False},
+        ]
+
+
 # ── JWT Analysis ─────────────────────────────────────────────────────────────
 
 @dataclass
@@ -1177,6 +1576,23 @@ TOOL_REGISTRY: dict[str, ToolConfig] = {
         # osint
         _GithubRecon(),
         _CloudEnum(),
+        _Asnmap(),
+        _Tlsx(),
+        _TheHarvester(),
+        _Gitleaks(),
+        _S3Scanner(),
+        # technology fingerprinting
+        _Whatweb(),
+        # TLS assessment
+        _Testssl(),
+        # architecture-specific platforms and posture
+        _Wpscan(),
+        _Droopescan(),
+        _Prowler(),
+        _Kubescape(),
+        _Trivy(),
+        _CloudflareAudit(),
+        _OidcProbe(),
     ]
 }
 

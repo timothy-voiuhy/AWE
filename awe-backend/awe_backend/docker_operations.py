@@ -3,6 +3,7 @@ from __future__ import annotations
 import secrets
 import threading
 from pathlib import Path
+from typing import Callable
 
 from .docker_service import DockerService
 from .schemas import DockerOperation
@@ -51,8 +52,9 @@ class DockerOperationManager:
         except Exception: pass
         return self.get(item.id)
 
-    def start_tool(self, key: str, params: dict, output_dir: Path, service: DockerService) -> DockerOperation:
-        return self._start(f"tool.{key}", lambda oid: self._run_tool(oid, key, params, output_dir, service))
+    def start_tool(self, key: str, params: dict, output_dir: Path, service: DockerService,
+                   on_complete: Callable[[list, Path], dict] | None = None) -> DockerOperation:
+        return self._start(f"tool.{key}", lambda oid: self._run_tool(oid, key, params, output_dir, service, on_complete))
 
     def start_one_image(self, key: str, operation: str, service: DockerService) -> DockerOperation:
         return self._start(f"image.{operation}.{key}", lambda oid: self._run_one_image(oid, key, operation, service))
@@ -90,7 +92,8 @@ class DockerOperationManager:
             self._finish(oid, result)
         except Exception as exc: self._log(oid, f"ERROR: {exc}"); self._fail(oid, exc)
 
-    def _run_tool(self, oid: str, key: str, params: dict, output_dir: Path, service: DockerService) -> None:
+    def _run_tool(self, oid: str, key: str, params: dict, output_dir: Path, service: DockerService,
+                  on_complete: Callable[[list, Path], dict] | None = None) -> None:
         self._running(oid)
         try:
             import sys
@@ -105,7 +108,15 @@ class DockerOperationManager:
             output_dir.mkdir(parents=True, exist_ok=True)
             command = tool.build_command(**params)
             self._log(oid, f"Starting {tool.image}: {command}")
-            container = service._client().containers.run(image=tool.image, command=command, name=tool.container_name(), volumes=tool.get_volumes(str(output_dir)), detach=True)
+            environment = tool.build_environment(**params)
+            container = service._client().containers.run(
+                image=tool.image,
+                command=command,
+                name=tool.container_name(),
+                volumes=tool.get_volumes(str(output_dir)),
+                environment=environment or None,
+                detach=True,
+            )
             with self._lock: self._containers[oid] = container
             for chunk in container.logs(stream=True, follow=True):
                 self._log(oid, chunk.decode(errors="replace").rstrip())
@@ -113,7 +124,22 @@ class DockerOperationManager:
             code = container.attrs.get("State", {}).get("ExitCode", 0)
             if oid in self._cancelled: return self._finish(oid, {"container_id": container.short_id, "output_dir": str(output_dir)})
             if code: raise RuntimeError(f"Container exited with code {code}")
-            self._finish(oid, {"container_id": container.short_id, "output_dir": str(output_dir)})
+            parsed: list = []
+            try:
+                from containers.parsers import PARSERS
+                parser = PARSERS.get(key)
+                if parser:
+                    parsed = parser(str(output_dir)) or []
+            except Exception as exc:
+                self._log(oid, f"Parser warning: {exc}")
+            result = {"container_id": container.short_id, "output_dir": str(output_dir), "parsed_count": len(parsed)}
+            if on_complete and parsed:
+                try:
+                    result.update(on_complete(parsed, output_dir) or {})
+                except Exception as exc:
+                    self._log(oid, f"Graph ingestion warning: {exc}")
+                    result["ingestion_error"] = str(exc)
+            self._finish(oid, result)
         except Exception as exc: self._fail(oid, exc)
 
     def _running(self, oid):
