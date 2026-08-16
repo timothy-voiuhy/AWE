@@ -193,6 +193,35 @@ class StoredResult(BaseModel):
     created_at: str = ""
 
 
+class ReportGenerateRequest(BaseModel):
+    template: Literal["hackerone", "bugcrowd", "general"] = "hackerone"
+    result_ids: list[str] = Field(default_factory=list, max_length=500)
+    evidence_ids: list[str] = Field(default_factory=list, max_length=500)
+    title: str = Field(default="", max_length=300)
+    weakness: str = Field(default="", max_length=200)
+    severity: Literal["informational", "low", "medium", "high", "critical"] = "medium"
+    asset: str = Field(default="", max_length=2048)
+    vulnerability_type: str = Field(default="", max_length=200)
+    affected_component: str = Field(default="", max_length=500)
+    attacker: str = Field(default="an unauthenticated attacker", max_length=200)
+    impact: str = Field(default="", max_length=50_000)
+    steps_to_reproduce: str = Field(default="", max_length=100_000)
+    remediation: str = Field(default="", max_length=50_000)
+    include_evidence: bool = True
+    include_raw: bool = False
+    include_project_notes: bool = False
+    include_methodology_notes: bool = True
+
+
+class ReportGenerateResponse(BaseModel):
+    template: str
+    title: str
+    markdown: str
+    warnings: list[str] = Field(default_factory=list)
+    result_count: int = 0
+    evidence_count: int = 0
+
+
 class ImportSubdomainsResult(BaseModel):
     session_id: str
     imported: int = 0

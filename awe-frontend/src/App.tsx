@@ -27,6 +27,7 @@ import { AIPage } from './features/ai/AIPage'
 import { StreamingAIPage } from './features/ai/StreamingAIPage'
 import { TerminalPage } from './features/terminal/TerminalPage'
 import { ResultsPage } from './features/results/ResultsPage'
+import { ReportPage } from './features/reports/ReportPage'
 import { TerminalConfigPage } from './features/terminal/TerminalConfigPage'
 import { DockerManagerPage } from './features/operations/DockerManagerPage'
 import { PipelinePage } from './features/pipeline/PipelinePage'
@@ -48,6 +49,7 @@ const workspaceNav = [
   { path: '/ai', label: 'AI Chat', glyph: '✦' },
   { path: '/terminal', label: 'Terminal', glyph: '>_' },
   { path: '/results', label: 'Results', glyph: '◈', icon: '/assets/icons/results.png' },
+  { path: '/reports', label: 'Reports', glyph: '▧', icon: '/assets/icons/notes.png' },
   { path: '/history', label: 'History', glyph: '⊟', icon: '/assets/icons/http.png' },
   { path: '/sitemap', label: 'Site Map', glyph: '◫', icon: '/assets/icons/sitemap.png' },
   { path: '/network', label: 'Network', glyph: '⊗', icon: '/assets/icons/network.png', children: [
@@ -144,6 +146,7 @@ export function App() {
         <Route path="/projects/:projectId/ai" element={<StreamingAIPage />} />
         <Route path="/projects/:projectId/terminal" element={<TerminalPage />} />
         <Route path="/projects/:projectId/results" element={<ResultsPage />} />
+        <Route path="/projects/:projectId/reports" element={<ReportPage />} />
         <Route path="/projects/:projectId/terminal/config" element={<TerminalConfigPage />} />
         <Route path="/projects/:projectId/decoder" element={<DecoderPage />} />
         <Route path="/projects/:projectId/comparer" element={<ComparerPage />} />

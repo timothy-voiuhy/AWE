@@ -94,6 +94,28 @@ export interface StoredResult {
   sources: string[]
   created_at: string
 }
+export type ReportTemplate = 'hackerone' | 'bugcrowd' | 'general'
+export type ReportSeverity = 'informational' | 'low' | 'medium' | 'high' | 'critical'
+export interface ReportGenerateRequest {
+  template: ReportTemplate
+  result_ids: string[]
+  evidence_ids: string[]
+  title: string
+  weakness: string
+  severity: ReportSeverity
+  asset: string
+  vulnerability_type: string
+  affected_component: string
+  attacker: string
+  impact: string
+  steps_to_reproduce: string
+  remediation: string
+  include_evidence: boolean
+  include_raw: boolean
+  include_project_notes: boolean
+  include_methodology_notes: boolean
+}
+export interface ReportGenerateResponse { template:string; title:string; markdown:string; warnings:string[]; result_count:number; evidence_count:number }
 export interface ImportSubdomainsResult { session_id:string; imported:number; duplicates:number; graph_entities:number; evidence_id:string; values:string[] }
 
 export interface TrafficEntry {
@@ -246,6 +268,7 @@ export const api = {
   listSessionToolRuns: (projectId:string,sessionId:string)=>request<PipelineToolRun[]>(`/projects/${projectId}/sessions/${sessionId}/tool-runs`),
   deleteSession: (projectId:string,sessionId:string)=>request<void>(`/projects/${projectId}/sessions/${sessionId}`,{method:'DELETE'}),
   listProjectResults: (projectId: string) => request<StoredResult[]>(`/projects/${projectId}/results`),
+  generateReport: (projectId:string,data:ReportGenerateRequest)=>request<ReportGenerateResponse>(`/projects/${projectId}/reports/generate`,{method:'POST',body:JSON.stringify(data)}),
   importSubdomains: (projectId:string,file:File,options:{investigation_id?:string;attach_to_graph?:boolean}={})=>{const data=new FormData();data.append('upload',file);data.append('investigation_id',options.investigation_id||'');data.append('attach_to_graph',String(options.attach_to_graph ?? true));return request<ImportSubdomainsResult>(`/projects/${projectId}/results/import-subdomains`,{method:'POST',body:data})},
   listResults: (projectId: string, sessionId: string) =>
     request<StoredResult[]>(`/projects/${projectId}/sessions/${sessionId}/results`),
