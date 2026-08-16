@@ -94,6 +94,7 @@ export interface StoredResult {
   sources: string[]
   created_at: string
 }
+export interface ImportSubdomainsResult { session_id:string; imported:number; duplicates:number; graph_entities:number; evidence_id:string; values:string[] }
 
 export interface TrafficEntry {
   id: string
@@ -118,8 +119,13 @@ export interface GraphRelationship { id:string; source_id:string; target_id:stri
 export interface GraphInvestigation { id:string; project_id:string; name:string; revision:number; created_at:string; updated_at:string; root_ids:string[]; entity_ids:string[]; relationship_ids:string[]; preferences:Record<string,unknown> }
 export interface GraphBundle { investigation:GraphInvestigation; entities:GraphEntity[]; relationships:GraphRelationship[]; revision:number }
 export interface GraphMergeResult { entity:GraphEntity; merged_entity_ids:string[]; rewired_relationships:number; removed_relationships:number; revision:number }
-export interface TransformManifest { id:string; tool_key:string; display_name:string; description:string; input_types:string[]; output_types:string[]; relationship_types:string[]; mode:'passive'|'safe_active'|'active'|'high_risk'; requires_approval:boolean; scope_required:boolean; parameters:Array<Record<string,unknown>> }
+export interface TransformStage { name:string; tool_keys:string[]; input_source:'seed'|'previous'; parameters:Record<string, unknown> }
+export interface TransformManifest { id:string; tool_key:string; display_name:string; description:string; input_types:string[]; output_types:string[]; relationship_types:string[]; mode:'passive'|'safe_active'|'active'|'high_risk'; requires_approval:boolean; scope_required:boolean; parameters:Array<Record<string,unknown>>; stages:TransformStage[] }
+export interface TransformDefinitionInput { id?:string; display_name:string; description:string; input_types:string[]; output_types:string[]; relationship_types:string[]; mode:'passive'|'safe_active'|'active'|'high_risk'; requires_approval:boolean; scope_required:boolean; parameters:Array<Record<string,unknown>>; stages:TransformStage[] }
 export interface TransformJob { id:string; project_id:string; investigation_id:string; transform_id:string; status:'queued'|'running'|'completed'|'failed'|'cancelled'|'approval_required'; entity_ids:string[]; operation_id:string; parameters:Record<string,unknown>; message:string; created_at:string; completed_at:string|null; outputs_ingested?:boolean; progress_completed?:number; progress_total?:number; logs?:string[] }
+export type EvidenceKind = 'tool_output'|'http'|'screenshot'|'note'|'finding'|'file'|'manual'
+export interface EvidenceInput { investigation_id?:string; title:string; summary:string; kind:EvidenceKind; source_type:string; source_id:string; entity_ids:string[]; relationship_ids:string[]; tags:string[]; data:Record<string,unknown> }
+export interface EvidenceRecord extends EvidenceInput { id:string; project_id:string; created_at:string }
 
 export interface RepeaterResponse { status_code: number; reason: string; headers: Record<string, string>; body: string; elapsed_ms: number; body_truncated: boolean }
 export interface ProjectSettings { default_threads:number;default_rate_limit:number;default_concurrency:number;proxy_port:number;upstream_proxy:string }
@@ -240,6 +246,7 @@ export const api = {
   listSessionToolRuns: (projectId:string,sessionId:string)=>request<PipelineToolRun[]>(`/projects/${projectId}/sessions/${sessionId}/tool-runs`),
   deleteSession: (projectId:string,sessionId:string)=>request<void>(`/projects/${projectId}/sessions/${sessionId}`,{method:'DELETE'}),
   listProjectResults: (projectId: string) => request<StoredResult[]>(`/projects/${projectId}/results`),
+  importSubdomains: (projectId:string,file:File,options:{investigation_id?:string;attach_to_graph?:boolean}={})=>{const data=new FormData();data.append('upload',file);data.append('investigation_id',options.investigation_id||'');data.append('attach_to_graph',String(options.attach_to_graph ?? true));return request<ImportSubdomainsResult>(`/projects/${projectId}/results/import-subdomains`,{method:'POST',body:data})},
   listResults: (projectId: string, sessionId: string) =>
     request<StoredResult[]>(`/projects/${projectId}/sessions/${sessionId}/results`),
   listTraffic: (projectId: string) => request<TrafficEntry[]>(`/projects/${projectId}/traffic`),
@@ -266,10 +273,18 @@ export const api = {
   deleteGraphRelationship:(projectId:string,id:string,relationshipId:string)=>request<void>(`/projects/${projectId}/investigations/${id}/relationships/${encodeURIComponent(relationshipId)}`,{method:'DELETE'}),
   saveGraphPreferences:(projectId:string,id:string,data:{preferences:Record<string,unknown>;revision:number})=>request<GraphInvestigation>(`/projects/${projectId}/investigations/${id}/preferences`,{method:'PUT',body:JSON.stringify(data)}),
   listGraphTransforms:(projectId:string)=>request<TransformManifest[]>(`/projects/${projectId}/transforms`),
+  createTransformDefinition:(projectId:string,data:TransformDefinitionInput)=>request<TransformManifest>(`/projects/${projectId}/transform-definitions`,{method:'POST',body:JSON.stringify(data)}),
+  deleteTransformDefinition:(projectId:string,id:string)=>request<void>(`/projects/${projectId}/transform-definitions/${encodeURIComponent(id)}`,{method:'DELETE'}),
+  listGraphTransformJobs:(projectId:string)=>request<TransformJob[]>(`/projects/${projectId}/transforms/jobs`),
   startGraphTransform:(projectId:string,data:{transform_id:string;entity_ids:string[];parameters?:Record<string,unknown>;investigation_id?:string;approved?:boolean;source_job_id?:string})=>request<TransformJob>(`/projects/${projectId}/transforms`,{method:'POST',body:JSON.stringify(data)}),
   getGraphTransform:(projectId:string,id:string)=>request<TransformJob>(`/projects/${projectId}/transforms/${id}`),
   cancelGraphTransform:(projectId:string,id:string)=>request<TransformJob>(`/projects/${projectId}/transforms/${id}/cancel`,{method:'POST'}),
+  listEvidence:(projectId:string,options:{investigation_id?:string;source_id?:string;entity_id?:string}={})=>{const params=new URLSearchParams();if(options.investigation_id)params.set('investigation_id',options.investigation_id);if(options.source_id)params.set('source_id',options.source_id);if(options.entity_id)params.set('entity_id',options.entity_id);const suffix=params.toString()?`?${params.toString()}`:'';return request<EvidenceRecord[]>(`/projects/${projectId}/evidence${suffix}`)},
+  createEvidence:(projectId:string,data:EvidenceInput)=>request<EvidenceRecord>(`/projects/${projectId}/evidence`,{method:'POST',body:JSON.stringify(data)}),
+  getEvidence:(projectId:string,id:string)=>request<EvidenceRecord>(`/projects/${projectId}/evidence/${encodeURIComponent(id)}`),
+  deleteEvidence:(projectId:string,id:string)=>request<void>(`/projects/${projectId}/evidence/${encodeURIComponent(id)}`,{method:'DELETE'}),
   getTraffic: (projectId:string,trafficId:string)=>request<TrafficEntry>(`/projects/${projectId}/traffic/${trafficId}`),
+  createTrafficEvidence:(projectId:string,trafficId:string)=>request<EvidenceRecord>(`/projects/${projectId}/traffic/${trafficId}/evidence`,{method:'POST'}),
   deleteTraffic: (projectId:string,trafficId:string)=>request<void>(`/projects/${projectId}/traffic/${trafficId}`,{method:'DELETE'}),
   deleteTrafficSubtree:(projectId:string,host:string,pathPrefix='')=>request<void>(`/projects/${projectId}/traffic?host=${encodeURIComponent(host)}&path_prefix=${encodeURIComponent(pathPrefix)}`,{method:'DELETE'}),
   syncTrafficResults:(projectId:string)=>request<{session_id:string;written_by_category:Record<string,number>;extracted_counts:Record<string,number>}>(`/projects/${projectId}/traffic/sync-results`,{method:'POST'}),

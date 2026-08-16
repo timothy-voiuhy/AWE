@@ -4,7 +4,7 @@ import { Link, useLocation, useParams } from 'react-router-dom'
 import { api, InterceptRequest } from '../../api/client'
 import { createClientId } from './httpCodeView'
 
-function Head({ id, title, detail }: { id:string;title:string;detail:string }) { return <><Link className="back-link" to={`/projects/${id}`}>← Project workspace</Link><header className="page-header"><div><p className="eyebrow">Manual testing</p><h1>{title}</h1><p className="muted">{detail}</p></div></header></> }
+function Head({ id, title, detail }: { id:string;title:string;detail:string }) { return <><header className="page-header"><div><p className="eyebrow">Manual testing</p><h1>{title}</h1><p className="muted">{detail}</p></div></header></> }
 function errorText(error: unknown) { return error instanceof Error ? error.message : 'Request failed' }
 
 export function IntruderPage() {

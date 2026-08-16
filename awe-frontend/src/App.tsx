@@ -14,6 +14,9 @@ import { JwtPage } from './features/utilities/JwtPage'
 import { HttpHistoryPage, SiteMapPage } from './features/proxy/TrafficPages'
 import { NetworkGraphPage } from './features/network/NetworkGraphPage'
 import { GraphToolsPage } from './features/network/GraphToolsPage'
+import { NetworkLogsPage } from './features/network/NetworkLogsPage'
+import { NetworkTransformsPage } from './features/network/NetworkTransformsPage'
+import { NetworkEvidencePage } from './features/network/NetworkEvidencePage'
 import { RepeaterPage } from './features/testing/RepeaterPage'
 import { DockerPage, SettingsPage } from './features/operations/OperationsPages'
 import { InterceptPage, WebSocketsPage } from './features/testing/SecurityTestingPages'
@@ -28,6 +31,15 @@ import { TerminalConfigPage } from './features/terminal/TerminalConfigPage'
 import { DockerManagerPage } from './features/operations/DockerManagerPage'
 import { PipelinePage } from './features/pipeline/PipelinePage'
 import { DatabasePage } from './features/operations/DatabasePage'
+import { DocsPage } from './features/docs/DocsPage'
+
+type WorkspaceNavItem = {
+  path: string
+  label: string
+  glyph: string
+  icon?: string
+  children?: WorkspaceNavItem[]
+}
 
 const workspaceNav = [
   { path: '', label: 'Overview', glyph: '⌂', icon: '/assets/icons/target.png' },
@@ -38,8 +50,13 @@ const workspaceNav = [
   { path: '/results', label: 'Results', glyph: '◈', icon: '/assets/icons/results.png' },
   { path: '/history', label: 'History', glyph: '⊟', icon: '/assets/icons/http.png' },
   { path: '/sitemap', label: 'Site Map', glyph: '◫', icon: '/assets/icons/sitemap.png' },
-  { path: '/network', label: 'Network', glyph: '⊗', icon: '/assets/icons/network.png' },
-  { path: '/graph-tools', label: 'Graph Tools', glyph: '⚙', icon: '/assets/icons/docker.png' },
+  { path: '/network', label: 'Network', glyph: '⊗', icon: '/assets/icons/network.png', children: [
+    { path: '/network/transforms', label: 'Transforms', glyph: '⚡', icon: '/assets/icons/pipeline.png' },
+    { path: '/network/tools', label: 'Graph Tools', glyph: '⚙', icon: '/assets/icons/docker.png' },
+    { path: '/network/logs', label: 'Logs', glyph: '▤', icon: '/assets/icons/http.png' },
+    { path: '/network/evidence', label: 'Evidence', glyph: '◈', icon: '/assets/icons/results.png' },
+    { path: '/network/docs', label: 'Docs', glyph: '?', icon: '/assets/icons/notes.png' },
+  ] },
   { path: '/repeater', label: 'Repeater', glyph: '↻', icon: '/assets/icons/repeater.png' },
   { path: '/intruder', label: 'Intruder', glyph: '⚡', icon: '/assets/icons/intruder.png' },
   { path: '/intercept', label: 'Intercept', glyph: '⏸', icon: '/assets/icons/intercept.png' },
@@ -51,7 +68,7 @@ const workspaceNav = [
   { path: '/docker', label: 'Docker', glyph: '⬡', icon: '/assets/icons/docker.png' },
   { path: '/vault', label: 'Vault', glyph: '⛁', icon: '/assets/icons/notes.png' },
   { path: '/settings', label: 'Settings', glyph: '⚙', icon: '/assets/icons/settings-512.png' },
-]
+] satisfies WorkspaceNavItem[]
 
 export function App() {
   const [sidebarOpen, setSidebarOpen] = useState(false)
@@ -105,6 +122,7 @@ export function App() {
         onTouchEnd={() => { swipeStart.current = null }}
         onTouchCancel={() => { swipeStart.current = null }}
       />}
+      {!sidebarOpen && <button className="sidebar-menu-button" type="button" aria-label="Open navigation sidebar" onClick={() => setSidebarOpen(true)}>☰</button>}
       {sidebarOpen && <button className="sidebar-scrim" onClick={() => setSidebarOpen(false)} />}
       <aside className={`sidebar ${sidebarOpen ? 'sidebar-open' : ''} ${sidebarCollapsed ? 'sidebar-collapsed' : ''}`}>
         <div className="brand"><span>AW</span><strong>AWE</strong><button className="sidebar-toggle" onClick={() => setSidebarCollapsed((value) => !value)}>{sidebarCollapsed ? '›' : '‹'}</button><button className="mobile-close" onClick={() => setSidebarOpen(false)}>×</button></div>
@@ -112,7 +130,7 @@ export function App() {
           <NavLink onClick={() => setSidebarOpen(false)} title="Projects" className={({ isActive }) => isActive && !projectId ? 'active' : ''} to="/projects"><img src="/assets/icons/target.png" alt="" /><em>Projects</em></NavLink>
           <NavLink onClick={() => setSidebarOpen(false)} title="Vault" className={({ isActive }) => isActive ? 'active' : ''} to="/vault"><img src="/assets/icons/notes.png" alt="" /><em>Vault</em></NavLink>
           <NavLink onClick={() => setSidebarOpen(false)} title="Database" className={({ isActive }) => isActive ? 'active' : ''} to="/database"><span>▦</span><em>Database</em></NavLink>
-          {projectId && <div className="workspace-nav"><small>Workspace</small>{workspaceNav.map((item) => <NavLink onClick={() => setSidebarOpen(false)} title={item.label} end={!item.path} className={({ isActive }) => isActive ? 'active' : ''} to={`/projects/${projectId}${item.path}`} key={item.label}>{item.icon ? <img src={item.icon} alt="" /> : <span>{item.glyph}</span>}<em>{item.label}</em></NavLink>)}</div>}
+          {projectId && <div className="workspace-nav"><small>Workspace</small>{workspaceNav.map((item) => <div className={item.children ? 'nav-group' : undefined} key={item.label}><NavLink onClick={() => setSidebarOpen(false)} title={item.label} end={!item.path} className={({ isActive }) => isActive ? 'active' : ''} to={`/projects/${projectId}${item.path}`}>{item.icon ? <img src={item.icon} alt="" /> : <span>{item.glyph}</span>}<em>{item.label}</em></NavLink>{item.children && <div className="nav-children">{item.children.map((child) => <NavLink onClick={() => setSidebarOpen(false)} title={child.label} className={({ isActive }) => isActive ? 'active' : ''} to={`/projects/${projectId}${child.path}`} key={child.label}>{child.icon ? <img src={child.icon} alt="" /> : <span>{child.glyph}</span>}<em>{child.label}</em></NavLink>)}</div>}</div>)}</div>}
         </nav>
         <button className="logout-button" title="Sign out" onClick={() => logout.mutate()}><span>⇥</span><em>Sign out</em></button>
         <small>Attack Workspace Environment</small>
@@ -134,7 +152,12 @@ export function App() {
         <Route path="/projects/:projectId/history" element={<HttpHistoryPage />} />
         <Route path="/projects/:projectId/sitemap" element={<SiteMapPage />} />
         <Route path="/projects/:projectId/network" element={<NetworkGraphPage />} />
-        <Route path="/projects/:projectId/graph-tools" element={<GraphToolsPage />} />
+        <Route path="/projects/:projectId/network/transforms" element={<NetworkTransformsPage />} />
+        <Route path="/projects/:projectId/network/tools" element={<GraphToolsPage />} />
+        <Route path="/projects/:projectId/network/logs" element={<NetworkLogsPage />} />
+        <Route path="/projects/:projectId/network/evidence" element={<NetworkEvidencePage />} />
+        <Route path="/projects/:projectId/network/docs" element={<DocsPage />} />
+        <Route path="/projects/:projectId/graph-tools" element={<Navigate to="../network/tools" replace />} />
         <Route path="/projects/:projectId/repeater" element={<RepeaterPage />} />
         <Route path="/projects/:projectId/intruder" element={<IntruderPage />} />
         <Route path="/projects/:projectId/intercept" element={<InterceptPage />} />

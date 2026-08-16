@@ -29,7 +29,7 @@ export function DecoderPage() {
   }, [input, operation])
 
   return <main className="page feature-page">
-    <Link className="back-link" to={`/projects/${projectId}`}>← Project workspace</Link>
+    
     <header className="page-header"><div><p className="eyebrow">Utilities</p><h1>Decoder</h1><p className="muted">Encode and decode common web data formats locally in your browser.</p></div></header>
     <section className="panel utility-toolbar"><label>Operation<select value={operation} onChange={(event) => setOperation(event.target.value as Transform)}><option value="base64-decode">Base64 decode</option><option value="base64-encode">Base64 encode</option><option value="url-decode">URL decode</option><option value="url-encode">URL encode</option><option value="hex-decode">Hex decode</option><option value="hex-encode">Hex encode</option></select></label><button onClick={() => setInput('')}>Clear</button></section>
     <section className="editor-grid"><label className="panel editor-panel"><span>Input</span><textarea value={input} onChange={(event) => setInput(event.target.value)} placeholder="Paste encoded or plain text…" spellCheck={false} /></label><label className="panel editor-panel"><span>Output</span><textarea value={result.value} readOnly placeholder="Transformed output appears here" spellCheck={false} />{result.error && <small className="error">{result.error}</small>}</label></section>

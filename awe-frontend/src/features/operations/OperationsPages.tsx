@@ -4,7 +4,7 @@ import { Link, useParams } from 'react-router-dom'
 import { api, AISettings, ProjectSettings } from '../../api/client'
 
 const defaults:ProjectSettings={default_threads:10,default_rate_limit:150,default_concurrency:25,proxy_port:8080,upstream_proxy:''}
-function Head({id,title,detail}:{id:string;title:string;detail:string}){return <><Link className="back-link" to={`/projects/${id}`}>← Project workspace</Link><header className="page-header"><div><p className="eyebrow">Administration</p><h1>{title}</h1><p className="muted">{detail}</p></div></header></>}
+function Head({id,title,detail}:{id:string;title:string;detail:string}){return <><header className="page-header"><div><p className="eyebrow">Administration</p><h1>{title}</h1><p className="muted">{detail}</p></div></header></>}
 
 export function SettingsPage(){
   const {id=''}={id:useParams().projectId};

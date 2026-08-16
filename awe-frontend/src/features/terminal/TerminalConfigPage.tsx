@@ -86,7 +86,7 @@ export function TerminalConfigPage() {
   function submit(e: FormEvent) { e.preventDefault(); save.mutate() }
 
   return <main className="page feature-page terminal-config-page">
-    <Link className="back-link" to={`/projects/${projectId}/terminal`}>← Terminal</Link>
+    
     <header className="page-header"><div><p className="eyebrow">Remote operations</p><h1>Terminal configuration</h1><p className="muted">Profiles sync across devices. Load a private key here or directly when connecting; keys remain session-only on each device.</p></div></header>
     <section className="terminal-config-grid">
       <form className="panel terminal-profile-form" onSubmit={submit}>

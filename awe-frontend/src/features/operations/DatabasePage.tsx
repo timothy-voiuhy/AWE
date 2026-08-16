@@ -43,7 +43,7 @@ export function DatabasePage() {
   }
 
   return <main className="page feature-page database-page">
-    <Link className="back-link" to="/projects">← Projects</Link>
+    
     <header className="page-header">
       <div>
         <p className="eyebrow">System storage</p>

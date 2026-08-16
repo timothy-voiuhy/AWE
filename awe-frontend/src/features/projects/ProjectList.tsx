@@ -31,7 +31,6 @@ export function ProjectList() {
           <h1>Projects</h1>
           <p className="muted">Choose a target workspace or start a new engagement.</p>
         </div>
-        <span className="status"><i /> Backend connected</span>
       </header>
 
       <section className="panel create-panel">
@@ -71,4 +70,3 @@ export function ProjectList() {
     </main>
   )
 }
-

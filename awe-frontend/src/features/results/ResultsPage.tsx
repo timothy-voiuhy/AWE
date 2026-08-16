@@ -3,6 +3,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useParams, useSearchParams } from 'react-router-dom'
 
 import { api, type StoredResult } from '../../api/client'
+import { SubdomainImportPanel } from './SubdomainImportPanel'
 
 const categories = [
   ['subdomain', 'Subdomain Enum'],
@@ -114,7 +115,7 @@ export function ResultsPage() {
   }
 
   return <main className="page results-page">
-    <Link className="back-link" to={`/projects/${projectId}`}>← Project workspace</Link>
+    
     <header className="page-header results-header"><div><p className="eyebrow">Project intelligence</p><h1>Results</h1><p className="muted">Merged, de-duplicated findings from pipeline runs and proxy traffic.</p></div><span className="result-total">{results.data?.length ?? 0} unique</span></header>
     <div className="results-toolbar panel">
       <select aria-label="Result session" value={sessionId} onChange={(event) => setSessionId(event.target.value)}><option value="all">All sessions + proxy traffic</option>{sessions.data?.map((session) => <option value={session.id} key={session.id}>{session.pipeline_name} · {new Date(session.started_at).toLocaleString()}</option>)}</select>
@@ -123,6 +124,7 @@ export function ResultsPage() {
       <button className="secondary-button" onClick={() => void queryClient.invalidateQueries({ queryKey: ['projects', projectId, 'results'] })}>Refresh</button>
       <button onClick={exportCsv} disabled={!filtered.length}>Export CSV</button>
     </div>
+    <SubdomainImportPanel projectId={projectId} />
     {results.isError && <p className="error">Results could not be loaded. Check the backend and MongoDB connection.</p>}
     <section className="results-browser">
       <aside className="panel result-categories"><b>Categories</b>{categories.map(([key, label]) => <button className={category === key ? 'selected' : ''} onClick={() => setCategory(key)} key={key}><span>{label}</span><em>{counts[key]}</em></button>)}</aside>

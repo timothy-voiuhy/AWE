@@ -1,18 +1,22 @@
 import asyncio
 import base64
+import csv
 import fnmatch
+import io
 import re
 import json
 import secrets
 import sys
+import zipfile
 from dataclasses import asdict, is_dataclass
 from datetime import datetime, timezone
 import docker.errors
 from pathlib import Path
 from functools import lru_cache
 from urllib.parse import urlsplit
+from xml.etree import ElementTree
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, UploadFile, File, WebSocket, WebSocketDisconnect, status
+from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request, Response, UploadFile, File, WebSocket, WebSocketDisconnect, status
 from fastapi.responses import FileResponse
 from pymongo import MongoClient
 from pymongo.errors import PyMongoError
@@ -34,6 +38,7 @@ from .terminal import TerminalManager
 from .terminal_profiles import TerminalProfileStore
 from .testing_services import IntruderService, ProxyControlService, WebSocketClientService
 from .graph_store import GraphRevisionError, InvestigationNotFoundError, InvestigationStore
+from .evidence_store import EvidenceNotFoundError, EvidenceStore
 import docker
 from .schemas import (
     HealthResponse,
@@ -57,6 +62,7 @@ from .schemas import (
     ScanSession,
     PipelineToolRun,
     StoredResult,
+    ImportSubdomainsResult,
     TrafficEntry,
     DatabaseOverview,
     DatabaseStats,
@@ -65,7 +71,8 @@ from .schemas import (
     NetworkGraph, NetworkNode, NetworkEdge, NetworkManualNode,
     GraphBundle, GraphEntity, GraphRelationship, GraphInvestigation,
     InvestigationCreate, GraphEntityInput, GraphRelationshipInput,
-    GraphPreferencesInput, TransformManifest, TransformStart, TransformJob, GraphIdentityInput, GraphMergeInput, GraphMergeResult,
+    GraphPreferencesInput, TransformManifest, TransformStart, TransformJob, TransformDefinitionInput, GraphIdentityInput, GraphMergeInput, GraphMergeResult,
+    EvidenceInput, EvidenceRecord,
     RepeaterRequest,
     RepeaterResponse,
     ProjectSettings,
@@ -96,10 +103,86 @@ router = APIRouter()
 
 _GRAPH_TRANSFORM_JOBS: dict[str, TransformJob] = {}
 _GRAPH_TRANSFORM_SECRETS: dict[str, dict] = {}
+_COMPOSITE_TRANSFORMS_FILE = ".awe-composite-transforms.json"
+_GRAPH_TRANSFORM_JOBS_FILE = ".awe-transform-jobs.json"
+_MAX_PERSISTED_TRANSFORM_JOBS = 500
 
 
 def _graph_store(project_dir: Path) -> InvestigationStore:
     return InvestigationStore(project_dir)
+
+
+def _evidence_store(project_dir: Path) -> EvidenceStore:
+    return EvidenceStore(project_dir)
+
+
+def _create_evidence_record(
+    project_id: str,
+    project_dir: Path,
+    payload: EvidenceInput,
+) -> EvidenceRecord | None:
+    try:
+        return _evidence_store(project_dir).create(project_id, payload)
+    except (OSError, ValueError):
+        return None
+
+
+def _project_transform_jobs_file(project_dir: Path) -> Path:
+    return project_dir / _GRAPH_TRANSFORM_JOBS_FILE
+
+
+def _load_project_transform_jobs(project_dir: Path) -> list[TransformJob]:
+    path = _project_transform_jobs_file(project_dir)
+    if not path.is_file():
+        return []
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+        jobs = [TransformJob.model_validate(item) for item in raw if isinstance(item, dict)]
+        for job in jobs:
+            _GRAPH_TRANSFORM_JOBS.setdefault(job.id, job)
+        return jobs
+    except (OSError, ValueError):
+        return []
+
+
+def _save_project_transform_jobs(project_dir: Path, project_id: str) -> None:
+    jobs = [job for job in _GRAPH_TRANSFORM_JOBS.values() if job.project_id == project_id]
+    jobs.sort(key=lambda item: item.created_at, reverse=True)
+    path = _project_transform_jobs_file(project_dir)
+    path.write_text(json.dumps([item.model_dump(mode="json") for item in jobs[:_MAX_PERSISTED_TRANSFORM_JOBS]], indent=2), encoding="utf-8")
+
+
+def _sync_transform_job_from_operation(job: TransformJob, docker_operations: DockerOperationManager, log_limit: int = 100) -> tuple[TransformJob, bool]:
+    if not job.operation_id:
+        return job, False
+    try:
+        operation = docker_operations.get(job.operation_id)
+    except DockerOperationNotFound:
+        if job.status in {"queued", "running"}:
+            updated = job.model_copy(update={
+                "status": "failed",
+                "message": job.message or "Docker operation is no longer available after backend restart",
+                "completed_at": job.completed_at or datetime.now(timezone.utc),
+            })
+            return updated, updated != job
+        return job, False
+    status_map = {"queued": "queued", "running": "running", "completed": "completed", "failed": "failed", "cancelled": "cancelled", "cancelling": "running"}
+    status = status_map.get(operation.status, "failed")
+    completed = datetime.now(timezone.utc) if operation.status in {"completed", "failed", "cancelled"} else None
+    updated = job.model_copy(update={
+        "status": status,
+        "message": operation.message or job.message,
+        "completed_at": job.completed_at or completed,
+        "progress_completed": operation.progress_completed,
+        "progress_total": operation.progress_total,
+        "logs": operation.logs[-log_limit:],
+    })
+    if operation.status == "completed" and "ingested_count" in operation.result:
+        updated = updated.model_copy(update={
+            "outputs_ingested": True,
+            "message": f"Completed and ingested {operation.result.get('ingested_count', 0)} typed outputs",
+        })
+    return updated, updated != job
 
 
 def _transform_seed(entity: GraphEntity, parameter: str) -> str:
@@ -115,7 +198,52 @@ def _transform_seed(entity: GraphEntity, parameter: str) -> str:
     return str(raw)
 
 
-def _graph_transforms(settings: Settings) -> list[TransformManifest]:
+def _project_transform_file(project_dir: Path) -> Path:
+    return project_dir / _COMPOSITE_TRANSFORMS_FILE
+
+
+def _load_project_transforms(project_dir: Path) -> list[TransformManifest]:
+    path = _project_transform_file(project_dir)
+    if not path.is_file():
+        return []
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+        return [TransformManifest.model_validate(item) for item in raw if isinstance(item, dict)]
+    except (OSError, ValueError):
+        return []
+
+
+def _save_project_transforms(project_dir: Path, transforms: list[TransformManifest]) -> None:
+    path = _project_transform_file(project_dir)
+    path.write_text(json.dumps([item.model_dump(mode="json") for item in transforms], indent=2), encoding="utf-8")
+
+
+def _default_composite_transforms(available: set[str]) -> list[TransformManifest]:
+    enum_tools = [tool for tool in ("subfinder", "assetfinder", "amass", "ctl") if tool in available]
+    if not enum_tools or "httpx" not in available:
+        return []
+    return [TransformManifest(
+        id="composite:enumerate_subdomains",
+        tool_key="composite:enumerate_subdomains",
+        display_name="Enumerate subdomains",
+        description="Collect subdomains from multiple enumeration tools, tunnel the deduped list into httpx, and ingest only live hosts.",
+        input_types=["target", "domain", "subdomain"],
+        output_types=["subdomain"],
+        relationship_types=["has_subdomain"],
+        mode="safe_active",
+        requires_approval=False,
+        parameters=[
+            {"key": "domain", "label": "Target domain", "type": "text", "default": ""},
+            {"key": "flags", "label": "httpx extra flags", "type": "text", "default": ""},
+        ],
+        stages=[
+            {"name": "Enumerate", "tool_keys": enum_tools, "input_source": "seed", "parameters": {}},
+            {"name": "Live probe", "tool_keys": ["httpx"], "input_source": "previous", "parameters": {}},
+        ],
+    )]
+
+
+def _graph_transforms(settings: Settings, project_dir: Path | None = None) -> list[TransformManifest]:
     """Expose safe graph adapters over the existing Docker tool registry."""
     source = str(settings.legacy_src_dir)
     if source not in sys.path:
@@ -154,13 +282,13 @@ def _graph_transforms(settings: Settings) -> list[TransformManifest]:
         "cloudflare_audit": ("Inventory Cloudflare zones and DNS", ["domain", "cloud_asset"], ["cloudflare_zone", "dns_record", "cloud_asset"], "active"),
         "oidc_probe": ("Discover OpenID Connect issuer metadata", ["url", "identity_provider", "domain"], ["identity_provider", "oidc_endpoint", "component"], "safe_active"),
     }
-    manifests: list[TransformManifest] = []
+    manifests: list[TransformManifest] = _default_composite_transforms(set(TOOL_REGISTRY))
     for key, (label, inputs, outputs, mode) in builtin.items():
         tool = TOOL_REGISTRY.get(key)
         if not tool:
             continue
         manifests.append(TransformManifest(
-            id=f"docker:{key}", tool_key=key, display_name=label,
+            id=f"docker:{key}", tool_key=key, display_name=("Subfinder subdomains" if key == "subfinder" else label),
             description=getattr(tool, "description", ""), input_types=inputs,
             output_types=outputs,
             relationship_types=list(getattr(tool, "relationship_types", ())) or ["discovered_by"],
@@ -194,6 +322,10 @@ def _graph_transforms(settings: Settings) -> list[TransformManifest]:
             requires_approval=getattr(tool, "execution_mode", "passive") in {"active", "high_risk"},
             parameters=tool.param_spec(),
         ))
+    if project_dir is not None:
+        custom = _load_project_transforms(project_dir)
+        existing_ids = {item.id for item in manifests}
+        manifests.extend(item for item in custom if item.id not in existing_ids)
     return manifests
 
 
@@ -214,7 +346,12 @@ def _graph_result_kind(data: dict, manifest: TransformManifest) -> str:
     return manifest.output_types[0] if manifest.output_types else "custom"
 
 
-def _graph_result_value(data: dict) -> str:
+def _graph_result_value(data: dict, kind: str = "") -> str:
+    if kind == "subdomain":
+        value = data.get("domain") or data.get("host") or data.get("value")
+        if not value and data.get("url"):
+            value = urlsplit(str(data["url"])).hostname or data["url"]
+        return str(value or "")
     return str(data.get("value") or data.get("domain") or data.get("url") or data.get("name") or data.get("host") or data.get("label") or "")
 
 
@@ -227,6 +364,30 @@ def _graph_result_edge(kind: str) -> str:
         "identity_provider": "uses_identity_provider", "oidc_endpoint": "exposes",
         "endpoint": "exposes", "secret": "contains_secret", "repository": "has_repository",
     }.get(kind, "discovered_by")
+
+
+def _normalise_composite_results(manifest: TransformManifest, parsed: list) -> list:
+    if not manifest.stages or manifest.output_types != ["subdomain"]:
+        return parsed
+    merged: dict[str, dict] = {}
+    for result in parsed:
+        data = asdict(result) if is_dataclass(result) else (result if isinstance(result, dict) else {"value": str(result)})
+        host = str(data.get("domain") or data.get("host") or data.get("value") or "").strip().rstrip(".")
+        if not host and data.get("url"):
+            host = (urlsplit(str(data["url"])).hostname or "").strip().rstrip(".")
+        if not host:
+            continue
+        row = merged.setdefault(host.lower(), {"kind": "subdomain", "domain": host, "value": host, "live": bool(data.get("url") or data.get("status_code")), "urls": [], "sources": []})
+        if data.get("url") and data["url"] not in row["urls"]:
+            row["urls"].append(data["url"])
+        if data.get("status_code") and not row.get("status_code"):
+            row["status_code"] = data["status_code"]
+        if data.get("title") and not row.get("title"):
+            row["title"] = data["title"]
+        for source in data.get("sources", []) or []:
+            if source and source not in row["sources"]:
+                row["sources"].append(source)
+    return list(merged.values())
 
 
 def _redact_transform_params(manifest: TransformManifest, params: dict) -> tuple[dict, dict]:
@@ -256,10 +417,12 @@ def _ingest_graph_results(
     created_relationships: list[str] = []
     for index, result in enumerate(parsed[:1000]):
         data = asdict(result) if is_dataclass(result) else (result if isinstance(result, dict) else {"value": str(result)})
-        value = _graph_result_value(data)
+        kind = _graph_result_kind(data, manifest)
+        value = _graph_result_value(data, kind)
         if not value:
             continue
-        kind = _graph_result_kind(data, manifest)
+        if kind == "subdomain" and (data.get("url") or data.get("status_code")):
+            data = {**data, "live": True}
         entity_id = f"transform:{provenance_id or secrets.token_hex(8)}:{index}"
         entity = GraphEntity(
             id=entity_id, kind=kind, label=value[:500], value=value[:4096], data=data,
@@ -447,7 +610,12 @@ def get_docker_service() -> DockerService: return DockerService()
 
 
 @lru_cache
-def get_docker_operation_manager() -> DockerOperationManager: return DockerOperationManager()
+def _docker_operation_manager(workspace: str) -> DockerOperationManager:
+    return DockerOperationManager(Path(workspace) / ".awe-docker-operations.json")
+
+
+def get_docker_operation_manager(settings: Settings = Depends(get_settings)) -> DockerOperationManager:
+    return _docker_operation_manager(str(settings.workspace_dir.resolve()))
 
 
 def get_vault_service(settings: Settings = Depends(get_settings)) -> VaultService:
@@ -771,11 +939,22 @@ def _methodology_registry(settings: Settings) -> list[dict]:
 
 
 def _methodology_description(settings: Settings, description_file: str) -> str:
-    path = settings.legacy_src_dir.resolve().parent / "resources" / "methodology" / "descriptions" / description_file
-    try:
-        return path.read_text(encoding="utf-8")
-    except (OSError, ValueError):
+    relative = Path(description_file)
+    if relative.is_absolute() or ".." in relative.parts:
         return ""
+    roots = [
+        settings.legacy_src_dir.resolve().parent,
+        Path(__file__).resolve().parents[2],
+        Path.cwd(),
+    ]
+    for root in roots:
+        path = root / "resources" / "methodology" / "descriptions" / relative
+        try:
+            if path.is_file():
+                return path.read_text(encoding="utf-8")
+        except (OSError, ValueError):
+            continue
+    return ""
 
 
 def _methodology_item(settings: Settings, vuln_id: str, states: dict) -> tuple[dict, dict] | None:
@@ -1149,6 +1328,166 @@ def list_session_results(
         StoredResult.model_validate(item)
         for item in results
     ]
+
+
+_HOST_RE = re.compile(r"^(?=.{1,253}$)(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,63}\.?$")
+
+
+def _normalise_import_host(value: object) -> str:
+    candidate = str(value or "").strip().strip('"').strip("'").strip()
+    if not candidate:
+        return ""
+    candidate = candidate.split()[0].strip(",;")
+    if "://" in candidate:
+        candidate = urlsplit(candidate).hostname or candidate
+    candidate = candidate.lstrip("*.").rstrip(".").lower()
+    if ":" in candidate and not candidate.count(":") > 1:
+        candidate = candidate.split(":", 1)[0]
+    return candidate if _HOST_RE.fullmatch(candidate) else ""
+
+
+def _xlsx_rows(raw: bytes) -> list[list[str]]:
+    namespace = {"s": "http://schemas.openxmlformats.org/spreadsheetml/2006/main"}
+    try:
+        with zipfile.ZipFile(io.BytesIO(raw)) as archive:
+            shared: list[str] = []
+            try:
+                root = ElementTree.fromstring(archive.read("xl/sharedStrings.xml"))
+                for item in root.findall(".//s:si", namespace):
+                    shared.append("".join(node.text or "" for node in item.findall(".//s:t", namespace)))
+            except KeyError:
+                pass
+            sheet_name = next((name for name in archive.namelist() if name.startswith("xl/worksheets/sheet") and name.endswith(".xml")), "")
+            if not sheet_name:
+                return []
+            root = ElementTree.fromstring(archive.read(sheet_name))
+            rows: list[list[str]] = []
+            for row in root.findall(".//s:row", namespace):
+                values: list[str] = []
+                for cell in row.findall("s:c", namespace):
+                    value_node = cell.find("s:v", namespace)
+                    inline_node = cell.find(".//s:t", namespace)
+                    value = inline_node.text if inline_node is not None else value_node.text if value_node is not None else ""
+                    if cell.get("t") == "s" and value.isdigit():
+                        value = shared[int(value)] if int(value) < len(shared) else value
+                    values.append(value or "")
+                if any(item.strip() for item in values):
+                    rows.append(values)
+            return rows
+    except (OSError, zipfile.BadZipFile, ElementTree.ParseError):
+        return []
+
+
+def _extract_import_subdomains(filename: str, raw: bytes) -> list[str]:
+    suffix = Path(filename).suffix.lower()
+    rows: list[list[str]] = []
+    if suffix == ".xlsx":
+        rows = _xlsx_rows(raw)
+    else:
+        text = raw.decode("utf-8-sig", errors="replace")
+        if suffix == ".csv":
+            sample = text[:4096]
+            try:
+                dialect = csv.Sniffer().sniff(sample)
+            except csv.Error:
+                dialect = csv.excel
+            rows = [row for row in csv.reader(io.StringIO(text), dialect) if any(cell.strip() for cell in row)]
+        else:
+            rows = [re.split(r"[\s,;]+", line.strip()) for line in text.splitlines() if line.strip()]
+    if not rows:
+        return []
+    header = [cell.strip().lower().replace(" ", "_") for cell in rows[0]]
+    preferred = [index for index, name in enumerate(header) if name in {"subdomain", "domain", "host", "hostname", "url", "fqdn"}]
+    data_rows = rows[1:] if preferred else rows
+    candidates: list[str] = []
+    for row in data_rows:
+        cells = [row[index] for index in preferred if index < len(row)] if preferred else row
+        candidates.extend(_normalise_import_host(cell) for cell in cells)
+    seen: set[str] = set()
+    values: list[str] = []
+    for value in candidates:
+        if value and value not in seen:
+            seen.add(value); values.append(value)
+    return values
+
+
+@router.post("/projects/{project_id}/results/import-subdomains", response_model=ImportSubdomainsResult, tags=["results", "network"])
+async def import_subdomains(
+    project_id: str,
+    upload: UploadFile = File(...),
+    investigation_id: str = Form(default=""),
+    attach_to_graph: bool = Form(default=True),
+    store: ProjectStore = Depends(get_project_store),
+    repositories: LegacyRepositoryFactory = Depends(get_repository_factory),
+) -> ImportSubdomainsResult:
+    try:
+        project = store.get(project_id)
+        project_dir = store.project_dir(project_id)
+        raw = await upload.read()
+        values = _extract_import_subdomains(upload.filename or "subdomains.txt", raw)
+        if not values:
+            raise HTTPException(status_code=422, detail="No valid subdomains were found in the uploaded file")
+        repo = repositories(project_dir)
+        session_id = repo.create_session("manual_import", "Imported Subdomains", project.target, str(project_dir / ".awe-imports"), {"filename": upload.filename})
+        tool_run_id = repo.create_tool_run(session_id, "manual_import", "Manual subdomain import", "subdomain")
+        from pymongo import UpdateOne
+        now = datetime.now(timezone.utc).isoformat()
+        ops = [
+            UpdateOne(
+                {"session_id": session_id, "category": "subdomain", "result_key": value},
+                {"$setOnInsert": {"session_id": session_id, "tool_run_id": tool_run_id, "category": "subdomain", "result_key": value, "data": {"domain": value, "value": value, "imported": True}, "created_at": now}, "$addToSet": {"sources": "manual_import"}},
+                upsert=True,
+            )
+            for value in values
+        ]
+        result = repo._db.results.bulk_write(ops, ordered=False) if ops else None
+        imported = int(result.upserted_count if result else 0)
+        duplicates = len(values) - imported
+        graph_entities = 0
+        actual_investigation_id = investigation_id
+        if attach_to_graph:
+            graph_store = _graph_store(project_dir)
+            investigation = graph_store.get(project_id, investigation_id) if investigation_id else _ensure_investigation(project_id, project_dir, project.target, repositories)
+            actual_investigation_id = investigation.id
+            parent_id = f"target:{project.target}" if project.target else ""
+            created_entities: list[str] = []
+            created_relationships: list[str] = []
+            batch_id = secrets.token_hex(8)
+            for index, value in enumerate(values[:5000]):
+                entity_id = f"import:{batch_id}:{index}"
+                entity = GraphEntity(id=entity_id, kind="subdomain", label=value, value=value, data={"domain": value, "imported": True, "source_file": upload.filename or ""}, source="imported", provenance=[{"source": "manual_import", "session_id": session_id}])
+                graph_store.add_entity(investigation, entity)
+                created_entities.append(entity_id)
+                if parent_id:
+                    relationship = GraphRelationship(id=f"{entity_id}:edge", source_id=parent_id, target_id=entity_id, kind="has_subdomain", source="imported", provenance=[{"source": "manual_import", "session_id": session_id}])
+                    graph_store.add_relationship(investigation, relationship)
+                    created_relationships.append(relationship.id)
+            if created_entities or created_relationships:
+                graph_store.save(investigation.model_copy(update={"entity_ids": [*investigation.entity_ids, *created_entities], "relationship_ids": [*investigation.relationship_ids, *created_relationships]}), investigation.revision)
+            graph_entities = len(created_entities)
+        evidence = _create_evidence_record(project_id, project_dir, EvidenceInput(
+            investigation_id=actual_investigation_id,
+            title=f"Imported {len(values)} subdomains",
+            summary=f"Imported from {upload.filename or 'uploaded file'} into Results{subdomain_import_graph_suffix(graph_entities)}.",
+            kind="file",
+            source_type="subdomain_import",
+            source_id=session_id,
+            tags=["import", "subdomain"],
+            data={"filename": upload.filename, "imported": imported, "duplicates": duplicates, "total_values": len(values), "sample": values[:25]},
+        ))
+        repo.update_tool_run_done(tool_run_id, "completed", imported)
+        repo.update_session_status(session_id, "completed")
+        return ImportSubdomainsResult(session_id=session_id, imported=imported, duplicates=duplicates, graph_entities=graph_entities, evidence_id=evidence.id if evidence else "", values=values[:100])
+    except ProjectNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Project not found") from exc
+    except InvestigationNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Investigation not found") from exc
+    except PyMongoError as exc:
+        raise HTTPException(status_code=503, detail="Database unavailable") from exc
+
+
+def subdomain_import_graph_suffix(graph_entities: int) -> str:
+    return f" and attached {graph_entities} graph entities" if graph_entities else ""
 
 
 def _traffic_entry(doc: dict) -> TrafficEntry:
@@ -1582,8 +1921,56 @@ def save_graph_preferences(project_id: str, investigation_id: str, payload: Grap
 @router.get("/projects/{project_id}/transforms", response_model=list[TransformManifest], tags=["network"])
 def list_graph_transforms(project_id: str, store: ProjectStore = Depends(get_project_store), settings: Settings = Depends(get_settings)) -> list[TransformManifest]:
     try:
-        store.project_dir(project_id)
-        return _graph_transforms(settings)
+        project_dir = store.project_dir(project_id)
+        return _graph_transforms(settings, project_dir)
+    except ProjectNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Project not found") from exc
+
+
+@router.post("/projects/{project_id}/transform-definitions", response_model=TransformManifest, status_code=201, tags=["network"])
+def save_transform_definition(project_id: str, payload: TransformDefinitionInput, store: ProjectStore = Depends(get_project_store), settings: Settings = Depends(get_settings)) -> TransformManifest:
+    try:
+        project_dir = store.project_dir(project_id)
+        source = str(settings.legacy_src_dir.resolve())
+        if source not in sys.path: sys.path.insert(0, source)
+        from containers.tool_registry import TOOL_REGISTRY
+        missing = sorted({tool for stage in payload.stages for tool in stage.tool_keys if tool not in TOOL_REGISTRY})
+        if missing:
+            raise HTTPException(status_code=422, detail=f"Unknown tool(s): {', '.join(missing)}")
+        transform_id = payload.id or f"custom:{re.sub(r'[^a-z0-9_]+', '_', payload.display_name.strip().lower()).strip('_') or secrets.token_hex(4)}"
+        if not transform_id.startswith(("custom:", "composite:")):
+            transform_id = f"custom:{transform_id}"
+        manifest = TransformManifest(
+            id=transform_id,
+            tool_key=transform_id,
+            display_name=payload.display_name,
+            description=payload.description,
+            input_types=payload.input_types,
+            output_types=payload.output_types,
+            relationship_types=payload.relationship_types,
+            mode=payload.mode,
+            requires_approval=payload.requires_approval or payload.mode in {"active", "high_risk"},
+            scope_required=payload.scope_required,
+            parameters=payload.parameters,
+            stages=payload.stages,
+        )
+        custom = [item for item in _load_project_transforms(project_dir) if item.id != manifest.id]
+        custom.append(manifest)
+        _save_project_transforms(project_dir, custom)
+        return manifest
+    except ProjectNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Project not found") from exc
+
+
+@router.delete("/projects/{project_id}/transform-definitions/{transform_id}", status_code=204, tags=["network"])
+def delete_transform_definition(project_id: str, transform_id: str, store: ProjectStore = Depends(get_project_store)) -> None:
+    try:
+        project_dir = store.project_dir(project_id)
+        custom = _load_project_transforms(project_dir)
+        kept = [item for item in custom if item.id != transform_id]
+        if len(kept) == len(custom):
+            raise HTTPException(status_code=404, detail="Transform definition not found")
+        _save_project_transforms(project_dir, kept)
     except ProjectNotFoundError as exc:
         raise HTTPException(status_code=404, detail="Project not found") from exc
 
@@ -1595,7 +1982,7 @@ def start_graph_transform(project_id: str, payload: TransformStart, store: Proje
         investigation = _ensure_investigation(project_id, project_dir, project.target, repositories) if not payload.investigation_id else graph_store.get(project_id, payload.investigation_id)
         bundle = _graph_bundle(project_id, project_dir, project.target, repositories, investigation.id)
         entities = {entity.id: entity for entity in bundle.entities}
-        manifests = {item.id: item for item in _graph_transforms(settings)}
+        manifests = {item.id: item for item in _graph_transforms(settings, project_dir)}
         transform = manifests.get(payload.transform_id)
         if not transform:
             raise HTTPException(status_code=404, detail="Transform not found")
@@ -1611,11 +1998,38 @@ def start_graph_transform(project_id: str, payload: TransformStart, store: Proje
         for parameter in ("domain", "host", "url", "endpoint"):
             params.setdefault(parameter, _transform_seed(selected[0], parameter))
         output_dir = project_dir / ".awe-transform-runs" / job_id
-        operation = docker_operations.start_tool(transform.tool_key, params, output_dir, docker_service)
+        def on_complete(parsed: list, _output_dir: Path) -> dict:
+            parsed = _normalise_composite_results(transform, parsed)
+            count = _ingest_graph_results(project_id, project_dir, investigation.id, project.target, repositories, transform, parsed, selected[0].id if selected else "", job_id)
+            evidence = _create_evidence_record(project_id, project_dir, EvidenceInput(
+                investigation_id=investigation.id,
+                title=f"{transform.display_name} output",
+                summary=f"Parsed {len(parsed)} result(s) and ingested {count} graph output(s).",
+                kind="tool_output",
+                source_type="transform",
+                source_id=job_id,
+                entity_ids=payload.entity_ids,
+                tags=["transform", transform.mode, *transform.output_types[:5]],
+                data={
+                    "transform_id": transform.id,
+                    "tool_key": transform.tool_key,
+                    "operation_output_dir": str(_output_dir),
+                    "parsed_count": len(parsed),
+                    "ingested_count": count,
+                    "stages": [stage.model_dump() for stage in transform.stages],
+                    "parameters": _redact_transform_params(transform, params)[0],
+                },
+            ))
+            return {"ingested_count": count, "investigation_id": investigation.id, "evidence_id": evidence.id if evidence else ""}
+        if transform.stages:
+            operation = docker_operations.start_composite(transform.tool_key, [stage.model_dump() for stage in transform.stages], params, output_dir, docker_service, on_complete)
+        else:
+            operation = docker_operations.start_tool(transform.tool_key, params, output_dir, docker_service, on_complete)
         safe_params, secret_params = _redact_transform_params(transform, params)
         _GRAPH_TRANSFORM_SECRETS[job_id] = secret_params
         job = TransformJob(id=job_id, project_id=project_id, investigation_id=investigation.id, transform_id=transform.id, status="queued", entity_ids=payload.entity_ids, operation_id=operation.id, parameters=safe_params, created_at=datetime.now(timezone.utc))
         _GRAPH_TRANSFORM_JOBS[job.id] = job
+        _save_project_transform_jobs(project_dir, project_id)
         return job
     except ProjectNotFoundError as exc:
         raise HTTPException(status_code=404, detail="Project not found") from exc
@@ -1623,8 +2037,34 @@ def start_graph_transform(project_id: str, payload: TransformStart, store: Proje
         raise HTTPException(status_code=404, detail="Investigation not found") from exc
 
 
+@router.get("/projects/{project_id}/transforms/jobs", response_model=list[TransformJob], tags=["network"])
+def list_graph_transform_jobs(project_id: str, store: ProjectStore = Depends(get_project_store), docker_operations: DockerOperationManager = Depends(get_docker_operation_manager)) -> list[TransformJob]:
+    try:
+        project_dir = store.project_dir(project_id)
+        _load_project_transform_jobs(project_dir)
+        jobs: list[TransformJob] = []
+        changed = False
+        for job_id, item in list(_GRAPH_TRANSFORM_JOBS.items()):
+            if item.project_id != project_id:
+                continue
+            job, job_changed = _sync_transform_job_from_operation(item, docker_operations, 200)
+            changed = changed or job_changed
+            _GRAPH_TRANSFORM_JOBS[job_id] = job
+            jobs.append(job)
+        if changed:
+            _save_project_transform_jobs(project_dir, project_id)
+        return sorted(jobs, key=lambda item: item.created_at, reverse=True)
+    except ProjectNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Project not found") from exc
+
+
 @router.get("/projects/{project_id}/transforms/{job_id}", response_model=TransformJob, tags=["network"])
-def get_graph_transform(project_id: str, job_id: str, docker_operations: DockerOperationManager = Depends(get_docker_operation_manager)) -> TransformJob:
+def get_graph_transform(project_id: str, job_id: str, store: ProjectStore = Depends(get_project_store), docker_operations: DockerOperationManager = Depends(get_docker_operation_manager), settings: Settings = Depends(get_settings)) -> TransformJob:
+    try:
+        project_dir = store.project_dir(project_id)
+        _load_project_transform_jobs(project_dir)
+    except ProjectNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Project not found") from exc
     job = _GRAPH_TRANSFORM_JOBS.get(job_id)
     if not job or job.project_id != project_id:
         raise HTTPException(status_code=404, detail="Transform job not found")
@@ -1634,30 +2074,43 @@ def get_graph_transform(project_id: str, job_id: str, docker_operations: DockerO
             status_map = {"queued": "queued", "running": "running", "completed": "completed", "failed": "failed", "cancelled": "cancelled", "cancelling": "running"}
             if operation.status != "queued" or job.status == "queued":
                 job = job.model_copy(update={"status": status_map.get(operation.status, "failed"), "message": operation.message or job.message, "completed_at": datetime.now(timezone.utc) if operation.status in {"completed", "failed", "cancelled"} else None, "progress_completed": operation.progress_completed, "progress_total": operation.progress_total, "logs": operation.logs[-100:]})
-                if operation.status == "completed" and not job.outputs_ingested:
+                if operation.status == "completed" and not job.outputs_ingested and "ingested_count" in operation.result:
+                    job = job.model_copy(update={"outputs_ingested": True, "message": f"Completed and ingested {operation.result.get('ingested_count', 0)} typed outputs"})
+                elif operation.status == "completed" and not job.outputs_ingested:
                     try:
                         from containers.parsers import PARSERS
-                        from containers.tool_registry import TOOL_REGISTRY
-                        from .config import get_settings
                         from .projects import ProjectStore
-                        settings = get_settings(); project_store = ProjectStore(settings.workspace_dir)
+                        project_store = ProjectStore(settings.workspace_dir)
                         project = project_store.get(project_id); project_dir = project_store.project_dir(project_id)
-                        manifest = next((item for item in _graph_transforms(settings) if item.id == job.transform_id), None)
+                        manifest = next((item for item in _graph_transforms(settings, project_dir) if item.id == job.transform_id), None)
                         parser = PARSERS.get(manifest.tool_key) if manifest else None
                         if parser and operation.result.get("output_dir"):
                             parsed = parser(operation.result["output_dir"]) or []
-                            ingested = _ingest_graph_results(project_id, project_dir, job.investigation_id, project.target, repositories, manifest, parsed, job.entity_ids[0] if job.entity_ids else "", job.id)
+                            ingested = _ingest_graph_results(project_id, project_dir, job.investigation_id, project.target, None, manifest, parsed, job.entity_ids[0] if job.entity_ids else "", job.id)
                             job = job.model_copy(update={"outputs_ingested": True, "message": f"Completed and ingested {ingested} typed outputs"})
                     except Exception as exc:
                         job = job.model_copy(update={"message": f"Completed; output ingestion skipped: {exc}"})
                 _GRAPH_TRANSFORM_JOBS[job_id] = job
+                _save_project_transform_jobs(project_dir, project_id)
         except DockerOperationNotFound:
-            pass
+            if job.status in {"queued", "running"}:
+                job = job.model_copy(update={
+                    "status": "failed",
+                    "message": job.message or "Docker operation is no longer available after backend restart",
+                    "completed_at": job.completed_at or datetime.now(timezone.utc),
+                })
+                _GRAPH_TRANSFORM_JOBS[job_id] = job
+                _save_project_transform_jobs(project_dir, project_id)
     return job
 
 
 @router.post("/projects/{project_id}/transforms/{job_id}/cancel", response_model=TransformJob, tags=["network"])
-def cancel_graph_transform(project_id: str, job_id: str, docker_operations: DockerOperationManager = Depends(get_docker_operation_manager)) -> TransformJob:
+def cancel_graph_transform(project_id: str, job_id: str, store: ProjectStore = Depends(get_project_store), docker_operations: DockerOperationManager = Depends(get_docker_operation_manager)) -> TransformJob:
+    try:
+        project_dir = store.project_dir(project_id)
+        _load_project_transform_jobs(project_dir)
+    except ProjectNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Project not found") from exc
     job = _GRAPH_TRANSFORM_JOBS.get(job_id)
     if not job or job.project_id != project_id:
         raise HTTPException(status_code=404, detail="Transform job not found")
@@ -1666,7 +2119,55 @@ def cancel_graph_transform(project_id: str, job_id: str, docker_operations: Dock
         except DockerOperationNotFound: pass
     job = job.model_copy(update={"status": "cancelled", "message": "Cancellation requested"})
     _GRAPH_TRANSFORM_JOBS[job_id] = job
+    _save_project_transform_jobs(project_dir, project_id)
     return job
+
+
+@router.get("/projects/{project_id}/evidence", response_model=list[EvidenceRecord], tags=["evidence"])
+def list_evidence(
+    project_id: str,
+    investigation_id: str = "",
+    source_id: str = "",
+    entity_id: str = "",
+    store: ProjectStore = Depends(get_project_store),
+) -> list[EvidenceRecord]:
+    try:
+        project_dir = store.project_dir(project_id)
+        return _evidence_store(project_dir).list(project_id, investigation_id, source_id, entity_id)
+    except ProjectNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Project not found") from exc
+
+
+@router.post("/projects/{project_id}/evidence", response_model=EvidenceRecord, status_code=201, tags=["evidence"])
+def create_evidence(project_id: str, payload: EvidenceInput, store: ProjectStore = Depends(get_project_store)) -> EvidenceRecord:
+    try:
+        project_dir = store.project_dir(project_id)
+        return _evidence_store(project_dir).create(project_id, payload)
+    except ProjectNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Project not found") from exc
+
+
+@router.get("/projects/{project_id}/evidence/{evidence_id}", response_model=EvidenceRecord, tags=["evidence"])
+def get_evidence(project_id: str, evidence_id: str, store: ProjectStore = Depends(get_project_store)) -> EvidenceRecord:
+    try:
+        project_dir = store.project_dir(project_id)
+        return _evidence_store(project_dir).get(project_id, evidence_id)
+    except ProjectNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Project not found") from exc
+    except EvidenceNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Evidence not found") from exc
+
+
+@router.delete("/projects/{project_id}/evidence/{evidence_id}", status_code=status.HTTP_204_NO_CONTENT, tags=["evidence"])
+def delete_evidence(project_id: str, evidence_id: str, store: ProjectStore = Depends(get_project_store)) -> Response:
+    try:
+        project_dir = store.project_dir(project_id)
+        _evidence_store(project_dir).delete(project_id, evidence_id)
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
+    except ProjectNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Project not found") from exc
+    except EvidenceNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Evidence not found") from exc
 
 
 @router.get("/projects/{project_id}/traffic", response_model=list[TrafficEntry], tags=["proxy"])
@@ -1722,6 +2223,46 @@ def get_traffic(
     if not doc or not _traffic_belongs_to_project(doc, project_id, project.target, scope):
         raise HTTPException(status_code=404, detail="Traffic entry not found")
     return _traffic_entry(doc)
+
+
+@router.post("/projects/{project_id}/traffic/{traffic_id}/evidence", response_model=EvidenceRecord, status_code=201, tags=["proxy", "evidence"])
+def create_traffic_evidence(
+    project_id: str,
+    traffic_id: str,
+    store: ProjectStore = Depends(get_project_store),
+    repositories: LegacyRepositoryFactory = Depends(get_repository_factory),
+) -> EvidenceRecord:
+    try:
+        project = store.get(project_id)
+        project_dir = store.project_dir(project_id)
+        scope = store.get_scope(project_id)
+        doc = repositories.traffic().find_one({"_id": ObjectId(traffic_id)})
+    except ProjectNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Project not found") from exc
+    except (PyMongoError, ValueError) as exc:
+        if isinstance(exc, PyMongoError):
+            raise HTTPException(status_code=503, detail="Database unavailable") from exc
+        raise HTTPException(status_code=404, detail="Traffic entry not found") from exc
+    if not doc or not _traffic_belongs_to_project(doc, project_id, project.target, scope):
+        raise HTTPException(status_code=404, detail="Traffic entry not found")
+    entry = _traffic_entry(doc)
+    return _evidence_store(project_dir).create(project_id, EvidenceInput(
+        title=f"{entry.method} {entry.host}{entry.path}",
+        summary=f"Captured HTTP transaction with status {entry.status_code}",
+        kind="http",
+        source_type="traffic",
+        source_id=entry.id,
+        tags=["traffic", entry.method.lower(), str(entry.status_code)],
+        data={
+            "host": entry.host,
+            "path": entry.path,
+            "method": entry.method,
+            "status_code": entry.status_code,
+            "timestamp": entry.timestamp,
+            "request": entry.request,
+            "response": entry.response,
+        },
+    ))
 
 
 @router.delete("/projects/{project_id}/traffic/{traffic_id}", status_code=status.HTTP_204_NO_CONTENT, tags=["proxy"])
@@ -2067,13 +2608,30 @@ def run_docker_tool(project_id: str, key: str, payload: DockerToolRun, store: Pr
         investigation_id = payload.investigation_id
         if not investigation_id:
             investigation_id = _ensure_investigation(project_id, project_dir, project.target, repositories).id
-        manifests = {item.tool_key: item for item in _graph_transforms(settings)}
+        manifests = {item.tool_key: item for item in _graph_transforms(settings, project_dir)}
         manifest = manifests.get(key)
         if not manifest:
             raise HTTPException(status_code=422, detail="This tool has no graph contract and cannot be ingested")
+        run_id = f"docker-{key}-{secrets.token_hex(6)}"
         def on_complete(parsed: list, _output_dir: Path) -> dict:
-            count = _ingest_graph_results(project_id, project_dir, investigation_id, project.target, repositories, manifest, parsed, "", f"docker-{key}-{secrets.token_hex(6)}")
-            return {"ingested_count": count, "investigation_id": investigation_id}
+            count = _ingest_graph_results(project_id, project_dir, investigation_id, project.target, repositories, manifest, parsed, "", run_id)
+            evidence = _create_evidence_record(project_id, project_dir, EvidenceInput(
+                investigation_id=investigation_id,
+                title=f"{manifest.display_name} Docker output",
+                summary=f"Parsed {len(parsed)} result(s) and ingested {count} graph output(s).",
+                kind="tool_output",
+                source_type="docker_tool",
+                source_id=run_id,
+                tags=["docker", key, *manifest.output_types[:5]],
+                data={
+                    "tool_key": key,
+                    "output_dir": str(_output_dir),
+                    "parsed_count": len(parsed),
+                    "ingested_count": count,
+                    "parameters": payload.params,
+                },
+            ))
+            return {"ingested_count": count, "investigation_id": investigation_id, "evidence_id": evidence.id if evidence else ""}
         callback = on_complete
     relative = Path(payload.output_subdir)
     if relative.is_absolute() or ".." in relative.parts: raise HTTPException(status_code=422, detail="Output directory must be relative to the project")

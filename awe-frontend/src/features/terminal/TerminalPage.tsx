@@ -136,7 +136,7 @@ export function TerminalPage() {
   }
 
   return <main className={`page feature-page terminal-page${connected ? ' terminal-live' : ''}`}>
-    {!connected && <><Link className="back-link" to={`/projects/${projectId}`}>← Project workspace</Link>
+    {!connected && <>
     <header className="page-header"><div><p className="eyebrow">Remote operations</p><h1>Terminal</h1><p className="muted">Interactive SSH session through the AWE backend broker.</p></div><div className="terminal-actions"><span className="live-dot">Disconnected</span><Link className="button-link" to={`/projects/${projectId}/terminal/config`}>＋ New profile</Link></div></header>
     <section className="panel terminal-profile-picker">
       <header><div><p className="eyebrow">Connections</p><h2>Saved profiles</h2></div><span>{profiles.data?.length || 0} saved</span></header>

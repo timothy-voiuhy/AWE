@@ -129,6 +129,6 @@ export function GlobalVaultPage() {
           </article>)}</section>}
         </>}
       </section>
-    </section><Link className="back-link" to="/projects">← Projects</Link>
+    </section>
   </main>
 }

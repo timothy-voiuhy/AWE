@@ -1,4 +1,5 @@
 from datetime import datetime
+import re
 
 from typing import Literal
 
@@ -192,6 +193,15 @@ class StoredResult(BaseModel):
     created_at: str = ""
 
 
+class ImportSubdomainsResult(BaseModel):
+    session_id: str
+    imported: int = 0
+    duplicates: int = 0
+    graph_entities: int = 0
+    evidence_id: str = ""
+    values: list[str] = Field(default_factory=list)
+
+
 class TrafficEntry(BaseModel):
     id: str
     host: str
@@ -361,6 +371,33 @@ class TransformManifest(BaseModel):
     requires_approval: bool = False
     scope_required: bool = True
     parameters: list[dict] = Field(default_factory=list)
+    stages: list["TransformStage"] = Field(default_factory=list)
+
+
+class TransformStage(BaseModel):
+    name: str = Field(default="", max_length=100)
+    tool_keys: list[str] = Field(default_factory=list, min_length=1, max_length=20)
+    input_source: Literal["seed", "previous"] = "seed"
+    parameters: dict = Field(default_factory=dict)
+
+
+class TransformDefinitionInput(BaseModel):
+    id: str = Field(default="", max_length=100)
+    display_name: str = Field(min_length=1, max_length=200)
+    description: str = Field(default="", max_length=2000)
+    input_types: list[str] = Field(default_factory=lambda: ["target", "domain", "subdomain"], max_length=50)
+    output_types: list[str] = Field(default_factory=lambda: ["subdomain"], max_length=50)
+    relationship_types: list[str] = Field(default_factory=lambda: ["has_subdomain"], max_length=50)
+    mode: Literal["passive", "safe_active", "active", "high_risk"] = "safe_active"
+    requires_approval: bool = False
+    scope_required: bool = True
+    parameters: list[dict] = Field(default_factory=list)
+    stages: list[TransformStage] = Field(default_factory=list, min_length=1, max_length=20)
+
+    @field_validator("id")
+    @classmethod
+    def normalize_id(cls, value: str) -> str:
+        return re.sub(r"[^a-z0-9_:-]+", "_", value.strip().lower()) if value else ""
 
 
 class TransformStart(BaseModel):
@@ -388,6 +425,25 @@ class TransformJob(BaseModel):
     progress_completed: int = 0
     progress_total: int = 0
     logs: list[str] = Field(default_factory=list)
+
+
+class EvidenceInput(BaseModel):
+    investigation_id: str = Field(default="", max_length=100)
+    title: str = Field(min_length=1, max_length=300)
+    summary: str = Field(default="", max_length=20_000)
+    kind: Literal["tool_output", "http", "screenshot", "note", "finding", "file", "manual"] = "manual"
+    source_type: str = Field(default="manual", max_length=80)
+    source_id: str = Field(default="", max_length=200)
+    entity_ids: list[str] = Field(default_factory=list, max_length=500)
+    relationship_ids: list[str] = Field(default_factory=list, max_length=500)
+    tags: list[str] = Field(default_factory=list, max_length=100)
+    data: dict = Field(default_factory=dict)
+
+
+class EvidenceRecord(EvidenceInput):
+    id: str
+    project_id: str
+    created_at: datetime
 
 
 class NetworkManualNode(BaseModel):
