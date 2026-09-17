@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from .api import router
+from .api import get_browser_manager, router
 from .auth import AuthService
 from .auth_middleware import AuthenticationMiddleware
 from .config import Settings, get_settings
@@ -29,6 +29,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     )
     app.include_router(router, prefix=settings.api_prefix)
     app.dependency_overrides[get_settings] = lambda: settings
+
+    @app.on_event("shutdown")
+    async def shutdown_browser_sessions() -> None:
+        await get_browser_manager().shutdown()
+
     return app
 
 

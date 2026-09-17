@@ -1,12 +1,13 @@
 services:
   gateway:
+    profiles: [legacy-gateway]
     image: caddy:2.8-alpine
     restart: unless-stopped
     depends_on:
       frontend:
         condition: service_healthy
     environment:
-      AWE_HOST: ${AWE_HOST:-localhost}
+      AWE_HOST: ${AWE_HOST:-awe.solidpilot.tech}
     ports:
       - "80:80"
       - "443:443"
@@ -20,7 +21,7 @@ services:
       context: .
       dockerfile: awe-frontend/Dockerfile
     ports:
-      - "4000:4000"
+      - "127.0.0.1:4000:4000"
     restart: unless-stopped
     depends_on:
       backend:
@@ -55,7 +56,7 @@ services:
       AWE_PROXY_PUBLIC_PORT: ${AWE_PROXY_PUBLIC_PORT:-8080}
       AWE_PROXY_USERNAME: ${AWE_PROXY_USERNAME:-}
       AWE_PROXY_PASSWORD: ${AWE_PROXY_PASSWORD:-}
-      AWE_ALLOWED_ORIGINS: '["https://${AWE_HOST:-localhost}"]'
+      AWE_ALLOWED_ORIGINS: '["https://${AWE_HOST:-awe.solidpilot.tech}"]'
     volumes:
       - ./.awe-projects:/data/projects
       - awe_auth:/data/auth
@@ -97,7 +98,7 @@ services:
       - "8080"
       - "8765"
     ports:
-      - "${AWE_PROXY_PUBLIC_PORT:-8080}:8080"
+      - "127.0.0.1:${AWE_PROXY_PUBLIC_PORT:-8080}:8080"
     healthcheck:
       test: ["CMD", "python", "-c", "import socket; s=socket.create_connection(('127.0.0.1',8080),2); s.close()"]
       interval: 10s

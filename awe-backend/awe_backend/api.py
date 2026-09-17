@@ -1,5 +1,4 @@
 import asyncio
-import base64
 import csv
 import fnmatch
 import io
@@ -3104,18 +3103,6 @@ async def create_browser_session(project_id: str, payload: BrowserViewport = Bro
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
-@router.get("/projects/{project_id}/browser/sessions/{session_id}/screenshot", tags=["browser"])
-async def browser_screenshot(project_id: str, session_id: str, store: ProjectStore = Depends(get_project_store), manager: BrowserSessionManager = Depends(get_browser_manager)) -> Response:
-    store.project_dir(project_id)
-    try:
-        state, image = await manager.screenshot(session_id)
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail="Browser session not found") from exc
-    if state.project_id != project_id:
-        raise HTTPException(status_code=404, detail="Browser session not found")
-    return Response(content=image, media_type="image/png", headers={"X-AWE-Browser-Url": state.url})
-
-
 @router.post("/projects/{project_id}/browser/sessions/{session_id}/navigate", response_model=BrowserSession, tags=["browser"])
 async def navigate_browser(project_id: str, session_id: str, payload: BrowserNavigate, store: ProjectStore = Depends(get_project_store), manager: BrowserSessionManager = Depends(get_browser_manager)) -> BrowserSession:
     project, scope, _ = _browser_project(project_id, store)
@@ -3143,42 +3130,62 @@ async def close_browser(project_id: str, session_id: str, store: ProjectStore = 
         raise HTTPException(status_code=404, detail="Browser session not found") from exc
 
 
-@router.websocket("/projects/{project_id}/browser/sessions/{session_id}/stream")
-async def browser_stream(project_id: str, session_id: str, websocket: WebSocket, store: ProjectStore = Depends(get_project_store), manager: BrowserSessionManager = Depends(get_browser_manager)) -> None:
+@router.websocket("/projects/{project_id}/browser/sessions/{session_id}/vnc")
+async def browser_vnc(project_id: str, session_id: str, websocket: WebSocket, store: ProjectStore = Depends(get_project_store), manager: BrowserSessionManager = Depends(get_browser_manager)) -> None:
+    """Bridge an authenticated noVNC WebSocket to the private session VNC port."""
     try:
         store.project_dir(project_id)
-        if manager.get(session_id).state.project_id != project_id:
+        session = manager.get(session_id)
+        if session.state.project_id != project_id:
             raise KeyError(session_id)
     except (ProjectNotFoundError, KeyError):
         await websocket.close(code=4404, reason="Browser session not found")
         return
     await websocket.accept()
     try:
+        reader, writer = await asyncio.open_connection("127.0.0.1", session.vnc_port)
+    except OSError:
+        await websocket.close(code=1011, reason="Browser VNC server is unavailable")
+        return
+
+    async def from_client() -> None:
         while True:
-            receive_task = asyncio.create_task(websocket.receive_json())
-            tick_task = asyncio.create_task(asyncio.sleep(0.25))
-            done, pending = await asyncio.wait({receive_task, tick_task}, return_when=asyncio.FIRST_COMPLETED)
-            for task in pending:
-                task.cancel()
-            if tick_task in done:
-                try:
-                    state, image = await manager.screenshot(session_id)
-                    await websocket.send_json({"type": "frame", "session": _browser_model(state).model_dump(mode="json"), "image": base64.b64encode(image).decode()})
-                except Exception as exc:
-                    # A page can be between commits while Chromium is still
-                    # painting. Keep the stream alive so the next frame can
-                    # expose the partially loaded page instead of disconnecting.
-                    await websocket.send_json({"type": "error", "message": f"Browser frame delayed: {exc}"})
-                continue
-            action = receive_task.result()
-            if action.get("type") == "close":
-                break
-            try:
-                await manager.interact(session_id, action)
-            except (KeyError, ValueError) as exc:
-                await websocket.send_json({"type": "error", "message": str(exc)})
-    except (WebSocketDisconnect, KeyError):
-        pass
+            message = await websocket.receive()
+            if message.get("type") == "websocket.disconnect":
+                return
+            payload = message.get("bytes")
+            if payload:
+                writer.write(payload)
+                await writer.drain()
+
+    async def to_client() -> None:
+        while True:
+            payload = await reader.read(65536)
+            if not payload:
+                return
+            await websocket.send_bytes(payload)
+
+    client_task = asyncio.create_task(from_client())
+    server_task = asyncio.create_task(to_client())
+    try:
+        done, pending = await asyncio.wait(
+            {client_task, server_task}, return_when=asyncio.FIRST_COMPLETED
+        )
+        for task in done:
+            task.result()
+        for task in pending:
+            task.cancel()
+        await asyncio.gather(*pending, return_exceptions=True)
+    except (WebSocketDisconnect, KeyError, ConnectionError):
+        client_task.cancel()
+        server_task.cancel()
+        await asyncio.gather(client_task, server_task, return_exceptions=True)
+    finally:
+        writer.close()
+        try:
+            await writer.wait_closed()
+        except OSError:
+            pass
 
 
 @router.get("/projects/{project_id}/ai/settings", response_model=AISettings, tags=["ai"])

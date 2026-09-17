@@ -363,7 +363,6 @@ export const api = {
   createBrowserSession:(id:string,data?:{width:number;height:number})=>request<BrowserSession>(`/projects/${id}/browser/sessions`,{method:'POST',body:JSON.stringify(data??{width:1280,height:800})}),
   navigateBrowser:(id:string,session:string,url:string)=>request<BrowserSession>(`/projects/${id}/browser/sessions/${session}/navigate`,{method:'POST',body:JSON.stringify({url})}),
   closeBrowserSession:(id:string,session:string)=>request<void>(`/projects/${id}/browser/sessions/${session}`,{method:'DELETE'}),
-  browserScreenshotUrl:(id:string,session:string)=>`/api/v1/projects/${id}/browser/sessions/${session}/screenshot`,
   getAISettings:(id:string)=>request<AISettings>(`/projects/${id}/ai/settings`),
   saveAISettings:(id:string,data:AISettings)=>request<AISettings>(`/projects/${id}/ai/settings`,{method:'PUT',body:JSON.stringify(data)}),
   listAIConversations:(id:string)=>request<AIConversation[]>(`/projects/${id}/ai/conversations`),
