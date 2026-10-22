@@ -253,45 +253,45 @@ def _graph_transforms(settings: Settings, project_dir: Path | None = None) -> li
         from containers.tool_registry import TOOL_REGISTRY
     except Exception:
         TOOL_REGISTRY = {}
-    builtin = {
-        "subfinder": ("Enumerate subdomains", ["target", "domain", "subdomain"], ["subdomain"], "passive"),
-        "amass": ("Map related domains", ["target", "domain", "subdomain"], ["subdomain"], "passive"),
-        "dnsx": ("Resolve DNS records", ["domain", "subdomain"], ["dns_record", "ip"], "passive"),
-        "httpx": ("Probe HTTP services", ["domain", "subdomain", "ip"], ["url", "tech", "port"], "safe_active"),
-        "naabu": ("Discover open ports", ["ip", "domain", "subdomain"], ["port"], "active"),
-        "nmap": ("Fingerprint services", ["ip", "port"], ["port", "technology"], "active"),
-        "katana": ("Crawl endpoints", ["url", "domain", "subdomain"], ["endpoint"], "safe_active"),
-        "gospider": ("Discover linked endpoints", ["url", "domain", "subdomain"], ["endpoint"], "safe_active"),
-        "arjun": ("Discover URL parameters", ["url", "endpoint"], ["param"], "active"),
-        "nuclei": ("Scan for vulnerabilities", ["url", "endpoint", "subdomain"], ["vuln"], "active"),
-        "wafw00f": ("Detect WAF and CDN", ["url", "domain", "subdomain"], ["cdn", "tech"], "safe_active"),
-        "gowitness": ("Capture a screenshot", ["url", "endpoint"], ["screenshot"], "safe_active"),
-        "github_recon": ("Search GitHub intelligence", ["target", "domain", "organization"], ["repository", "osint"], "passive"),
-        "cloud_enum": ("Enumerate cloud assets", ["target", "domain"], ["cloud_asset", "osint"], "passive"),
-        "asnmap": ("Map ASN ownership and network ranges", ["target", "domain", "organization", "asn", "ip"], ["asn", "netblock"], "passive"),
-        "tlsx": ("Collect TLS certificates and fingerprints", ["domain", "subdomain", "ip", "url"], ["certificate", "tls_finding"], "safe_active"),
-        "testssl": ("Assess TLS protocols and cryptographic weaknesses", ["domain", "subdomain", "ip", "url"], ["tls_finding"], "safe_active"),
-        "theharvester": ("Collect email, name, IP, URL, and subdomain OSINT", ["target", "domain", "organization"], ["email", "person", "ip", "url", "subdomain"], "passive"),
-        "gitleaks": ("Find redacted secrets in repository history", ["repository", "file"], ["secret", "repository"], "passive"),
-        "whatweb": ("Fingerprint web technologies and versions", ["url", "endpoint", "domain", "subdomain"], ["url", "technology"], "safe_active"),
-        "s3scanner": ("Check cloud bucket permissions", ["target", "organization", "cloud_asset"], ["cloud_asset", "cloud_finding"], "safe_active"),
-        "wpscan": ("Enumerate WordPress components and findings", ["url", "domain", "subdomain", "technology"], ["platform", "component", "identity", "vuln"], "safe_active"),
-        "droopescan": ("Enumerate Drupal components and findings", ["url", "domain", "subdomain", "technology"], ["platform", "component", "endpoint", "misconfiguration"], "safe_active"),
-        "prowler": ("Audit cloud, Kubernetes, GitHub, and identity posture", ["cloud_asset", "cluster", "repository", "identity_provider"], ["cloud_asset", "component", "misconfiguration", "vuln"], "active"),
-        "kubescape": ("Scan Kubernetes clusters, manifests, and images", ["cluster", "workload", "container_image", "file"], ["cluster", "workload", "container_image", "misconfiguration", "vulnerability"], "active"),
-        "trivy": ("Scan container images, repositories, filesystems, and IaC", ["container_image", "repository", "file"], ["container_image", "component", "misconfiguration", "vulnerability", "secret"], "safe_active"),
-        "cloudflare_audit": ("Inventory Cloudflare zones and DNS", ["domain", "cloud_asset"], ["cloudflare_zone", "dns_record", "cloud_asset"], "active"),
-        "oidc_probe": ("Discover OpenID Connect issuer metadata", ["url", "identity_provider", "domain"], ["identity_provider", "oidc_endpoint", "component"], "safe_active"),
+    # Curated display labels for the first-class recon transforms. Everything
+    # else — input/output/relationship types and the risk mode that drives the
+    # approval gate — is read from the tool registry, which is the single source
+    # of truth (see tool_registry.ToolConfig). This keeps the graph adapter and
+    # the /docker/tools listing from drifting apart.
+    curated_labels = {
+        "subfinder": "Subfinder subdomains", "amass": "Map related domains",
+        "dnsx": "Resolve DNS records", "httpx": "Probe HTTP services",
+        "naabu": "Discover open ports", "nmap": "Fingerprint services",
+        "katana": "Crawl endpoints", "gospider": "Discover linked endpoints",
+        "arjun": "Discover URL parameters", "nuclei": "Scan for vulnerabilities",
+        "wafw00f": "Detect WAF and CDN", "gowitness": "Capture a screenshot",
+        "github_recon": "Search GitHub intelligence", "cloud_enum": "Enumerate cloud assets",
+        "asnmap": "Map ASN ownership and network ranges",
+        "tlsx": "Collect TLS certificates and fingerprints",
+        "testssl": "Assess TLS protocols and cryptographic weaknesses",
+        "theharvester": "Collect email, name, IP, URL, and subdomain OSINT",
+        "gitleaks": "Find redacted secrets in repository history",
+        "whatweb": "Fingerprint web technologies and versions",
+        "s3scanner": "Check cloud bucket permissions",
+        "wpscan": "Enumerate WordPress components and findings",
+        "droopescan": "Enumerate Drupal components and findings",
+        "prowler": "Audit cloud, Kubernetes, GitHub, and identity posture",
+        "kubescape": "Scan Kubernetes clusters, manifests, and images",
+        "trivy": "Scan container images, repositories, filesystems, and IaC",
+        "cloudflare_audit": "Inventory Cloudflare zones and DNS",
+        "oidc_probe": "Discover OpenID Connect issuer metadata",
     }
     manifests: list[TransformManifest] = _default_composite_transforms(set(TOOL_REGISTRY))
-    for key, (label, inputs, outputs, mode) in builtin.items():
+    for key, label in curated_labels.items():
         tool = TOOL_REGISTRY.get(key)
-        if not tool:
+        if not tool or not getattr(tool, "input_types", ()) or not getattr(tool, "output_types", ()):
             continue
+        mode = getattr(tool, "execution_mode", "passive")
         manifests.append(TransformManifest(
-            id=f"docker:{key}", tool_key=key, display_name=("Subfinder subdomains" if key == "subfinder" else label),
-            description=getattr(tool, "description", ""), input_types=inputs,
-            output_types=outputs,
+            id=f"docker:{key}", tool_key=key, display_name=label,
+            description=getattr(tool, "description", ""),
+            input_types=list(tool.input_types),
+            output_types=list(tool.output_types),
             relationship_types=list(getattr(tool, "relationship_types", ())) or ["discovered_by"],
             mode=mode,
             requires_approval=mode in {"active", "high_risk"},
@@ -360,9 +360,14 @@ def _graph_result_edge(kind: str) -> str:
     return {
         "platform": "runs", "component": "has_component", "vuln": "has_finding",
         "vulnerability": "has_finding", "misconfiguration": "has_finding",
-        "cloud_asset": "has_cloud_asset", "cloudflare_zone": "contains", "dns_record": "has_dns",
-        "cluster": "contains", "workload": "contains", "container_image": "uses_image",
+        "cloud_asset": "has_cloud_asset", "cloud_resource": "has_resource",
+        "cloud_account": "contains", "cloud_bucket": "has_cloud_asset",
+        "cloud_finding": "has_cloud_finding", "cloudflare_zone": "contains",
+        "dns_record": "has_dns", "cluster": "contains", "workload": "contains",
+        "container_image": "uses_image", "identity": "has_identity",
         "identity_provider": "uses_identity_provider", "oidc_endpoint": "exposes",
+        "certificate": "has_certificate", "tls_finding": "has_tls_finding",
+        "asn": "announces", "netblock": "contains",
         "endpoint": "exposes", "secret": "contains_secret", "repository": "has_repository",
     }.get(kind, "discovered_by")
 
@@ -3097,7 +3102,7 @@ async def create_browser_session(project_id: str, payload: BrowserViewport = Bro
     _browser_project(project_id, store)
     settings = store.get_settings(project_id)
     try:
-        state = await manager.create(project_id, app_settings.browser_proxy_host, app_settings.browser_proxy_port, payload.width, payload.height, app_settings.proxy_username, app_settings.proxy_password, app_settings.browser_proxy_enabled)
+        state = await manager.create(project_id, app_settings.browser_proxy_host, app_settings.browser_proxy_port, payload.width, payload.height, app_settings.proxy_username, app_settings.proxy_password, app_settings.browser_proxy_enabled, app_settings.proxy_certificate_path)
         return _browser_model(state)
     except BrowserUnavailable as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc

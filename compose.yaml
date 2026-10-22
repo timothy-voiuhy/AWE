@@ -37,6 +37,9 @@ services:
       context: .
       dockerfile: awe-backend/Dockerfile
     restart: unless-stopped
+    # Browser sessions spawn Chromium, whose helper processes reparent to PID 1.
+    # Without an init to reap them the container collects zombies.
+    init: true
     environment:
       AWE_ENVIRONMENT: ${AWE_ENVIRONMENT:-production}
       AWE_WORKSPACE_DIR: /data/projects

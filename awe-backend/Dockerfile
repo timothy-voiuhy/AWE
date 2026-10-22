@@ -6,7 +6,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 WORKDIR /app
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends chromium xvfb x11vnc xdotool \
+    && apt-get install -y --no-install-recommends chromium xvfb x11vnc xdotool libnss3-tools \
     && rm -rf /var/lib/apt/lists/*
 
 COPY awe-backend /app/awe-backend

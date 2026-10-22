@@ -98,7 +98,11 @@ class FakeRepository:
         return self.get_results("session-1", category=category, limit=5000)
 
     def get_tool_runs(self, session_id):
-        return [{"id":"run-1","session_id":session_id,"tool_key":"example","display_name":"Example","stage":0,"status":"failed","started_at":"2026-01-01T00:00:00+00:00","completed_at":None,"result_count":0,"error_msg":"exit 1","log_lines":["failed"]}]
+        return [
+            {"id":"run-1","session_id":session_id,"tool_key":"example","display_name":"Example","stage":0,"status":"failed","started_at":"2026-01-01T00:00:00+00:00","completed_at":None,"result_count":0,"error_msg":"exit 1","log_lines":["failed"]},
+            # Freshly created runs sit at started_at=None until they launch.
+            {"id":"run-2","session_id":session_id,"tool_key":"pending","display_name":None,"stage":1,"status":"pending","started_at":None,"completed_at":None,"result_count":0,"error_msg":None,"log_lines":[]},
+        ]
 
     def delete_session(self, session_id):
         self.deleted_sessions.append(session_id)
@@ -159,6 +163,11 @@ class FakeDockerService:
 
 
 class FakeIntruderService:
+    def generate_requests(self, request):
+        # Mirror the real service's (payloads, url, body) shape so the endpoint's
+        # in-scope check can run; the request URL stays within the project scope.
+        return [([request.payloads[0]], request.url, request.body)]
+
     async def run(self, request):
         return [IntruderResult(sequence=1, payload=request.payloads[0], status_code=200, length=2, elapsed_ms=3)]
 
@@ -328,6 +337,7 @@ def test_health_and_project_endpoints(tmp_path: Path, monkeypatch):
         tool_runs = client.get(f"/api/v1/projects/{project['id']}/sessions/session-1/tool-runs")
         assert tool_runs.status_code == 200
         assert tool_runs.json()[0]["error_msg"] == "exit 1"
+        assert tool_runs.json()[1]["started_at"] == ""
 
         targeted = client.post(f"/api/v1/projects/{project['id']}/pipeline-runs", json={"pipeline_key":"quick","session_id":"session-1","tool_keys":["example"]})
         assert targeted.status_code == 202
@@ -345,7 +355,7 @@ def test_health_and_project_endpoints(tmp_path: Path, monkeypatch):
         monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[2] / "src"))
         from proxy.traffic_extractor import TrafficExtractor
         import workers.proxy_extractor_worker as extractor_worker
-        monkeypatch.setattr(TrafficExtractor, "extract", lambda self, collection, scope: ({"crawl": [object()]}, {"jwt": [], "graphql": []}))
+        monkeypatch.setattr(TrafficExtractor, "extract", lambda self, collection, scope, query=None: ({"crawl": [object()]}, {"jwt": [], "graphql": []}))
         monkeypatch.setattr(extractor_worker, "_write_results", lambda *args: {"session_id":"proxy-session","run_id":"proxy-run","written_by_category":{"crawl":1},"review_counts":{}})
         synced = client.post(f"/api/v1/projects/{project['id']}/traffic/sync-results")
         assert synced.status_code == 200

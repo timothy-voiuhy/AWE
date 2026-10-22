@@ -181,6 +181,13 @@ class PipelineToolRun(BaseModel):
     error_msg: str | None = None
     log_lines: list[str] = Field(default_factory=list)
 
+    @field_validator("display_name", "started_at", mode="before")
+    @classmethod
+    def blank_when_missing(cls, value: str | None) -> str:
+        # Pending runs are stored with started_at=None (set once the tool
+        # actually starts), and a null never falls back to the field default.
+        return value if value is not None else ""
+
 
 class StoredResult(BaseModel):
     id: str

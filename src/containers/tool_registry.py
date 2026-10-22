@@ -75,6 +75,10 @@ class _Amass(ToolConfig):
     description: str = "In-depth attack surface mapping via DNS and scraping"
     category: str = "subdomain"
 
+    input_types: tuple[str, ...] = ("target", "domain", "subdomain")
+    output_types: tuple[str, ...] = ("subdomain",)
+    relationship_types: tuple[str, ...] = ("has_subdomain",)
+
     def get_volumes(self, output_dir: str, input_dir: str | None = None) -> dict:
         os.makedirs(output_dir, exist_ok=True)
         # Mount output dir as /output (amass writes to /output/amass_results.txt via -o)
@@ -121,6 +125,10 @@ class _Assetfinder(ToolConfig):
     category: str = "subdomain"
     dockerfile: str = _DF + "Dockerfile.assetfinder"
 
+    input_types: tuple[str, ...] = ("target", "domain", "subdomain")
+    output_types: tuple[str, ...] = ("subdomain",)
+    relationship_types: tuple[str, ...] = ("has_subdomain",)
+
     def build_command(self, domain: str = "", subs_only: bool = True, **_) -> str:
         flag = "--subs-only" if subs_only else ""
         return f"assetfinder {flag} {domain} | tee /output/assetfinder_results.txt"
@@ -139,6 +147,10 @@ class _Subfinder(ToolConfig):
     image: str = "projectdiscovery/subfinder:latest"
     description: str = "Fast passive subdomain enumeration from multiple sources"
     category: str = "subdomain"
+
+    input_types: tuple[str, ...] = ("target", "domain", "subdomain")
+    output_types: tuple[str, ...] = ("subdomain",)
+    relationship_types: tuple[str, ...] = ("has_subdomain",)
 
     def build_command(self, domain: str = "", all_sources: bool = False,
                       silent: bool = True, **_) -> str:
@@ -165,6 +177,10 @@ class _Sublist3r(ToolConfig):
     description: str = "Subdomain enumeration via search engines and OSINT sources"
     category: str = "subdomain"
     dockerfile: str = _DF + "Dockerfile.sublist3r"
+
+    input_types: tuple[str, ...] = ("target", "domain")
+    output_types: tuple[str, ...] = ("subdomain",)
+    relationship_types: tuple[str, ...] = ("has_subdomain",)
 
     def build_command(self, domain: str = "", bruteforce: bool = False,
                       threads: str = "10", engines: str = "", **_) -> str:
@@ -193,6 +209,12 @@ class _SubDomainizer(ToolConfig):
     category: str = "subdomain"
     dockerfile: str = _DF + "Dockerfile.subdomainizer"
 
+    input_types: tuple[str, ...] = ("url", "domain", "subdomain")
+    output_types: tuple[str, ...] = ("subdomain",)
+    relationship_types: tuple[str, ...] = ("has_subdomain",)
+
+    execution_mode: str = "safe_active"
+
     def build_command(self, url: str = "", cookies: str = "", **_) -> str:
         cmd = f"python SubDomainizer.py -u {url} -o /output/subdomainizer_results.txt -k"
         if cookies:
@@ -214,6 +236,12 @@ class _ShuffleDNS(ToolConfig):
     description: str = "Mass DNS brute-forcing with wildcard filtering via massdns"
     category: str = "subdomain"
     dockerfile: str = _DF + "Dockerfile.shuffledns"
+
+    input_types: tuple[str, ...] = ("domain", "subdomain")
+    output_types: tuple[str, ...] = ("subdomain",)
+    relationship_types: tuple[str, ...] = ("has_subdomain",)
+
+    execution_mode: str = "active"
 
     def get_volumes(self, output_dir: str, input_dir: str | None = None) -> dict:
         os.makedirs(output_dir, exist_ok=True)
@@ -256,6 +284,10 @@ class _CTL(ToolConfig):
     category: str = "subdomain"
     dockerfile: str = _DF + "Dockerfile.ctl"
 
+    input_types: tuple[str, ...] = ("target", "domain")
+    output_types: tuple[str, ...] = ("subdomain",)
+    relationship_types: tuple[str, ...] = ("has_subdomain",)
+
     def build_command(self, domain: str = "", **_) -> str:
         # Dockerfile entrypoint is ["subfinder", "-s", "crtsh"] — bypassed by sh -c,
         # so we call subfinder directly with the crtsh source flag.
@@ -276,6 +308,10 @@ class _DNSx(ToolConfig):
     image: str = "projectdiscovery/dnsx:latest"
     description: str = "Fast DNS toolkit for bulk DNS resolution and enumeration"
     category: str = "dns"
+
+    input_types: tuple[str, ...] = ("domain", "subdomain")
+    output_types: tuple[str, ...] = ("dns_record", "ip")
+    relationship_types: tuple[str, ...] = ("has_dns",)
 
     def build_command(self, domain: str = "", record_types: str = "A,CNAME,MX",
                       silent: bool = True, input_file: str = "", **_) -> str:
@@ -304,6 +340,10 @@ class _Metabigor(ToolConfig):
     category: str = "dns"
     dockerfile: str = _DF + "Dockerfile.metabigor"
 
+    input_types: tuple[str, ...] = ("target", "domain", "organization", "asn", "ip")
+    output_types: tuple[str, ...] = ("dns_record", "ip")
+    relationship_types: tuple[str, ...] = ("has_dns", "resolves_to")
+
     def build_command(self, query: str = "", mode: str = "net --org", **_) -> str:
         return f"metabigor {mode} -i '{query}' | tee /output/metabigor_results.txt"
 
@@ -325,6 +365,12 @@ class _Nmap(ToolConfig):
     image: str = "instrumentisto/nmap"
     description: str = "Network exploration and security port scanning"
     category: str = "portscan"
+
+    input_types: tuple[str, ...] = ("ip", "port")
+    output_types: tuple[str, ...] = ("port", "technology")
+    relationship_types: tuple[str, ...] = ("has_port",)
+
+    execution_mode: str = "active"
 
     def build_command(self, target: str = "", ports: str = "",
                       flags: str = "-sV -T4", **_) -> str:
@@ -349,6 +395,12 @@ class _Naabu(ToolConfig):
     description: str = "Fast port scanner with SYN/CONNECT scan support"
     category: str = "portscan"
 
+    input_types: tuple[str, ...] = ("ip", "domain", "subdomain")
+    output_types: tuple[str, ...] = ("port",)
+    relationship_types: tuple[str, ...] = ("has_port",)
+
+    execution_mode: str = "active"
+
     def build_command(self, host: str = "", ports: str = "top-100",
                       rate: str = "1000", input_file: str = "", **_) -> str:
         src = f"-list {input_file}" if input_file else f"-host {host}"
@@ -371,6 +423,12 @@ class _Httpx(ToolConfig):
     image: str = "projectdiscovery/httpx:latest"
     description: str = "Fast HTTP toolkit — live host detection, status, title, technology"
     category: str = "http"
+
+    input_types: tuple[str, ...] = ("domain", "subdomain", "ip")
+    output_types: tuple[str, ...] = ("url", "tech", "port")
+    relationship_types: tuple[str, ...] = ("has_url",)
+
+    execution_mode: str = "safe_active"
 
     def build_command(self, target: str = "", flags: str = "",
                       input_file: str = "", **_) -> str:
@@ -397,6 +455,12 @@ class _GoSpider(ToolConfig):
     description: str = "Fast web spider — crawls URLs, extracts subdomains and JS endpoints"
     category: str = "crawl"
     dockerfile: str = _DF + "Dockerfile.gospider"
+
+    input_types: tuple[str, ...] = ("url", "domain", "subdomain")
+    output_types: tuple[str, ...] = ("endpoint",)
+    relationship_types: tuple[str, ...] = ("has_endpoint",)
+
+    execution_mode: str = "safe_active"
 
     def build_command(self, url: str = "", depth: str = "3",
                       concurrent: str = "10", timeout: str = "300",
@@ -426,6 +490,12 @@ class _Katana(ToolConfig):
     description: str = "Next-gen web crawler for hidden endpoints and attack surface discovery"
     category: str = "crawl"
 
+    input_types: tuple[str, ...] = ("url", "domain", "subdomain")
+    output_types: tuple[str, ...] = ("endpoint",)
+    relationship_types: tuple[str, ...] = ("has_endpoint",)
+
+    execution_mode: str = "safe_active"
+
     def build_command(self, url: str = "", depth: str = "3",
                       concurrency: str = "25", input_file: str = "", **_) -> str:
         src = f"-list {input_file}" if input_file else f"-u {url}"
@@ -452,6 +522,10 @@ class _WaybackURLs(ToolConfig):
     category: str = "crawl"
     dockerfile: str = _DF + "Dockerfile.waybackurls"
 
+    input_types: tuple[str, ...] = ("domain", "subdomain", "url")
+    output_types: tuple[str, ...] = ("endpoint",)
+    relationship_types: tuple[str, ...] = ("has_endpoint",)
+
     def build_command(self, domain: str = "", dates: bool = False,
                       input_file: str = "", **_) -> str:
         flags = "--dates" if dates else ""
@@ -473,6 +547,10 @@ class _GAU(ToolConfig):
     description: str = "Get All URLs from AlienVault OTX, Wayback Machine and Common Crawl"
     category: str = "crawl"
     dockerfile: str = _DF + "Dockerfile.gau"
+
+    input_types: tuple[str, ...] = ("domain", "subdomain", "url")
+    output_types: tuple[str, ...] = ("endpoint",)
+    relationship_types: tuple[str, ...] = ("has_endpoint",)
 
     def build_command(self, domain: str = "", providers: str = "",
                       threads: str = "1", input_file: str = "", **_) -> str:
@@ -500,6 +578,12 @@ class _LinkFinder(ToolConfig):
     description: str = "Extract URLs and endpoints from JavaScript files"
     category: str = "crawl"
     dockerfile: str = _DF + "Dockerfile.linkfinder"
+
+    input_types: tuple[str, ...] = ("url", "endpoint")
+    output_types: tuple[str, ...] = ("endpoint",)
+    relationship_types: tuple[str, ...] = ("has_endpoint",)
+
+    execution_mode: str = "safe_active"
 
     def build_command(self, url: str = "", domain_crawl: bool = True,
                       cookies: str = "", **_) -> str:
@@ -529,6 +613,12 @@ class _XnLinkFinder(ToolConfig):
     category: str = "crawl"
     dockerfile: str = _DF + "Dockerfile.xnlinkfinder"
 
+    input_types: tuple[str, ...] = ("url", "endpoint", "domain", "subdomain")
+    output_types: tuple[str, ...] = ("endpoint",)
+    relationship_types: tuple[str, ...] = ("has_endpoint",)
+
+    execution_mode: str = "safe_active"
+
     def build_command(self, url: str = "", depth: str = "2",
                       scope: str = "", cookies: str = "", **_) -> str:
         cmd = f"xnLinkFinder -i {url} -o /output/xnlinkfinder_results.txt -d {depth} --no-banner"
@@ -557,6 +647,12 @@ class _FFuf(ToolConfig):
     description: str = "Fast web fuzzer — directory brute-forcing, vhost/parameter fuzzing"
     category: str = "fuzz"
     dockerfile: str = _DF + "Dockerfile.ffuf"
+
+    input_types: tuple[str, ...] = ("url", "domain", "subdomain")
+    output_types: tuple[str, ...] = ("endpoint",)
+    relationship_types: tuple[str, ...] = ("has_endpoint",)
+
+    execution_mode: str = "active"
 
     def build_command(self, url: str = "", wordlist: str = "/wordlists/common.txt",
                       threads: str = "40", extensions: str = "",
@@ -593,6 +689,8 @@ class _CeWL(ToolConfig):
     category: str = "fuzz"
     dockerfile: str = _DF + "Dockerfile.cewl"
 
+    execution_mode: str = "safe_active"
+
     def build_command(self, url: str = "", depth: str = "2",
                       min_word_length: str = "5", **_) -> str:
         return (
@@ -622,6 +720,12 @@ class _Arjun(ToolConfig):
     category: str = "params"
     dockerfile: str = _DF + "Dockerfile.arjun"
 
+    input_types: tuple[str, ...] = ("url", "endpoint")
+    output_types: tuple[str, ...] = ("param",)
+    relationship_types: tuple[str, ...] = ("has_parameter",)
+
+    execution_mode: str = "active"
+
     def build_command(self, url: str = "", method: str = "GET",
                       threads: str = "5", delay: str = "0",
                       input_file: str = "", **_) -> str:
@@ -650,6 +754,12 @@ class _Parameth(ToolConfig):
     category: str = "params"
     dockerfile: str = _DF + "Dockerfile.parameth"
 
+    input_types: tuple[str, ...] = ("url", "endpoint")
+    output_types: tuple[str, ...] = ("param",)
+    relationship_types: tuple[str, ...] = ("has_parameter",)
+
+    execution_mode: str = "active"
+
     def build_command(self, url: str = "", method: str = "GET",
                       wordlist: str = "", **_) -> str:
         cmd = f"python3 parameth.py -u {url} -m {method} -o /output/parameth_results.txt"
@@ -674,6 +784,12 @@ class _X8(ToolConfig):
     description: str = "Parameter discovery focused on reflected/hidden params and XSS"
     category: str = "params"
     dockerfile: str = _DF + "Dockerfile.x8"
+
+    input_types: tuple[str, ...] = ("url", "endpoint")
+    output_types: tuple[str, ...] = ("param",)
+    relationship_types: tuple[str, ...] = ("has_parameter",)
+
+    execution_mode: str = "active"
 
     def build_command(self, url: str = "", method: str = "GET",
                       workers: str = "10", body_type: str = "urlencode",
@@ -708,6 +824,12 @@ class _Nuclei(ToolConfig):
     image: str = "projectdiscovery/nuclei:latest"
     description: str = "Template-based vulnerability scanner — CVEs, misconfigs, exposures"
     category: str = "vuln"
+
+    input_types: tuple[str, ...] = ("url", "endpoint", "subdomain")
+    output_types: tuple[str, ...] = ("vuln",)
+    relationship_types: tuple[str, ...] = ("has_finding",)
+
+    execution_mode: str = "active"
 
     def build_command(self, target: str = "", severity: str = "",
                       tags: str = "", concurrency: str = "25",
@@ -745,6 +867,10 @@ class _GithubRecon(ToolConfig):
     category: str = "osint"
     dockerfile: str = _DF + "Dockerfile.github_recon"
 
+    input_types: tuple[str, ...] = ("target", "domain", "organization")
+    output_types: tuple[str, ...] = ("repository", "osint")
+    relationship_types: tuple[str, ...] = ("has_repository",)
+
     def build_command(self, domain: str = "", api_key: str = "", **_) -> str:
         return (
             f"python3 /app/github-search/github-endpoints.py"
@@ -766,6 +892,10 @@ class _CloudEnum(ToolConfig):
     description: str = "Multi-cloud OSINT — AWS, Azure, GCP bucket and resource enumeration"
     category: str = "osint"
     dockerfile: str = _DF + "Dockerfile.cloud_enum"
+
+    input_types: tuple[str, ...] = ("target", "domain")
+    output_types: tuple[str, ...] = ("cloud_asset", "osint")
+    relationship_types: tuple[str, ...] = ("has_cloud_asset",)
 
     def build_command(self, keywords: str = "", threads: str = "20",
                       disable_azure: bool = False, disable_gcp: bool = False, **_) -> str:
@@ -799,6 +929,8 @@ class _Asnmap(ToolConfig):
     output_types: tuple[str, ...] = ("asn", "netblock")
     relationship_types: tuple[str, ...] = ("owned_by", "announces", "contains")
 
+    input_types: tuple[str, ...] = ("target", "domain", "organization", "asn", "ip")
+
     def build_command(self, target: str = "", target_type: str = "domain",
                       input_file: str = "", **_) -> str:
         if input_file:
@@ -826,6 +958,10 @@ class _Tlsx(ToolConfig):
     dockerfile: str = _DF + "Dockerfile.tlsx"
     output_types: tuple[str, ...] = ("certificate", "tls_finding")
     relationship_types: tuple[str, ...] = ("has_certificate", "has_tls_finding")
+
+    input_types: tuple[str, ...] = ("domain", "subdomain", "ip", "url")
+
+    execution_mode: str = "safe_active"
 
     def build_command(self, target: str = "", input_file: str = "", ports: str = "443",
                       concurrency: str = "25", **_) -> str:
@@ -857,6 +993,10 @@ class _Testssl(ToolConfig):
     dockerfile: str = _DF + "Dockerfile.testssl"
     output_types: tuple[str, ...] = ("tls_finding",)
     relationship_types: tuple[str, ...] = ("has_tls_finding",)
+
+    input_types: tuple[str, ...] = ("domain", "subdomain", "ip", "url")
+
+    execution_mode: str = "safe_active"
 
     def build_command(self, target: str = "", **_) -> str:
         return (
@@ -1078,6 +1218,8 @@ class _TheHarvester(ToolConfig):
     output_types: tuple[str, ...] = ("email", "person", "ip", "subdomain", "url")
     relationship_types: tuple[str, ...] = ("has_email", "mentions", "discovers", "resolves_to")
 
+    input_types: tuple[str, ...] = ("target", "domain", "organization")
+
     def build_command(self, domain: str = "", sources: str = "all", **_) -> str:
         return f"theHarvester -d '{domain}' -b '{sources}' -f /output/theharvester_results"
 
@@ -1100,6 +1242,8 @@ class _Gitleaks(ToolConfig):
     dockerfile: str = _DF + "Dockerfile.gitleaks"
     output_types: tuple[str, ...] = ("secret", "repository")
     relationship_types: tuple[str, ...] = ("contains_secret", "found_in")
+
+    input_types: tuple[str, ...] = ("repository", "file")
 
     def build_command(self, source: str = "/input", **_) -> str:
         return (
@@ -1125,6 +1269,10 @@ class _Whatweb(ToolConfig):
     dockerfile: str = _DF + "Dockerfile.whatweb"
     output_types: tuple[str, ...] = ("url", "technology")
     relationship_types: tuple[str, ...] = ("uses_technology", "fingerprints")
+
+    input_types: tuple[str, ...] = ("url", "endpoint", "domain", "subdomain")
+
+    execution_mode: str = "safe_active"
 
     def build_command(self, target: str = "", aggression: str = "1",
                       threads: str = "10", **_) -> str:
@@ -1154,6 +1302,10 @@ class _S3Scanner(ToolConfig):
     output_types: tuple[str, ...] = ("cloud_bucket", "cloud_finding")
     relationship_types: tuple[str, ...] = ("has_cloud_asset", "has_cloud_finding")
 
+    input_types: tuple[str, ...] = ("target", "organization", "cloud_asset")
+
+    execution_mode: str = "safe_active"
+
     def build_command(self, bucket: str = "", provider: str = "aws",
                       threads: str = "4", enumerate_objects: bool = False,
                       input_file: str = "", **_) -> str:
@@ -1182,6 +1334,12 @@ class _JwtTool(ToolConfig):
     category: str = "vuln"
     dockerfile: str = _DF + "Dockerfile.jwt_tool"
 
+    input_types: tuple[str, ...] = ("url", "endpoint")
+    output_types: tuple[str, ...] = ("vuln",)
+    relationship_types: tuple[str, ...] = ("has_finding",)
+
+    execution_mode: str = "safe_active"
+
     def build_command(self, token: str = "", mode: str = "pb", **_) -> str:
         safe_token = token.strip().replace("'", "")
         return (
@@ -1208,6 +1366,12 @@ class _Kxss(ToolConfig):
     category: str = "xss"
     dockerfile: str = _DF + "Dockerfile.kxss"
 
+    input_types: tuple[str, ...] = ("url", "endpoint", "param")
+    output_types: tuple[str, ...] = ("vuln",)
+    relationship_types: tuple[str, ...] = ("has_finding",)
+
+    execution_mode: str = "safe_active"
+
     def build_command(self, input_file: str = "", **_) -> str:
         src = f"cat {input_file}" if input_file else "cat /input/urls.txt"
         return f"{src} | kxss | tee /output/kxss_results.txt"
@@ -1227,6 +1391,12 @@ class _Gxss(ToolConfig):
     description: str = "Concurrent GET parameter reflection checker — find which params echo input back"
     category: str = "xss"
     dockerfile: str = _DF + "Dockerfile.gxss"
+
+    input_types: tuple[str, ...] = ("url", "endpoint", "param")
+    output_types: tuple[str, ...] = ("vuln",)
+    relationship_types: tuple[str, ...] = ("has_finding",)
+
+    execution_mode: str = "safe_active"
 
     def build_command(self, input_file: str = "", concurrency: str = "30",
                       cookie: str = "", **_) -> str:
@@ -1254,6 +1424,12 @@ class _Dalfox(ToolConfig):
     image: str = "hahwul/dalfox:latest"
     description: str = "XSS scanner — detects reflection context, generates and verifies payloads"
     category: str = "xss"
+
+    input_types: tuple[str, ...] = ("url", "endpoint", "param")
+    output_types: tuple[str, ...] = ("vuln",)
+    relationship_types: tuple[str, ...] = ("has_finding",)
+
+    execution_mode: str = "active"
 
     def build_command(self, url: str = "", mode: str = "url",
                       cookie: str = "", headers: str = "",
@@ -1302,6 +1478,12 @@ class _GraphQLTools(ToolConfig):
     category: str = "vuln"
     dockerfile: str = _DF + "Dockerfile.graphql_tools"
 
+    input_types: tuple[str, ...] = ("url", "endpoint", "domain", "subdomain")
+    output_types: tuple[str, ...] = ("vuln",)
+    relationship_types: tuple[str, ...] = ("has_finding",)
+
+    execution_mode: str = "safe_active"
+
     def build_command(self, endpoint: str = "", **_) -> str:
         safe = endpoint.strip().replace("'", "").replace('"', "")
         return (
@@ -1326,6 +1508,12 @@ class _Gowitness(ToolConfig):
     description: str = "Screenshot live HTTP hosts — visual triage of large attack surfaces"
     category: str = "screenshot"
     dockerfile: str = _DF + "Dockerfile.gowitness"
+
+    input_types: tuple[str, ...] = ("url", "endpoint")
+    output_types: tuple[str, ...] = ("screenshot",)
+    relationship_types: tuple[str, ...] = ("has_screenshot",)
+
+    execution_mode: str = "safe_active"
 
     def get_volumes(self, output_dir: str, input_dir: str | None = None) -> dict:
         os.makedirs(output_dir, exist_ok=True)
@@ -1361,6 +1549,12 @@ class _Subzy(ToolConfig):
     category: str = "vuln"
     dockerfile: str = _DF + "Dockerfile.subzy"
 
+    input_types: tuple[str, ...] = ("subdomain", "domain", "url")
+    output_types: tuple[str, ...] = ("vuln",)
+    relationship_types: tuple[str, ...] = ("has_finding",)
+
+    execution_mode: str = "safe_active"
+
     def build_command(self, input_file: str = "", domain: str = "",
                       timeout: str = "10", concurrency: str = "10", **_) -> str:
         targets = f"--targets {input_file}" if input_file else f"--target {domain}"
@@ -1388,6 +1582,12 @@ class _Wafw00f(ToolConfig):
     category: str = "vuln"
     dockerfile: str = _DF + "Dockerfile.wafw00f"
 
+    input_types: tuple[str, ...] = ("url", "domain", "subdomain")
+    output_types: tuple[str, ...] = ("cdn", "tech")
+    relationship_types: tuple[str, ...] = ("protected_by",)
+
+    execution_mode: str = "safe_active"
+
     def build_command(self, input_file: str = "", url: str = "", **_) -> str:
         src = f"-i {input_file}" if input_file else url
         return f"wafw00f {src} -f json -o /output/wafw00f_results.json"
@@ -1408,6 +1608,12 @@ class _Sqlmap(ToolConfig):
     description: str = "Automated SQL injection detection and exploitation"
     category: str = "vuln"
     dockerfile: str = _DF + "Dockerfile.sqlmap"
+
+    input_types: tuple[str, ...] = ("url", "endpoint", "param")
+    output_types: tuple[str, ...] = ("vuln",)
+    relationship_types: tuple[str, ...] = ("has_finding",)
+
+    execution_mode: str = "active"
 
     def build_command(self, input_file: str = "", url: str = "",
                       level: str = "1", risk: str = "1",
@@ -1444,6 +1650,12 @@ class _Kiterunner(ToolConfig):
     category: str = "crawl"
     dockerfile: str = _DF + "Dockerfile.kiterunner"
 
+    input_types: tuple[str, ...] = ("url", "domain", "subdomain")
+    output_types: tuple[str, ...] = ("endpoint",)
+    relationship_types: tuple[str, ...] = ("has_endpoint",)
+
+    execution_mode: str = "active"
+
     def build_command(self, input_file: str = "", url: str = "",
                       wordlist: str = "apiroutes-210228:20000",
                       workers: str = "20", fail_codes: str = "404", **_) -> str:
@@ -1478,6 +1690,12 @@ class _Corsy(ToolConfig):
     category: str = "vuln"
     dockerfile: str = _DF + "Dockerfile.corsy"
 
+    input_types: tuple[str, ...] = ("url", "endpoint", "domain", "subdomain")
+    output_types: tuple[str, ...] = ("vuln",)
+    relationship_types: tuple[str, ...] = ("has_finding",)
+
+    execution_mode: str = "safe_active"
+
     def build_command(self, input_file: str = "", url: str = "",
                       threads: str = "10", headers: str = "", **_) -> str:
         src = f"-i {input_file}" if input_file else f"-u {url}"
@@ -1504,6 +1722,12 @@ class _SecretFinder(ToolConfig):
     description: str = "Scan JavaScript files for API keys, tokens and credentials"
     category: str = "vuln"
     dockerfile: str = _DF + "Dockerfile.secretfinder"
+
+    input_types: tuple[str, ...] = ("url", "endpoint")
+    output_types: tuple[str, ...] = ("vuln",)
+    relationship_types: tuple[str, ...] = ("has_finding",)
+
+    execution_mode: str = "safe_active"
 
     def build_command(self, url: str = "", cookies: str = "", **_) -> str:
         cmd = f"python3 SecretFinder.py -i {url} -e -o cli | tee /output/secretfinder_results.txt"

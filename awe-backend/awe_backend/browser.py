@@ -117,6 +117,33 @@ class BrowserSessionManager:
         self._next_display += 1
         return display
 
+    async def _install_proxy_ca(self, browser_home: Path, ca_path: Path) -> None:
+        """Trust the proxy's MITM root inside the session's private profile.
+
+        The proxy re-signs TLS with its own CA, so without this every HTTPS
+        target stops on an ERR_CERT_AUTHORITY_INVALID interstitial. Chromium
+        reads locally added roots from $HOME/.pki/nssdb rather than from
+        --user-data-dir, so each session gets a throwaway NSS database under
+        its own HOME and nothing leaks between sessions.
+        """
+        certutil = self._binary("certutil")
+        nssdb = browser_home / ".pki" / "nssdb"
+        nssdb.mkdir(parents=True, exist_ok=True)
+        commands = (
+            (certutil, "-N", "--empty-password", "-d", f"sql:{nssdb}"),
+            (certutil, "-A", "-n", "AWE proxy CA", "-t", "C,,", "-i", str(ca_path), "-d", f"sql:{nssdb}"),
+        )
+        for command in commands:
+            process = await asyncio.create_subprocess_exec(
+                *command,
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            _, stderr = await process.communicate()
+            if process.returncode != 0:
+                detail = stderr.decode(errors="replace").strip() or f"exit {process.returncode}"
+                raise BrowserUnavailable(f"Could not trust the AWE proxy CA: {detail}")
+
     @staticmethod
     def _write_browser_extension(runtime_dir: Path, project_id: str, proxy_username: str, proxy_password: str) -> Path:
         """Install a tiny MV3 extension for proxy routing/authentication.
@@ -181,6 +208,7 @@ class BrowserSessionManager:
         proxy_username: str = "",
         proxy_password: str = "",
         proxy_enabled: bool = True,
+        proxy_ca_path: Path | None = None,
     ) -> BrowserState:
         async with self._lock:
             session_id = secrets.token_urlsafe(18)
@@ -230,6 +258,10 @@ class BrowserSessionManager:
                 extension_dir = self._write_browser_extension(
                     runtime_dir, project_id, proxy_username, proxy_password
                 )
+                browser_home = runtime_dir / "home"
+                browser_home.mkdir()
+                if proxy_enabled and proxy_ca_path and Path(proxy_ca_path).is_file():
+                    await self._install_proxy_ca(browser_home, Path(proxy_ca_path))
 
                 browser_args = [
                     browser_binary,
@@ -249,7 +281,7 @@ class BrowserSessionManager:
                 browser_args.append("about:blank")
                 browser = await asyncio.create_subprocess_exec(
                     *browser_args,
-                    env={**os.environ, "DISPLAY": f":{display}"},
+                    env={**os.environ, "DISPLAY": f":{display}", "HOME": str(browser_home)},
                     stdout=asyncio.subprocess.DEVNULL,
                     stderr=asyncio.subprocess.DEVNULL,
                 )

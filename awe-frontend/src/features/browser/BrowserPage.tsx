@@ -2,7 +2,7 @@ import { FormEvent, useEffect, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import RFB from '@novnc/novnc'
 import { useParams } from 'react-router-dom'
-import { api } from '../../api/client'
+import { api, BrowserSession } from '../../api/client'
 
 export function BrowserPage() {
   const { projectId = '' } = useParams()
@@ -11,6 +11,7 @@ export function BrowserPage() {
   const [url, setUrl] = useState('')
   const [error, setError] = useState('')
   const [connected, setConnected] = useState(false)
+  const [fullscreen, setFullscreen] = useState(false)
   const canvasHost = useRef<HTMLDivElement>(null)
   const rfb = useRef<RFB | null>(null)
   const editingUrl = useRef(false)
@@ -26,6 +27,12 @@ export function BrowserPage() {
       setUrl(sessions.data[0].url)
     }
   }, [sessions.data, sessionId])
+
+  useEffect(() => {
+    const sync = () => setFullscreen(document.fullscreenElement === canvasHost.current)
+    document.addEventListener('fullscreenchange', sync)
+    return () => document.removeEventListener('fullscreenchange', sync)
+  }, [])
 
   useEffect(() => {
     const host = canvasHost.current
@@ -47,6 +54,7 @@ export function BrowserPage() {
     return () => {
       connection.disconnect()
       if (rfb.current === connection) rfb.current = null
+      if (document.fullscreenElement === host) void document.exitFullscreen()
       host.replaceChildren()
       setConnected(false)
     }
@@ -71,12 +79,26 @@ export function BrowserPage() {
   const close = useMutation({
     mutationFn: () => api.closeBrowserSession(projectId, sessionId),
     onSuccess: () => {
+      const closed = sessionId
       setSessionId('')
+      queryClient.setQueryData<BrowserSession[]>(['browser', projectId], current => current?.filter(item => item.id !== closed))
       void queryClient.invalidateQueries({ queryKey: ['browser', projectId] })
     },
   })
 
   const active = sessions.data?.find(item => item.id === sessionId)
+
+  function toggleFullscreen() {
+    const host = canvasHost.current
+    if (!host) return
+    if (document.fullscreenElement === host) {
+      void document.exitFullscreen()
+      return
+    }
+    // noVNC rescales from its container, so the canvas follows the resize on
+    // its own; focusing the host keeps keystrokes going to the remote desktop.
+    host.requestFullscreen().then(() => host.focus()).catch(() => setError('This browser refused to open the viewer fullscreen.'))
+  }
 
   function submit(event: FormEvent) {
     event.preventDefault()
@@ -105,11 +127,11 @@ export function BrowserPage() {
       {sessionId && <button className="danger" onClick={() => close.mutate()}>Close</button>}
     </section>
     {(error || create.isError || navigate.isError) && <p className="error">{error || ((create.error || navigate.error) as Error)?.message}</p>}
-    {active && <section className="browser-stage panel">
-      <div className="browser-stage-head"><span>{active.title || 'Loading'} · {active.url}</span><small>{connected ? '● Live VNC' : '○ Connecting'}</small></div>
+    {sessionId && <section className="browser-stage panel">
+      <div className="browser-stage-head"><span>{active?.title || 'Loading'} · {active?.url || url}</span><div className="browser-stage-actions"><small>{connected ? '● Live VNC' : '○ Connecting'}</small><button type="button" className="subtle-button" onClick={toggleFullscreen}>{fullscreen ? 'Exit fullscreen' : 'Fullscreen'}</button></div></div>
       <div ref={canvasHost} className="browser-vnc" tabIndex={0} aria-label="Interactive remote browser desktop" />
       <p className="muted">Click the remote desktop to focus it. Keyboard, scrolling, tabs, downloads, and browser chrome are handled by VNC.</p>
     </section>}
-    {!active && <div className="panel empty">Create a browser session to begin.</div>}
+    {!sessionId && <div className="panel empty">Create a browser session to begin.</div>}
   </main>
 }
