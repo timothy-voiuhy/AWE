@@ -1,8 +1,11 @@
-import ReactMarkdown from 'react-markdown'
-import remarkGfm from 'remark-gfm'
+import { lazy, Suspense } from 'react'
+
+const MarkdownRenderer = lazy(() => import('./MarkdownRenderer'))
 
 export function MarkdownContent({ source, className = '' }: { source: string; className?: string }) {
   return <div className={`markdown-content ${className}`}>
-    <ReactMarkdown remarkPlugins={[remarkGfm]}>{source}</ReactMarkdown>
+    <Suspense fallback={<div className="markdown-loading">Rendering…</div>}>
+      <MarkdownRenderer source={source} />
+    </Suspense>
   </div>
 }

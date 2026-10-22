@@ -1,6 +1,6 @@
 import { Navigate, NavLink, Route, Routes, useLocation } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { useRef, useState, type TouchEvent } from 'react'
+import { lazy, Suspense, useRef, useState, type TouchEvent } from 'react'
 
 import { api } from './api/client'
 import { LoginPage } from './features/auth/LoginPage'
@@ -12,7 +12,6 @@ import { GraphqlPage } from './features/utilities/GraphqlPage'
 import { DecoderPage } from './features/utilities/DecoderPage'
 import { JwtPage } from './features/utilities/JwtPage'
 import { HttpHistoryPage, SiteMapPage } from './features/proxy/TrafficPages'
-import { NetworkGraphPage } from './features/network/NetworkGraphPage'
 import { GraphToolsPage } from './features/network/GraphToolsPage'
 import { NetworkLogsPage } from './features/network/NetworkLogsPage'
 import { NetworkTransformsPage } from './features/network/NetworkTransformsPage'
@@ -21,11 +20,9 @@ import { RepeaterPage } from './features/testing/RepeaterPage'
 import { DockerPage, SettingsPage } from './features/operations/OperationsPages'
 import { InterceptPage, WebSocketsPage } from './features/testing/SecurityTestingPages'
 import { IntruderPage } from './features/testing/IntruderPage'
-import { BrowserPage } from './features/browser/BrowserPage'
 import { GlobalVaultPage } from './features/operations/GlobalVaultPage'
 import { AIPage } from './features/ai/AIPage'
 import { StreamingAIPage } from './features/ai/StreamingAIPage'
-import { TerminalPage } from './features/terminal/TerminalPage'
 import { ResultsPage } from './features/results/ResultsPage'
 import { ReportPage } from './features/reports/ReportPage'
 import { TerminalConfigPage } from './features/terminal/TerminalConfigPage'
@@ -33,6 +30,12 @@ import { DockerManagerPage } from './features/operations/DockerManagerPage'
 import { PipelinePage } from './features/pipeline/PipelinePage'
 import { DatabasePage } from './features/operations/DatabasePage'
 import { DocsPage } from './features/docs/DocsPage'
+
+// Heavy, single-use routes are code-split so their deps (novnc, xterm,
+// cytoscape) stay out of the main bundle until the route is visited.
+const BrowserPage = lazy(() => import('./features/browser/BrowserPage').then(m => ({ default: m.BrowserPage })))
+const TerminalPage = lazy(() => import('./features/terminal/TerminalPage').then(m => ({ default: m.TerminalPage })))
+const NetworkGraphPage = lazy(() => import('./features/network/NetworkGraphPage').then(m => ({ default: m.NetworkGraphPage })))
 
 type WorkspaceNavItem = {
   path: string
@@ -138,6 +141,7 @@ export function App() {
         <small>Attack Workspace Environment</small>
       </aside>
       <div className="route-content">
+      <Suspense fallback={<div className="route-loading">Loading…</div>}>
       <Routes>
         <Route path="/projects" element={<ProjectList />} />
         <Route path="/projects/:projectId" element={<ProjectWorkspace />} />
@@ -172,6 +176,7 @@ export function App() {
         <Route path="/projects/:projectId/settings" element={<SettingsPage />} />
         <Route path="*" element={<Navigate to="/projects" replace />} />
       </Routes>
+      </Suspense>
       </div>
     </div>
   )
