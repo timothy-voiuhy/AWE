@@ -1,0 +1,19 @@
+{
+  "name": "AWE",
+  "short_name": "AWE",
+  "description": "AWE web security testing workspace — recon pipelines, proxy, repeater, and the controlled browser.",
+  "id": "/",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "display_override": ["standalone", "minimal-ui"],
+  "orientation": "any",
+  "background_color": "#11111b",
+  "theme_color": "#11111b",
+  "icons": [
+    { "src": "/assets/icons/awe-icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/assets/icons/awe-icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/assets/icons/awe-icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "maskable" },
+    { "src": "/assets/icons/awe-icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}
