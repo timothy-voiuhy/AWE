@@ -1,6 +1,7 @@
 import { Navigate, NavLink, Route, Routes, useLocation } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { lazy, Suspense, useRef, useState, type TouchEvent } from 'react'
+import { Spinner } from './components/Spinner'
 
 import { api } from './api/client'
 import { LoginPage } from './features/auth/LoginPage'
@@ -141,7 +142,7 @@ export function App() {
         <small>Attack Workspace Environment</small>
       </aside>
       <div className="route-content">
-      <Suspense fallback={<div className="route-loading">Loading…</div>}>
+      <Suspense fallback={<div className="route-loading"><Spinner label="Loading…" /></div>}>
       <Routes>
         <Route path="/projects" element={<ProjectList />} />
         <Route path="/projects/:projectId" element={<ProjectWorkspace />} />
