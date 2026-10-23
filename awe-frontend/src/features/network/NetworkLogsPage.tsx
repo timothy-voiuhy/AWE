@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useParams } from 'react-router-dom'
 
 import { api, type TransformJob, type TransformManifest } from '../../api/client'
+import { Spinner } from '../../components/Spinner'
 
 const activeStatuses = new Set(['queued', 'running', 'approval_required'])
 
@@ -74,7 +75,7 @@ export function NetworkLogsPage() {
     <section className="network-log-grid">
       {jobs.data?.map(job => <TransformLogCard key={job.id} job={job} manifest={manifestById.get(job.transform_id)} onCancel={id => cancel.mutate(id)} />)}
       {!jobs.isPending && !jobs.data?.length && <div className="panel empty">No graph transform logs yet. Run a transform from Network or Graph Tools to see live Docker output here.</div>}
-      {jobs.isPending && !jobs.data && <div className="panel empty">Loading transform logs...</div>}
+      {jobs.isPending && !jobs.data && <div className="panel empty"><Spinner label="Loading logs…" /></div>}
     </section>
   </main>
 }

@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
 
 import { api } from '../../api/client'
+import { Spinner } from '../../components/Spinner'
 
 export function ProjectList() {
   const queryClient = useQueryClient()
@@ -54,7 +55,7 @@ export function ProjectList() {
 
       <section className="project-section">
         <div className="section-title"><h2>Recent projects</h2><span>{projects.data?.length ?? 0}</span></div>
-        {projects.isPending && <p className="muted">Loading projects…</p>}
+        {projects.isPending && <Spinner label="Loading projects…" />}
         {projects.isError && <p className="error">Could not load projects: {projects.error.message}</p>}
         {projects.data?.length === 0 && <div className="empty">No projects yet. Create the first one above.</div>}
         <div className="project-grid">

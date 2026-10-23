@@ -3,6 +3,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useParams, useSearchParams } from 'react-router-dom'
 
 import { api, type StoredResult } from '../../api/client'
+import { Spinner } from '../../components/Spinner'
 import { SubdomainImportPanel } from './SubdomainImportPanel'
 
 const categories = [
@@ -131,7 +132,7 @@ export function ResultsPage() {
       <div className="panel result-content">
         <div className="result-source-tabs"><button className={source === 'combined' ? 'selected' : ''} onClick={() => setSource('combined')}>Combined <span>{categoryResults.length}</span></button>{sources.map(([itemSource, count]) => <button className={source === itemSource ? 'selected' : ''} onClick={() => setSource(itemSource)} key={itemSource}>{itemSource.replaceAll('_', ' ')} <span>{count}</span></button>)}</div>
         <div className="result-stats"><strong>{filtered.length}</strong> shown · {categoryResults.length} unique · {sources.length} sources</div>
-        {results.isFetching && <div className="empty compact">Loading results…</div>}
+        {results.isFetching && <div className="empty compact"><Spinner size="small" label="Loading results…" /></div>}
         {!results.isFetching && filtered.length === 0 && <div className="empty">No results match this view.</div>}
         {filtered.length > 0 && <div className="result-data-table"><table><thead><tr>{columns.map((column) => <th key={column.label}>{column.label}</th>)}<th>Sources</th></tr></thead><tbody>{filtered.map((item) => <tr key={`${item.category}-${item.result_key}`} title={item.result_key}>{columns.map((column) => <td key={column.label}><code className={category === 'vuln' && column.label === 'Severity' ? `severity-${fieldValue(item, column.fields).toLowerCase()}` : ''}>{column.fields.length ? fieldValue(item, column.fields) : item.result_key}</code></td>)}<td>{item.sources.join(', ') || '—'}</td></tr>)}</tbody></table></div>}
       </div>
