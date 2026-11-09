@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useParams } from 'react-router-dom'
 
@@ -52,10 +52,10 @@ function TransformCatalog({ transforms, selectedId, onSelect, onDelete }: { tran
   </section>
 }
 
-function CompositeBuilder({ tools, value, onChange, onSave, saving }: { tools: DockerTool[]; value: TransformDefinitionInput; onChange: (value: TransformDefinitionInput) => void; onSave: () => void; saving: boolean }) {
+function CompositeBuilder({ tools, value, onChange, onSave, onClose, saving, error }: { tools: DockerTool[]; value: TransformDefinitionInput; onChange: (value: TransformDefinitionInput) => void; onSave: () => void; onClose: () => void; saving: boolean; error?: string }) {
   const graphTools = tools.filter(tool => tool.graph_enabled)
   const updateStage = (index: number, patch: Partial<TransformStage>) => onChange({ ...value, stages: value.stages.map((stage, i) => i === index ? { ...stage, ...patch } : stage) })
-  return <section className="panel graph-tool-create"><header><div><b>Create composite transform</b><span>Define staged tooling and tunnel previous stage output through tools that accept an input file.</span></div></header>
+  return <section className="panel graph-tool-create"><header><div><b id="composite-dialog-title">Create composite transform</b><span>Define staged tooling and tunnel previous stage output through tools that accept an input file.</span></div><button type="button" className="subtle transform-dialog-close" aria-label="Close dialog" onClick={onClose}>×</button></header>
     <div className="graph-tool-editor-grid">
       <label>Id<input value={value.id || ''} onChange={event => onChange({ ...value, id: event.target.value })} placeholder="custom:live-subdomains" /></label>
       <label>Display name<input value={value.display_name} onChange={event => onChange({ ...value, display_name: event.target.value })} /></label>
@@ -73,7 +73,8 @@ function CompositeBuilder({ tools, value, onChange, onSave, saving }: { tools: D
       <label>Input<select value={stage.input_source} onChange={event => updateStage(index, { input_source: event.target.value as TransformStage['input_source'] })}><option value="seed">Seed entity/parameters</option><option value="previous">Previous stage output</option></select></label>
     </article>)}</div>
     <datalist id="graph-tool-keys">{graphTools.map(tool => <option key={tool.key} value={tool.key}>{tool.display_name}</option>)}</datalist>
-    <footer className="network-transform-actions"><button type="button" onClick={() => onChange({ ...value, stages: [...value.stages, { name: `Stage ${value.stages.length + 1}`, tool_keys: [], input_source: 'previous', parameters: {} }] })}>Add stage</button><button type="button" onClick={onSave} disabled={saving || !value.display_name || value.stages.some(stage => !stage.tool_keys.length)}>{saving ? 'Saving...' : 'Save composite transform'}</button></footer>
+    {error && <p className="error" role="alert">{error}</p>}
+    <footer className="network-transform-actions"><button type="button" onClick={() => onChange({ ...value, stages: [...value.stages, { name: `Stage ${value.stages.length + 1}`, tool_keys: [], input_source: 'previous', parameters: {} }] })}>Add stage</button><button type="button" className="subtle" onClick={onClose}>Cancel</button><button type="button" onClick={onSave} disabled={saving || !value.display_name.trim() || !value.category.trim() || value.stages.some(stage => !stage.tool_keys.length)}>{saving ? 'Saving...' : 'Save composite transform'}</button></footer>
   </section>
 }
 
@@ -85,8 +86,14 @@ export function NetworkTransformsPage() {
   const [entityId, setEntityId] = useState('')
   const [parameters, setParameters] = useState<Record<string, unknown>>({})
   const [composite, setComposite] = useState<TransformDefinitionInput>(emptyComposite)
+  const [compositeOpen, setCompositeOpen] = useState(false)
+  const compositeDialog = useRef<HTMLDialogElement>(null)
   const [jobId, setJobId] = useState('')
   const [notice, setNotice] = useState('')
+  useEffect(() => {
+    if (compositeOpen && !compositeDialog.current?.open) compositeDialog.current?.showModal()
+    if (!compositeOpen && compositeDialog.current?.open) compositeDialog.current.close()
+  }, [compositeOpen])
 
   const investigations = useQuery({ queryKey: ['projects', projectId, 'investigations'], queryFn: () => api.listInvestigations(projectId) })
   const transforms = useQuery({ queryKey: ['projects', projectId, 'transforms'], queryFn: () => api.listGraphTransforms(projectId) })
@@ -110,22 +117,25 @@ export function NetworkTransformsPage() {
   })
   const saveComposite = useMutation({
     mutationFn: () => api.createTransformDefinition(projectId, composite),
-    onSuccess: item => { setNotice(`Saved composite transform ${item.display_name}.`); setTransformId(item.id); setComposite(emptyComposite); void qc.invalidateQueries({ queryKey: ['projects', projectId, 'transforms'] }) },
+    onSuccess: item => { setNotice(`Saved composite transform ${item.display_name}.`); setTransformId(item.id); setComposite(emptyComposite); setCompositeOpen(false); void qc.invalidateQueries({ queryKey: ['projects', projectId, 'transforms'] }) },
   })
   const deleteComposite = useMutation({
     mutationFn: (id: string) => api.deleteTransformDefinition(projectId, id),
     onSuccess: () => { setNotice('Deleted custom transform.'); void qc.invalidateQueries({ queryKey: ['projects', projectId, 'transforms'] }) },
   })
+  const closeComposite = () => { setCompositeOpen(false); setComposite(emptyComposite); saveComposite.reset() }
 
   return <main className="page feature-page network-transforms-page">
     
-    <header className="page-header graph-tools-header"><div><p className="eyebrow">Network</p><h1>Transforms</h1><p className="muted">Run graph-capable Docker tools against selected investigation entities.</p></div><OptionsMenu label="Transform options"><Link to={`/projects/${projectId}/network/tools`}>Tool catalog</Link><Link to={`/projects/${projectId}/network/logs`}>Live logs</Link></OptionsMenu></header>
-    {notice && <p className="success">{notice}</p>}{(run.isError || job.isError || transforms.isError || graph.isError || saveComposite.isError || deleteComposite.isError) && <p className="error">{String((run.error || job.error || transforms.error || graph.error || saveComposite.error || deleteComposite.error)?.message)}</p>}
+    <header className="page-header graph-tools-header"><div><p className="eyebrow">Network</p><h1>Transforms</h1><p className="muted">Run graph-capable Docker tools against selected investigation entities.</p></div><OptionsMenu label="Transform options"><button type="button" onClick={() => { saveComposite.reset(); setCompositeOpen(true) }}>Create composite transform</button><Link to={`/projects/${projectId}/network/tools`}>Tool catalog</Link><Link to={`/projects/${projectId}/network/logs`}>Live logs</Link></OptionsMenu></header>
+    {notice && <p className="success">{notice}</p>}{(run.isError || job.isError || transforms.isError || graph.isError || deleteComposite.isError) && <p className="error">{String((run.error || job.error || transforms.error || graph.error || deleteComposite.error)?.message)}</p>}
     <section className="network-transforms-workbench">
       <section className="panel graph-tool-runner"><header><div><b>Run graph transform</b><span>Outputs are parsed and attached to the selected investigation.</span></div><span className={`transform-risk risk-${selected?.mode || 'passive'}`}>{selected?.mode || 'passive'}</span></header><label>Investigation<select value={investigationId} onChange={event => setInvestigationId(event.target.value)}>{investigations.data?.map(item => <option value={item.id} key={item.id}>{item.name}</option>)}</select></label><label>Transform<select value={transformId} onChange={event => setTransformId(event.target.value)}>{groupByCategory(transforms.data || []).map(group => <optgroup label={group.category} key={group.category}>{group.entries.map(item => <option value={item.id} key={item.id}>{item.display_name} · {item.mode}</option>)}</optgroup>)}</select></label><label>Input entity<select value={entityId} onChange={event => setEntityId(event.target.value)}>{compatibleEntities.map(entity => <option value={entity.id} key={entity.id}>{entity.label} · {entity.kind}</option>)}</select></label>{selected && <><p className="muted">{selected.description}</p><small>Accepts: {selected.input_types.join(', ')} · Produces: {selected.output_types.join(', ')} · Relationships: {selected.relationship_types.join(', ')}</small><ParameterFields specs={selected.parameters} values={parameters} onChange={(key, value) => setParameters(current => ({ ...current, [key]: value }))} /><button onClick={() => run.mutate()} disabled={!selected || !entityId || run.isPending}>{run.isPending ? 'Starting...' : 'Run transform'}</button></>}</section>
       <section className="panel graph-tool-status"><header><b>Execution status</b><span>{job.data?.status || 'No graph run selected'}</span></header>{job.data ? <><p>{job.data.message || 'Waiting for operation output...'}</p><div className="transform-progress-track"><span style={{ width: `${job.data.progress_total ? Math.round(((job.data.progress_completed || 0) / job.data.progress_total) * 100) : job.data.status === 'completed' ? 100 : 18}%` }} /></div><pre>{job.data.logs?.slice(-30).join('\n') || 'No logs yet.'}</pre><Link className="button-link subtle" to={`/projects/${projectId}/network/logs`}>Open full logs</Link></> : <p className="muted">Run a transform to monitor parsing, approval, and graph ingestion.</p>}</section>
     </section>
-    <CompositeBuilder tools={tools.data || []} value={composite} onChange={setComposite} onSave={() => saveComposite.mutate()} saving={saveComposite.isPending} />
     {transforms.data?.length ? <TransformCatalog transforms={transforms.data} selectedId={transformId} onSelect={setTransformId} onDelete={id => deleteComposite.mutate(id)} /> : null}
+    <dialog ref={compositeDialog} className="transform-dialog" aria-labelledby="composite-dialog-title" onClose={closeComposite}>
+      <CompositeBuilder tools={tools.data || []} value={composite} onChange={setComposite} onSave={() => saveComposite.mutate()} onClose={closeComposite} saving={saveComposite.isPending} error={saveComposite.error?.message} />
+    </dialog>
   </main>
 }

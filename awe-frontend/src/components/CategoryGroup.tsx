@@ -10,7 +10,7 @@ export function groupByCategory<T extends { category: string }>(items: T[]) {
 }
 
 export function CategoryGroup({ name, count, children }: { name: string; count: number; children: ReactNode }) {
-  const [expanded, setExpanded] = useState(true)
+  const [expanded, setExpanded] = useState(false)
   return <section className="catalog-category">
     <button type="button" className="catalog-category-toggle" aria-expanded={expanded} onClick={() => setExpanded(value => !value)}>
       <span className="catalog-category-chevron" aria-hidden="true">{expanded ? '▾' : '▸'}</span>
