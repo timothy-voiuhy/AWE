@@ -65,10 +65,14 @@ class AuthService:
 
     def login(self, username: str, password: str) -> tuple[str, Session]:
         account = self.account()
-        if account is None or username != account[0]:
+        if account is not None and username == account[0]:
+            password_hash = account[1]
+        elif self.settings.e2e_username and username == self.settings.e2e_username:
+            password_hash = self.settings.e2e_password_hash
+        else:
             raise AuthenticationError("Invalid credentials")
         try:
-            valid = self._passwords.verify(password, account[1])
+            valid = self._passwords.verify(password, password_hash)
         except Exception as exc:
             raise AuthenticationError("Invalid credentials") from exc
         if not valid:
@@ -80,6 +84,9 @@ class AuthService:
     def verify(self, token: str) -> Session:
         try:
             data = self._serializer.loads(token, max_age=self.settings.session_ttl_seconds)
+            primary = self.account()
+            if data["username"] != (primary[0] if primary else None) and data["username"] != self.settings.e2e_username:
+                raise AuthenticationError("Invalid or expired session")
             return Session(username=data["username"], csrf=data["csrf"])
         except (BadSignature, SignatureExpired, KeyError, TypeError) as exc:
             raise AuthenticationError("Invalid or expired session") from exc

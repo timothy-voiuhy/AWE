@@ -20,6 +20,8 @@ class Settings(BaseSettings):
     auth_enabled: bool = True
     secret_key: str = "development-only-change-me"
     admin_password_hash: str = ""
+    e2e_username: str = ""
+    e2e_password_hash: str = ""
     auth_file: Path = Field(default=Path.home() / ".config" / "awe" / "auth.json")
     session_ttl_seconds: int = 43200
     secure_cookies: bool = False
@@ -36,6 +38,10 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def validate_production_security(self):
+        if bool(self.e2e_username) != bool(self.e2e_password_hash):
+            raise ValueError("AWE_E2E_USERNAME and AWE_E2E_PASSWORD_HASH must be set together")
+        if self.e2e_username == "admin" and self.admin_password_hash:
+            raise ValueError("AWE_E2E_USERNAME must differ from the admin username")
         if self.environment == "production":
             if self.secret_key == "development-only-change-me" or len(self.secret_key) < 32:
                 raise ValueError("AWE_SECRET_KEY must be at least 32 characters in production")

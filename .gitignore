@@ -73,6 +73,8 @@ desktop.ini
 
 # ── Test & coverage ───────────────────────────────────────────────────────────
 .pytest_cache/
+playwright-report/
+test-results/
 .coverage
 htmlcov/
 .tox/

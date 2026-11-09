@@ -3,7 +3,7 @@ Pipeline execution engine.
 
 Key design points
 ─────────────────
-  • All Docker commands are run via  ["sh", "-c", command]  so shell pipes,
+  • All Docker commands are run via  sh -c command  so shell pipes,
     redirects, and tee work correctly regardless of the container's entrypoint.
   • Scope filtering (in_scope / out_of_scope) is applied to input files written
     between stages — only in-scope hosts/domains feed downstream tools.
@@ -410,15 +410,12 @@ class PipelineRunner:
                     if status:
                         self._emit(tool_key, f"{status} {prog}".strip())
 
-        # Wrap command in sh -c so pipes / redirects / tee work correctly.
-        # entrypoint="" overrides any ENTRYPOINT set in the image — without this,
-        # Docker prepends the image entrypoint to ["sh", "-c", command], causing
-        # e.g. projectdiscovery/subfinder to run  "subfinder sh -c '...'"  instead
-        # of  "sh -c 'subfinder ...'" .
+        # Set the shell as the entrypoint so image entrypoints such as
+        # projectdiscovery/subfinder do not receive the shell command as arguments.
         container = client.containers.run(
             image=tool.image,
-            command=["sh", "-c", command],
-            entrypoint="",
+            command=["-c", command],
+            entrypoint=["sh"],
             volumes=volumes,
             environment=tool.build_environment(**(params or {})) or None,
             name=tool.container_name(),

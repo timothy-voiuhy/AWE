@@ -233,7 +233,8 @@ class DockerOperationManager:
         environment = tool.build_environment(**params)
         container = service._client().containers.run(
             image=tool.image,
-            command=command,
+            command=["-c", command],
+            entrypoint=["sh"],
             name=tool.container_name(),
             volumes=tool.get_volumes(str(output_dir), str(input_dir) if input_dir else None),
             environment=environment or None,
