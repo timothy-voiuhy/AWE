@@ -1,0 +1,288 @@
+@font-face {
+  font-family: 'IBM Plex Sans';
+  src: url('./fonts/ibm-plex-sans-latin.woff2') format('woff2');
+  font-style: normal;
+  font-weight: 400 700;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'IBM Plex Mono';
+  src: url('./fonts/ibm-plex-mono-latin.woff2') format('woff2');
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+}
+
+/* One visual system for the application: ruled work areas and data rows. */
+:root {
+  font-family: 'IBM Plex Sans', sans-serif;
+  font-size: 14px;
+  line-height: 1.45;
+  color: #e1e8f2;
+  background: #10151c;
+  --workspace-line: #303d4c;
+  --workspace-soft-line: #26323f;
+  --workspace-muted: #9ba9bb;
+  --workspace-blue: #8eb9ff;
+}
+
+body { background: #10151c; }
+button, input, select, textarea { font-family: 'IBM Plex Sans', sans-serif; }
+code, pre, kbd, samp, .target-address, .target-address small,
+.target-capture-list code, .method-badge, .target-notes-editor,
+.docker-card-logs pre, .network-log-card pre, .evidence-detail pre,
+.live-console pre, .traffic-detail pre, .json-card pre, .diff-panel,
+.docker-operation pre, .graph-inspector pre {
+  font-family: 'IBM Plex Mono', monospace;
+}
+
+.app-shell { grid-template-columns: 208px minmax(0, 1fr); }
+.sidebar {
+  gap: 22px;
+  padding: 20px 12px;
+  background: #0c1118;
+  border-right: 1px solid var(--workspace-line);
+}
+.brand { padding: 0 8px 14px; border-bottom: 1px solid var(--workspace-line); font-size: 16px; letter-spacing: .06em; }
+.brand span { width: 32px; height: 32px; border-radius: 3px; background: var(--workspace-blue); }
+.sidebar nav a { border-radius: 0; border-left: 2px solid transparent; font-size: 13px; }
+.sidebar nav a:hover { background: #182330; color: #e1e8f2; }
+.sidebar nav a.active { color: #eef5ff; background: #1a2b3d; border-left-color: var(--workspace-blue); }
+.sidebar nav a span { color: var(--workspace-muted); }
+.sidebar nav a img { opacity: .9; filter: grayscale(1) brightness(0) invert(.7); }
+.sidebar nav a.active img { opacity: 1; filter: grayscale(1) brightness(0) invert(.9); }
+.sidebar .nav-children a { font-size: 11px; }
+.workspace-nav > small { color: #8292a6; font-size: 10px; letter-spacing: .12em; }
+
+.page { width: min(1400px, calc(100% - 64px)); padding: 26px 0 64px; }
+.page-header, .workspace-header, .target-workspace-header, .graph-tools-header,
+.network-logs-header, .network-evidence-header {
+  padding-bottom: 18px;
+  border-bottom: 1px solid var(--workspace-line);
+}
+.page-header:not(.docker-manager-header),
+.page-header:has(> div:only-child):not(.docker-manager-header) { display: flex; }
+.page-header:not(.docker-manager-header) > div:first-child { display: block; }
+.page-header > div > .eyebrow { display: block; margin: 0 0 4px; }
+.page-header > div > h1 { display: block; margin: 0 0 3px; }
+h1 { font-size: clamp(27px, 2.5vw, 36px); line-height: 1.1; letter-spacing: -.035em; font-weight: 600; }
+h2 { font-size: 18px; line-height: 1.25; letter-spacing: -.015em; font-weight: 600; }
+h3 { letter-spacing: -.01em; font-weight: 600; }
+.eyebrow, .category-tag {
+  color: var(--workspace-blue);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: .13em;
+}
+.muted, .page-header .muted { color: var(--workspace-muted); }
+.page-header .muted { font-size: 13px; line-height: 1.5; }
+label { color: #b8c5d4; font-size: 12px; font-weight: 500; }
+
+input, select, textarea {
+  color: #e1e8f2;
+  background: #0c121a;
+  border-color: #405065;
+  border-radius: 3px;
+}
+input::placeholder, textarea::placeholder { color: #738498; }
+input:focus-visible, select:focus-visible, textarea:focus-visible,
+button:focus-visible, a:focus-visible, summary:focus-visible {
+  outline: 2px solid var(--workspace-blue);
+  outline-offset: 2px;
+}
+button, .button-link { border-radius: 3px; font-weight: 600; }
+button:not(:disabled):hover, .button-link:hover { filter: brightness(1.1); }
+.button-link.subtle, .ghost-button, .subtle-button { background: #253142; color: #dce7f5; }
+.panel {
+  background: transparent;
+  border: 0;
+  border-top: 1px solid var(--workspace-line);
+  border-radius: 0;
+  box-shadow: none;
+}
+.panel > header:first-child { border-radius: 0; }
+.empty, .placeholder { color: var(--workspace-muted); }
+.section-title { padding-bottom: 10px; border-bottom: 1px solid var(--workspace-line); }
+.section-title span, .category-tag, .result-total { border-radius: 2px; }
+
+/* Landing and overview: records and metrics instead of cards. */
+.create-panel, .target-panel { padding: 22px 0 26px; border-bottom: 1px solid var(--workspace-line); }
+.project-section, .pipeline-section, .results-section { margin-top: 32px; }
+.project-grid { display: grid; grid-template-columns: 1fr; gap: 0; }
+.project-card {
+  min-height: 76px;
+  padding: 12px 4px;
+  background: transparent;
+  border: 0;
+  border-bottom: 1px solid var(--workspace-soft-line);
+  border-radius: 0;
+}
+.project-card:hover { background: #182330; border-color: var(--workspace-blue); transform: none; }
+.project-mark { width: 38px; height: 38px; background: transparent; border: 1px solid #50698a; border-radius: 3px; color: var(--workspace-blue); }
+.project-card h3 { font-size: 15px; }
+.project-card p, .project-card time { color: var(--workspace-muted); font-size: 12px; }
+.target-workbench-tabs, .result-source-tabs, .pipeline-tabs {
+  padding: 0;
+  background: transparent;
+  border: 0;
+  border-bottom: 1px solid var(--workspace-line);
+  border-radius: 0;
+}
+.target-workbench-tabs button, .result-source-tabs button, .pipeline-tabs button { border-radius: 0; border-bottom: 2px solid transparent; }
+.target-workbench-tabs button.selected, .result-source-tabs button.selected, .pipeline-tabs button.selected {
+  color: #eef5ff;
+  background: transparent;
+  border-bottom-color: var(--workspace-blue);
+}
+.target-stat-grid { gap: 0; border-bottom: 1px solid var(--workspace-line); }
+.target-stat { padding: 8px 18px 16px; border: 0; border-left: 1px solid var(--workspace-line); }
+.target-stat:first-child { border-left: 0; padding-left: 0; }
+.target-stat span, .target-stat small { color: var(--workspace-muted); font-size: 11px; }
+.target-stat strong { font-size: 32px; line-height: 1; font-weight: 500; font-variant-numeric: tabular-nums; }
+.target-overview-grid { gap: 28px; }
+.target-focus-card { min-height: 0; align-content: start; padding: 18px 0; }
+.target-focus-card form { margin-top: 30px; }
+.target-quick-actions { padding: 18px 0 0; }
+.target-quick-actions header { padding: 0 0 13px; }
+.target-quick-actions a { padding: 9px 30px 9px 0; border-bottom-color: var(--workspace-soft-line); }
+.target-quick-actions a:hover { background: #182330; }
+.target-quick-actions a i { top: 12px; right: 4px; }
+.target-capture-panel > header, .target-run-history > header,
+.target-notes-tab > header { background: transparent; padding: 14px 0; }
+.target-notes-editor { margin: 0; }
+.target-notes-tab > footer { padding: 0; }
+.target-flow-grid { gap: 0; }
+.target-flow-card { border-left: 1px solid var(--workspace-line); }
+.target-flow-card:first-child { border-left: 0; }
+
+/* Catalogs, tools, and run histories use compact rows. */
+.pipeline-grid, .transform-catalog-grid, .graph-tool-catalog-grid,
+.docker-tool-grid, .docker-run-list { gap: 0; }
+.pipeline-card { min-height: 0; background: transparent; border: 0; border-top: 1px solid var(--workspace-line); border-radius: 0; }
+.pipeline-card + .pipeline-card { border-left: 1px solid var(--workspace-line); }
+.pipeline-card p { color: var(--workspace-muted); font-size: 12px; }
+.pipeline-commandbar, .results-toolbar, .evidence-toolbar, .network-log-summary {
+  padding: 10px 0 16px;
+  background: transparent;
+  border: 0;
+  border-bottom: 1px solid var(--workspace-line);
+  border-radius: 0;
+}
+.pipeline-history, .result-categories, .session-list { padding: 8px 8px 8px 0; border-top: 0; border-right: 1px solid var(--workspace-line); }
+.pipeline-main, .result-content { border-top: 0; }
+.pipeline-history > button.selected, .result-categories > button.selected, .session-list button.selected {
+  color: #eef5ff;
+  background: #1a2b3d;
+  border-left: 2px solid var(--workspace-blue);
+}
+.pipeline-stage, .pipeline-step-preview section { background: transparent; border: 0; border-top: 1px solid var(--workspace-line); border-radius: 0; }
+.pipeline-stage > header { background: #18222e; }
+.transform-catalog, .graph-tool-catalog { padding: 18px 0 0; }
+.transform-catalog article, .graph-catalog-row, .evidence-card,
+.docker-tool-grid article, .docker-run-card {
+  background: transparent;
+  border: 0;
+  border-top: 1px solid var(--workspace-soft-line);
+  border-radius: 0;
+}
+.transform-catalog article { height: auto; grid-template-rows: auto auto 1fr; padding: 14px 12px; }
+.transform-catalog article.selected, .evidence-card.selected, .docker-tool-card.selected,
+.docker-run-card.selected { background: #1a2b3d; outline: none; box-shadow: inset 2px 0 var(--workspace-blue); }
+.catalog-category-toggle { padding: 11px 4px; color: #dce7f5; border-bottom-color: var(--workspace-line); }
+.catalog-category-count { border-radius: 2px; }
+.docker-tools-overview {
+  padding: 10px 0 22px;
+  background: transparent;
+  border: 0;
+  border-bottom: 1px solid var(--workspace-line);
+  border-radius: 0;
+}
+.docker-tools-summary > div, .network-log-summary > div, .evidence-toolbar > div {
+  background: transparent;
+  border: 0;
+  border-left: 1px solid var(--workspace-line);
+  border-radius: 0;
+}
+.docker-tool-catalog { border-right: 1px solid var(--workspace-line); border-top: 0; }
+.docker-tool-editor { padding: 16px 0 16px 10px; border-top: 0; }
+.docker-tool-card-main:hover { background: #182330; }
+.docker-tool-card > footer nav button { border-radius: 2px; }
+.docker-tool-placeholder { background: transparent; border: 0; }
+.docker-tool-placeholder-mark, .docker-tools-empty-icon, .docker-tool-icon {
+  background: transparent;
+  border-radius: 3px;
+}
+.docker-run-card { padding: 12px 10px; }
+.docker-run-card:hover { background: #182330; }
+.docker-manager-page { font-size: 13px; }
+.docker-manager-page .docker-tab, .docker-manager-page .docker-tabs button { font-size: 13px; }
+.docker-run-card b { font-size: 14px; }
+.docker-run-card span, .docker-run-card small { font-size: 12px; }
+.docker-manager-page .muted, .docker-manager-page label { font-size: 12px; }
+.network-log-card { padding: 14px 0; }
+.evidence-list { gap: 0; }
+.evidence-card { border-bottom: 1px solid var(--workspace-soft-line); border-top: 0; padding: 12px 8px; }
+.evidence-detail, .evidence-create { padding: 16px 0; }
+
+/* Data surfaces retain containment where scrolling or code readability needs it. */
+th { background: #18222e; color: #b6c4d4; font-size: 10px; font-weight: 600; }
+td { border-top-color: var(--workspace-soft-line); font-size: 12px; }
+tbody tr:hover { background: #1a2b3d; }
+.result-data-table tbody tr:nth-child(even) { background: #141d27; }
+.result-data-table tbody tr:nth-child(even):hover { background: #1a2b3d; }
+.console-head, .traffic-detail > header, .site-host header { background: #18222e; }
+.graph-canvas, .cytoscape-host, .network-canvas { border-radius: 0; }
+.graph-inspector { border-left: 1px solid var(--workspace-line); }
+.graph-evidence-panel, .graph-evidence-panel article, .host-nodes article,
+.network-host, .scope-row { border-radius: 0; }
+.scope-row { background: transparent; border-top: 0; border-right: 0; border-bottom-color: var(--workspace-soft-line); }
+.vault-page { width: min(1400px, calc(100% - 64px)); padding-top: 26px; }
+.vault-header-stats > div { background: transparent; border: 0; border-left: 1px solid var(--workspace-line); border-radius: 0; }
+.vault-content-header { background: transparent; border: 0; border-bottom: 1px solid var(--workspace-line); border-radius: 0; padding: 10px 0 18px; }
+.vault-category-list { padding: 0; }
+.vault-category-card { border: 0; border-bottom: 1px solid var(--workspace-soft-line); border-radius: 0; }
+.vault-category-card:hover, .vault-category-card.selected { background: #1a2b3d; }
+.vault-item-grid { gap: 0; }
+.vault-item-card { background: transparent; border: 0; border-top: 1px solid var(--workspace-line); border-radius: 0; }
+.vault-item-card:hover { background: #182330; }
+.vault-item-preview { background: #141d27; border-color: var(--workspace-soft-line); border-radius: 2px; }
+.page-options-panel, .graph-display-popover, .graph-selection-popover,
+.login-card, dialog, [role='dialog'] { border-radius: 5px; }
+
+@media (max-width: 1000px) {
+  .page { width: min(100% - 36px, 1400px); }
+  .target-overview-grid { gap: 16px; }
+  .transform-catalog-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+@media (max-width: 850px) {
+  .app-shell { grid-template-columns: 1fr; }
+  .sidebar { padding: 10px 16px; }
+  .brand { border-bottom: 0; padding: 0; }
+  .page { width: min(100% - 28px, 760px); padding-top: 22px; }
+  .vault-page { width: min(100% - 28px, 760px); }
+  .target-stat-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .target-stat:nth-child(3) { border-left: 0; padding-left: 0; }
+  .target-stat:nth-child(n+3) { border-top: 1px solid var(--workspace-line); padding-top: 16px; }
+  .target-flow-card { border-left: 0; border-top: 1px solid var(--workspace-line); }
+  .pipeline-card + .pipeline-card { border-left: 0; }
+  .docker-tool-catalog { border-right: 0; border-bottom: 1px solid var(--workspace-line); }
+  .docker-tool-editor { padding-left: 0; }
+}
+
+@media (max-width: 600px) {
+  h1 { font-size: 26px; }
+  .page { width: calc(100% - 24px); padding-top: 62px; }
+  .page-header { align-items: flex-start; }
+  .page-header.vault-page-header { display: block; }
+  .vault-header-stats { margin-top: 12px; }
+  .vault-header-stats > div { padding-left: 10px; }
+  .vault-header-stats span { font-size: 11px; }
+  .target-stat strong { font-size: 26px; }
+  .target-focus-card form { margin-top: 0; }
+  .transform-catalog-grid, .docker-run-list { grid-template-columns: 1fr; }
+  .project-card { grid-template-columns: 32px minmax(0, 1fr) auto; gap: 9px; }
+  .project-mark { width: 30px; height: 30px; }
+  .mobile-nav { background: rgb(12 17 24 / 96%); border-top-color: var(--workspace-line); }
+}
