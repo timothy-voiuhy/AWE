@@ -106,6 +106,8 @@ def test_composite_resume_skips_checkpointed_tool_and_keeps_progress(tmp_path):
 
     with patch.object(manager, "_run_tool_sync", side_effect=[([first_result], "first-container"), RuntimeError("interrupted")]):
         manager._run_composite("first", "test", stages, {"domain": "example.com"}, tmp_path, service)
+    (tmp_path / "stage_1_subfinder").mkdir(exist_ok=True)
+    (tmp_path / "stage_1_subfinder" / "subfinder_results.txt").write_text("one.example.com\n")
     assert manager.get("first").status == "failed"
     assert manager.get("first").progress_completed == 1
 
@@ -120,6 +122,28 @@ def test_composite_resume_skips_checkpointed_tool_and_keeps_progress(tmp_path):
     assert run.call_args.args[1] == "amass"
     with pytest.raises(ValueError, match="changed"):
         manager.validate_checkpoint(tmp_path, "test", stages, {"domain": "different.example.com"})
+
+
+def test_composite_resume_reruns_tool_when_checkpoint_output_is_missing(tmp_path):
+    manager = DockerOperationManager()
+    stages = [{"name": "Enumerate", "tool_keys": ["subfinder"], "input_source": "seed"}]
+    params = {"domain": "example.com"}
+    manager._save_checkpoint(tmp_path, manager._checkpoint_signature("test", stages, params), {"0:0:subfinder"})
+    manager._items["resumed"] = DockerOperation(id="resumed", kind="composite.test", status="queued", progress_total=1)
+    result = {"domain": "one.example.com", "sources": ["subfinder"]}
+
+    def run_tool(_oid, _key, _params, output_dir, _service, *_args):
+        output_dir.mkdir(parents=True)
+        (output_dir / "subfinder_results.txt").write_text("one.example.com\n")
+        return [result], "container"
+
+    with patch.object(manager, "_parse_output") as parse, patch.object(manager, "_run_tool_sync", side_effect=run_tool) as run:
+        manager._run_composite("resumed", "test", stages, params, tmp_path, Mock(), resume=True)
+
+    assert manager.get("resumed").status == "completed"
+    assert manager.get("resumed").progress_completed == 1
+    parse.assert_not_called()
+    run.assert_called_once()
 
 
 def test_resume_cleans_up_interrupted_container():

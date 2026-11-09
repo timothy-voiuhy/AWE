@@ -68,6 +68,31 @@ class EvidenceStore:
             self._write(data)
         return record
 
+    def upsert_source(self, project_id: str, payload: EvidenceInput) -> EvidenceRecord:
+        """Refresh evidence for a retried transform without creating duplicates."""
+        with self._lock:
+            data = self._read()
+            records = data.setdefault("evidence", [])
+            for index, item in enumerate(records):
+                if (item.get("project_id") == project_id
+                        and item.get("source_type") == payload.source_type
+                        and item.get("source_id") == payload.source_id):
+                    record = EvidenceRecord.model_validate({
+                        **item, **payload.model_dump(mode="json"),
+                        "id": item["id"], "project_id": project_id,
+                        "created_at": item["created_at"],
+                    })
+                    records[index] = record.model_dump(mode="json")
+                    self._write(data)
+                    return record
+            record = EvidenceRecord(
+                id=secrets.token_hex(12), project_id=project_id,
+                created_at=datetime.now(timezone.utc), **payload.model_dump(),
+            )
+            records.append(record.model_dump(mode="json"))
+            self._write(data)
+            return record
+
     def delete(self, project_id: str, evidence_id: str) -> None:
         with self._lock:
             data = self._read()

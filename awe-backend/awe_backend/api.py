@@ -1,6 +1,7 @@
 import asyncio
 import csv
 import fnmatch
+import hashlib
 import io
 import re
 import json
@@ -363,6 +364,7 @@ def _graph_result_value(data: dict, kind: str = "") -> str:
 
 def _graph_result_edge(kind: str) -> str:
     return {
+        "subdomain": "has_subdomain",
         "platform": "runs", "component": "has_component", "vuln": "has_finding",
         "vulnerability": "has_finding", "misconfiguration": "has_finding",
         "cloud_asset": "has_cloud_asset", "cloud_resource": "has_resource",
@@ -2003,10 +2005,7 @@ def _graph_bundle(project_id: str, project_dir: Path, target: str, repositories:
     derived = _network_graph(project_dir, target, repositories)
     entities = [GraphEntity(id=node.id, kind=node.kind, label=node.label, value=str(node.data.get("domain") or node.data.get("url") or node.label), data=node.data, source="derived", scope="unknown", provenance=_graph_provenance(node.data)) for node in derived.nodes]
     relationships = [GraphRelationship(id=f"derived:{edge.source_id}:{edge.target_id}:{edge.kind}", source_id=edge.source_id, target_id=edge.target_id, kind=edge.kind, label=edge.label, source="derived") for edge in derived.edges]
-    manual_entities = [
-        item for item in graph_store.entities(investigation)
-        if not (item.source == "transform" and item.kind == "subdomain" and item.data.get("live") is not True)
-    ]
+    manual_entities = graph_store.entities(investigation)
     manual_relationships = graph_store.relationships(investigation)
     existing_entities = {item.id for item in entities}
     entities.extend(item for item in manual_entities if item.id not in existing_entities)
@@ -2231,6 +2230,128 @@ def delete_transform_definition(project_id: str, transform_id: str, store: Proje
         raise HTTPException(status_code=404, detail="Project not found") from exc
 
 
+def _persist_transform_results(
+    project_dir: Path, target: str, transform: TransformManifest, job_id: str,
+    output_dir: Path, repositories: LegacyRepositoryFactory,
+) -> tuple[int, list[dict]]:
+    """Store each tool's parsed output in the project Results session."""
+    repo = repositories(project_dir)
+    from pymongo import UpdateOne
+    from containers.parsers import PARSERS
+    from containers.tool_registry import TOOL_REGISTRY
+    now = datetime.now(timezone.utc).isoformat()
+    target_host = (urlsplit(target if "://" in target else f"https://{target}").hostname or target).lower().rstrip(".")
+    units = [
+        (stage_index, tool_index, key, output_dir / f"stage_{stage_index + 1}_{key}")
+        for stage_index, stage in enumerate(transform.stages)
+        for tool_index, key in enumerate(stage.tool_keys)
+    ] if transform.stages else [(0, 0, transform.tool_key, output_dir)]
+    rows: dict[tuple[str, str], dict] = {}
+    tool_runs: list[tuple[ObjectId, str, str, int, int]] = []
+    stage_subdomains: list[dict] = []
+
+    for stage_index, tool_index, key, tool_dir in units:
+        tool = TOOL_REGISTRY.get(key)
+        parser = PARSERS.get(key)
+        if not tool or not parser:
+            continue
+        category = tool.category
+        run_id = ObjectId(hashlib.sha256(f"{job_id}:{stage_index}:{tool_index}:{key}".encode()).hexdigest()[:24])
+        parsed = parser(str(tool_dir)) or []
+        count = 0
+        for result in parsed:
+            data = asdict(result) if is_dataclass(result) else (dict(result) if isinstance(result, dict) else {"value": str(result)})
+            result_key = str(getattr(result, "key", "") or data.get("domain") or data.get("url") or data.get("value") or data.get("name") or "").strip()
+            if category == "subdomain":
+                domain = str(data.get("domain") or result_key).lower().rstrip(".")
+                if not domain or not (domain == target_host or domain.endswith(f".{target_host}")):
+                    continue
+                data["domain"] = domain
+                result_key = domain
+                stage_subdomains.append(data)
+            if not result_key:
+                continue
+            data["transform_job_id"] = job_id
+            sources = {str(source) for source in data.get("sources", []) if source}
+            sources.add(key)
+            row = rows.setdefault((category, result_key), {"data": data, "sources": set(), "tool_run_id": str(run_id)})
+            row["sources"].update(sources)
+            for field, value in data.items():
+                if row["data"].get(field) in (None, "", [], {}) and value not in (None, "", [], {}):
+                    row["data"][field] = value
+            count += 1
+        tool_runs.append((run_id, key, category, stage_index, count))
+
+    repo._db.scan_sessions.update_one(
+        {"_id": ObjectId(job_id)},
+        {"$setOnInsert": {
+            "project_dir": str(project_dir), "pipeline_key": f"transform:{transform.id}",
+            "pipeline_name": transform.display_name, "target": target,
+            "started_at": now, "output_dir": str(output_dir),
+            "params": {"transform_job_id": job_id}, "in_scope": [], "out_of_scope": [],
+        }, "$set": {"status": "running"}},
+        upsert=True,
+    )
+    for run_id, key, category, stage_index, count in tool_runs:
+        repo._db.tool_runs.update_one(
+            {"_id": run_id},
+            {"$setOnInsert": {"session_id": job_id, "tool_key": key, "display_name": TOOL_REGISTRY[key].display_name, "category": category, "stage": stage_index, "started_at": now},
+             "$set": {"status": "completed", "completed_at": now, "result_count": count}},
+            upsert=True,
+        )
+    if rows:
+        repo._db.results.bulk_write([
+            UpdateOne(
+                {"session_id": job_id, "category": category, "result_key": result_key},
+                {"$setOnInsert": {"session_id": job_id, "category": category, "result_key": result_key, "created_at": now},
+                 "$set": {"tool_run_id": row["tool_run_id"], "data": row["data"]},
+                 "$addToSet": {"sources": {"$each": sorted(row["sources"])}}},
+                upsert=True,
+            )
+            for (category, result_key), row in rows.items()
+        ], ordered=False)
+    repo._db.scan_sessions.update_one({"_id": ObjectId(job_id)}, {"$set": {"status": "completed", "completed_at": now}})
+    return len(rows), stage_subdomains
+
+
+def _complete_graph_transform(
+    project_id: str, project_dir: Path, target: str, investigation_id: str,
+    transform: TransformManifest, entity_ids: list[str], source_entity_id: str,
+    params: dict, job_id: str, repositories: LegacyRepositoryFactory,
+    parsed: list, output_dir: Path,
+) -> dict:
+    result_count, stage_subdomains = _persist_transform_results(project_dir, target, transform, job_id, output_dir, repositories)
+    graph_inputs = parsed
+    if transform.stages and transform.output_types == ["subdomain"]:
+        target_host = (urlsplit(target if "://" in target else f"https://{target}").hostname or target).lower().rstrip(".")
+        graph_inputs = []
+        for result in parsed:
+            data = asdict(result) if is_dataclass(result) else (result if isinstance(result, dict) else {"value": str(result)})
+            host = _graph_result_value(data, "subdomain").lower().rstrip(".")
+            if host == target_host or host.endswith(f".{target_host}"):
+                graph_inputs.append(result)
+        graph_inputs.extend(stage_subdomains)
+    graph_results = _normalise_composite_results(transform, graph_inputs)
+    count = _ingest_graph_results(project_id, project_dir, investigation_id, target, repositories, transform, graph_results, source_entity_id, job_id)
+    evidence_store = _evidence_store(project_dir)
+    evidence_payload = EvidenceInput(
+        investigation_id=investigation_id,
+        title=f"{transform.display_name} output",
+        summary=f"Stored {result_count} result(s) and ingested {count} graph output(s).",
+        kind="tool_output", source_type="transform", source_id=job_id,
+        entity_ids=entity_ids, tags=["transform", transform.mode, *transform.output_types[:5]],
+        data={
+            "transform_id": transform.id, "tool_key": transform.tool_key,
+            "operation_output_dir": str(output_dir), "parsed_count": len(graph_results),
+            "ingested_count": count, "result_count": result_count,
+            "stages": [stage.model_dump() for stage in transform.stages],
+            "parameters": _redact_transform_params(transform, params)[0],
+        },
+    )
+    evidence = evidence_store.upsert_source(project_id, evidence_payload)
+    return {"ingested_count": count, "result_count": result_count, "investigation_id": investigation_id, "evidence_id": evidence.id}
+
+
 def _launch_graph_transform_operation(
     project_id: str, project_dir: Path, target: str, investigation_id: str,
     transform: TransformManifest, entity_ids: list[str], source_entity_id: str,
@@ -2241,29 +2362,7 @@ def _launch_graph_transform_operation(
     output_dir = project_dir / ".awe-transform-runs" / job_id
 
     def on_complete(parsed: list, _output_dir: Path) -> dict:
-        parsed = _normalise_composite_results(transform, parsed)
-        count = _ingest_graph_results(project_id, project_dir, investigation_id, target, repositories, transform, parsed, source_entity_id, job_id)
-        existing_evidence = _evidence_store(project_dir).list(project_id, source_id=job_id)
-        evidence = existing_evidence[0] if existing_evidence else _create_evidence_record(project_id, project_dir, EvidenceInput(
-            investigation_id=investigation_id,
-            title=f"{transform.display_name} output",
-            summary=f"Parsed {len(parsed)} result(s) and ingested {count} graph output(s).",
-            kind="tool_output",
-            source_type="transform",
-            source_id=job_id,
-            entity_ids=entity_ids,
-            tags=["transform", transform.mode, *transform.output_types[:5]],
-            data={
-                "transform_id": transform.id,
-                "tool_key": transform.tool_key,
-                "operation_output_dir": str(_output_dir),
-                "parsed_count": len(parsed),
-                "ingested_count": count,
-                "stages": [stage.model_dump() for stage in transform.stages],
-                "parameters": _redact_transform_params(transform, params)[0],
-            },
-        ))
-        return {"ingested_count": count, "investigation_id": investigation_id, "evidence_id": evidence.id if evidence else ""}
+        return _complete_graph_transform(project_id, project_dir, target, investigation_id, transform, entity_ids, source_entity_id, params, job_id, repositories, parsed, _output_dir)
 
     if transform.stages:
         return docker_operations.start_composite(transform.tool_key, [stage.model_dump() for stage in transform.stages], params, output_dir, docker_service, on_complete, resume=resume, prior_logs=prior_logs)

@@ -127,6 +127,10 @@ class DockerOperationManager:
         return output_dir / ".awe-transform-checkpoint.json"
 
     @staticmethod
+    def _has_completed_output(output_dir: Path) -> bool:
+        return output_dir.is_dir() and any(path.is_file() and path.name not in {".awe-transform-checkpoint.json", ".awe-tool-complete"} for path in output_dir.rglob("*"))
+
+    @staticmethod
     def _checkpoint_signature(key: str, stages: list[dict], params: dict) -> str:
         payload = json.dumps({"key": key, "stages": stages, "params": params}, sort_keys=True, default=str)
         return hashlib.sha256(payload.encode()).hexdigest()
@@ -241,9 +245,15 @@ class DockerOperationManager:
             signature = self._checkpoint_signature(key, [], params)
             completed = self._completed_units(output_dir, signature) if resume else set()
             if "tool" in completed:
-                self._log(oid, f"Resuming {key} from completed tool output")
-                parsed, container_id = self._parse_output(key, output_dir), ""
+                if self._has_completed_output(output_dir):
+                    self._log(oid, f"Resuming {key} from completed tool output")
+                    parsed, container_id = self._parse_output(key, output_dir), ""
+                else:
+                    self._log(oid, f"Completed output for {key} is missing; rerunning tool")
+                    completed.remove("tool")
             else:
+                parsed, container_id = [], ""
+            if "tool" not in completed:
                 if resume and output_dir.exists():
                     shutil.rmtree(output_dir)
                 parsed, container_id = self._run_tool_sync(oid, key, params, output_dir, service)
@@ -252,7 +262,7 @@ class DockerOperationManager:
                 completed.add("tool")
                 self._save_checkpoint(output_dir, signature, completed)
             result = {"container_id": container_id, "output_dir": str(output_dir), "parsed_count": len(parsed)}
-            if on_complete and parsed:
+            if on_complete:
                 result.update(on_complete(parsed, output_dir) or {})
             self._finish(oid, result)
         except Exception as exc: self._fail(oid, exc)
@@ -294,6 +304,13 @@ class DockerOperationManager:
                         return self._finish(oid, {"output_dir": str(output_dir)})
                     unit = f"{index}:{tool_index}:{tool_key}"
                     tool_dir = output_dir / f"stage_{index + 1}_{tool_key}"
+                    if unit in completed and not self._has_completed_output(tool_dir):
+                        self._log(oid, f"[{name}/{tool_key}] Completed output is missing; rerunning tool")
+                        completed.remove(unit)
+                    if unit not in completed and resume:
+                        with self._lock:
+                            self._items[oid].progress_completed = len(completed)
+                            self._persist_locked()
                     if unit in completed:
                         self._log(oid, f"[{name}/{tool_key}] Reusing completed output")
                         parsed = self._parse_output(tool_key, tool_dir)

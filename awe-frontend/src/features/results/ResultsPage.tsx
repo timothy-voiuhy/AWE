@@ -6,7 +6,7 @@ import { api, type StoredResult } from '../../api/client'
 import { Spinner } from '../../components/Spinner'
 import { SubdomainImportPanel } from './SubdomainImportPanel'
 
-const categories = [
+const knownCategories: Array<[string, string]> = [
   ['subdomain', 'Subdomain Enum'],
   ['dns', 'DNS Records'],
   ['portscan', 'Port Scan'],
@@ -16,9 +16,9 @@ const categories = [
   ['fuzz', 'Directory Fuzz'],
   ['vuln', 'Vulnerabilities'],
   ['osint', 'OSINT / Cloud'],
-] as const
+]
 
-type Category = typeof categories[number][0]
+type Category = string
 type Column = { label: string; fields: string[] }
 
 const schemas: Partial<Record<Category, Column[]>> = {
@@ -75,7 +75,16 @@ export function ResultsPage() {
     enabled: Boolean(projectId),
   })
 
-  const counts = useMemo(() => Object.fromEntries(categories.map(([key]) => [key, results.data?.filter((item) => item.category === key).length ?? 0])), [results.data])
+  const categories = useMemo(() => {
+    const known = new Set(knownCategories.map(([key]) => key))
+    const extra = [...new Set(results.data?.map((item) => item.category) ?? [])]
+      .filter((key) => !known.has(key))
+      .sort()
+      .map((key): [string, string] => [key, key.replaceAll('_', ' ').replace(/\b\w/g, (letter) => letter.toUpperCase())])
+    return [...knownCategories, ...extra]
+  }, [results.data])
+
+  const counts = useMemo(() => Object.fromEntries(categories.map(([key]) => [key, results.data?.filter((item) => item.category === key).length ?? 0])), [categories, results.data])
   useEffect(() => {
     if (selectedInitialCategory.current || !results.data) return
     const first = categories.find(([key]) => counts[key] > 0)
@@ -117,9 +126,9 @@ export function ResultsPage() {
 
   return <main className="page results-page">
     
-    <header className="page-header results-header"><div><p className="eyebrow">Project intelligence</p><h1>Results</h1><p className="muted">Merged, de-duplicated findings from pipeline runs and proxy traffic.</p></div><span className="result-total">{results.data?.length ?? 0} unique</span></header>
+    <header className="page-header results-header"><div><p className="eyebrow">Project intelligence</p><h1>Results</h1><p className="muted">Merged findings from transforms, pipeline runs, and proxy traffic.</p></div><span className="result-total">{results.data?.length ?? 0} unique</span></header>
     <div className="results-toolbar panel">
-      <select aria-label="Result session" value={sessionId} onChange={(event) => setSessionId(event.target.value)}><option value="all">All sessions + proxy traffic</option>{sessions.data?.map((session) => <option value={session.id} key={session.id}>{session.pipeline_name} · {new Date(session.started_at).toLocaleString()}</option>)}</select>
+      <select aria-label="Result session" value={sessionId} onChange={(event) => setSessionId(event.target.value)}><option value="all">All results</option>{sessions.data?.map((session) => <option value={session.id} key={session.id}>{session.pipeline_name} · {new Date(session.started_at).toLocaleString()}</option>)}</select>
       <input aria-label="Search results" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search the current category…" />
       {(category === 'crawl' || category === 'params') && <label className="result-toggle"><input type="checkbox" checked={hideStatic} onChange={(event) => setHideStatic(event.target.checked)} /> Hide static assets</label>}
       <button className="secondary-button" onClick={() => void queryClient.invalidateQueries({ queryKey: ['projects', projectId, 'results'] })}>Refresh</button>
