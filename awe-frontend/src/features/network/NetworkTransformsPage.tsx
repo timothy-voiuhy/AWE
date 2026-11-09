@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useParams } from 'react-router-dom'
 
-import { api, type DockerTool, type ToolParamSpec, type TransformDefinitionInput, type TransformManifest, type TransformStage } from '../../api/client'
+import { api, type DockerTool, type ToolParamSpec, type TransformDefinitionInput, type TransformJob, type TransformManifest, type TransformStage } from '../../api/client'
 import { CategoryGroup, groupByCategory } from '../../components/CategoryGroup'
 import { OptionsMenu } from '../../components/OptionsMenu'
 
@@ -37,6 +37,21 @@ const emptyComposite: TransformDefinitionInput = {
 
 function csv(value: string) {
   return value.split(',').map(item => item.trim()).filter(Boolean)
+}
+
+const activeJobStatuses = new Set<TransformJob['status']>(['queued', 'running', 'approval_required'])
+
+function TransformRunRow({ job, name }: { job: TransformJob; name: string }) {
+  const progress = job.progress_total
+    ? Math.min(100, Math.round(((job.progress_completed || 0) / job.progress_total) * 100))
+    : job.status === 'completed' ? 100 : activeJobStatuses.has(job.status) ? 18 : 100
+  return <article className={`transform-run-row run-${job.status}`}>
+    <div className="transform-run-heading"><div><b>{name}</b><small>{new Date(job.created_at).toLocaleString()}</small></div><span className="transform-run-status">{job.status.replace('_', ' ')}</span></div>
+    <p>{job.message || (activeJobStatuses.has(job.status) ? 'Waiting for operation output…' : 'No status details available.')}</p>
+    <div className="transform-progress-track" role="progressbar" aria-label={`${name} progress`} aria-valuenow={progress} aria-valuemin={0} aria-valuemax={100}><span style={{ width: `${progress}%` }} /></div>
+    {job.progress_total ? <small>{job.progress_completed || 0} of {job.progress_total} steps</small> : null}
+    {job.logs?.length ? <details><summary>Latest output ({job.logs.length} lines)</summary><pre>{job.logs.slice(-30).join('\n')}</pre></details> : null}
+  </article>
 }
 
 function TransformCatalog({ transforms, selectedId, onSelect, onDelete }: { transforms: TransformManifest[]; selectedId: string; onSelect: (id: string) => void; onDelete: (id: string) => void }) {
@@ -88,21 +103,31 @@ export function NetworkTransformsPage() {
   const [composite, setComposite] = useState<TransformDefinitionInput>(emptyComposite)
   const [compositeOpen, setCompositeOpen] = useState(false)
   const compositeDialog = useRef<HTMLDialogElement>(null)
+  const [runsOpen, setRunsOpen] = useState(false)
+  const runsDialog = useRef<HTMLDialogElement>(null)
   const [jobId, setJobId] = useState('')
   const [notice, setNotice] = useState('')
   useEffect(() => {
     if (compositeOpen && !compositeDialog.current?.open) compositeDialog.current?.showModal()
     if (!compositeOpen && compositeDialog.current?.open) compositeDialog.current.close()
   }, [compositeOpen])
+  useEffect(() => {
+    if (runsOpen && !runsDialog.current?.open) runsDialog.current?.showModal()
+    if (!runsOpen && runsDialog.current?.open) runsDialog.current.close()
+  }, [runsOpen])
 
   const investigations = useQuery({ queryKey: ['projects', projectId, 'investigations'], queryFn: () => api.listInvestigations(projectId) })
   const transforms = useQuery({ queryKey: ['projects', projectId, 'transforms'], queryFn: () => api.listGraphTransforms(projectId) })
   const tools = useQuery({ queryKey: ['docker', 'tools'], queryFn: api.listDockerTools })
   const graph = useQuery({ queryKey: ['projects', projectId, 'investigation-graph', investigationId], queryFn: () => api.getInvestigationGraph(projectId, investigationId, { limit: 5000 }), enabled: !!investigationId })
   const job = useQuery({ queryKey: ['projects', projectId, 'transform-job', jobId], queryFn: () => api.getGraphTransform(projectId, jobId), enabled: !!jobId, refetchInterval: query => ['queued', 'running'].includes(query.state.data?.status || '') ? 1000 : false })
+  const jobs = useQuery({ queryKey: ['projects', projectId, 'transform-jobs'], queryFn: () => api.listGraphTransformJobs(projectId), enabled: runsOpen, refetchInterval: query => query.state.data?.some(item => activeJobStatuses.has(item.status)) ? 1000 : 4000 })
   useEffect(() => { if (!investigationId && investigations.data?.[0]) setInvestigationId(investigations.data[0].id) }, [investigationId, investigations.data])
   useEffect(() => { if (!transformId && transforms.data?.[0]) setTransformId(transforms.data[0].id) }, [transformId, transforms.data])
   const selected = transforms.data?.find(item => item.id === transformId)
+  const transformNames = useMemo(() => new Map((transforms.data || []).map(item => [item.id, item.display_name])), [transforms.data])
+  const activeJobs = jobs.data?.filter(item => activeJobStatuses.has(item.status)) || []
+  const recentJobs = jobs.data?.filter(item => !activeJobStatuses.has(item.status)).slice(0, 8) || []
   const compatibleEntities = useMemo(() => graph.data?.entities.filter(entity => selected?.input_types.includes(entity.kind)) || [], [graph.data, selected])
   useEffect(() => { if (compatibleEntities.length && !compatibleEntities.some(entity => entity.id === entityId)) setEntityId(compatibleEntities[0].id || '') }, [compatibleEntities, entityId])
   useEffect(() => { setParameters({}) }, [transformId])
@@ -127,7 +152,7 @@ export function NetworkTransformsPage() {
 
   return <main className="page feature-page network-transforms-page">
     
-    <header className="page-header graph-tools-header"><div><p className="eyebrow">Network</p><h1>Transforms</h1><p className="muted">Run graph-capable Docker tools against selected investigation entities.</p></div><OptionsMenu label="Transform options"><button type="button" onClick={() => { saveComposite.reset(); setCompositeOpen(true) }}>Create composite transform</button><Link to={`/projects/${projectId}/network/tools`}>Tool catalog</Link><Link to={`/projects/${projectId}/network/logs`}>Live logs</Link></OptionsMenu></header>
+    <header className="page-header graph-tools-header"><div><p className="eyebrow">Network</p><h1>Transforms</h1><p className="muted">Run graph-capable Docker tools against selected investigation entities.</p></div><OptionsMenu label="Transform options"><button type="button" onClick={() => setRunsOpen(true)}>View running transforms</button><button type="button" onClick={() => { saveComposite.reset(); setCompositeOpen(true) }}>Create composite transform</button><Link to={`/projects/${projectId}/network/tools`}>Tool catalog</Link><Link to={`/projects/${projectId}/network/logs`}>Live logs</Link></OptionsMenu></header>
     {notice && <p className="success">{notice}</p>}{(run.isError || job.isError || transforms.isError || graph.isError || deleteComposite.isError) && <p className="error">{String((run.error || job.error || transforms.error || graph.error || deleteComposite.error)?.message)}</p>}
     <section className="network-transforms-workbench">
       <section className="panel graph-tool-runner"><header><div><b>Run graph transform</b><span>Outputs are parsed and attached to the selected investigation.</span></div><span className={`transform-risk risk-${selected?.mode || 'passive'}`}>{selected?.mode || 'passive'}</span></header><label>Investigation<select value={investigationId} onChange={event => setInvestigationId(event.target.value)}>{investigations.data?.map(item => <option value={item.id} key={item.id}>{item.name}</option>)}</select></label><label>Transform<select value={transformId} onChange={event => setTransformId(event.target.value)}>{groupByCategory(transforms.data || []).map(group => <optgroup label={group.category} key={group.category}>{group.entries.map(item => <option value={item.id} key={item.id}>{item.display_name} · {item.mode}</option>)}</optgroup>)}</select></label><label>Input entity<select value={entityId} onChange={event => setEntityId(event.target.value)}>{compatibleEntities.map(entity => <option value={entity.id} key={entity.id}>{entity.label} · {entity.kind}</option>)}</select></label>{selected && <><p className="muted">{selected.description}</p><small>Accepts: {selected.input_types.join(', ')} · Produces: {selected.output_types.join(', ')} · Relationships: {selected.relationship_types.join(', ')}</small><ParameterFields specs={selected.parameters} values={parameters} onChange={(key, value) => setParameters(current => ({ ...current, [key]: value }))} /><button onClick={() => run.mutate()} disabled={!selected || !entityId || run.isPending}>{run.isPending ? 'Starting...' : 'Run transform'}</button></>}</section>
@@ -136,6 +161,16 @@ export function NetworkTransformsPage() {
     {transforms.data?.length ? <TransformCatalog transforms={transforms.data} selectedId={transformId} onSelect={setTransformId} onDelete={id => deleteComposite.mutate(id)} /> : null}
     <dialog ref={compositeDialog} className="transform-dialog" aria-labelledby="composite-dialog-title" onClose={closeComposite}>
       <CompositeBuilder tools={tools.data || []} value={composite} onChange={setComposite} onSave={() => saveComposite.mutate()} onClose={closeComposite} saving={saveComposite.isPending} error={saveComposite.error?.message} />
+    </dialog>
+    <dialog ref={runsDialog} className="transform-dialog transform-runs-dialog" aria-labelledby="transform-runs-title" onClose={() => setRunsOpen(false)}>
+      <header><div><b id="transform-runs-title">Transform runs</b><span>Statuses and output refresh while this dialog is open.</span></div><button type="button" className="transform-dialog-close" aria-label="Close dialog" onClick={() => setRunsOpen(false)}>×</button></header>
+      <div className="transform-runs-content">
+        {jobs.isPending && !jobs.data ? <p className="muted">Loading transform runs…</p> : null}
+        {jobs.isError ? <p className="error" role="alert">{jobs.error.message}</p> : null}
+        <section><h2>Active <span>{activeJobs.length}</span></h2>{activeJobs.length ? <div className="transform-runs-list">{activeJobs.map(item => <TransformRunRow key={item.id} job={item} name={transformNames.get(item.transform_id) || item.transform_id} />)}</div> : !jobs.isPending ? <p className="muted">No transforms are running.</p> : null}</section>
+        {recentJobs.length ? <section><h2>Recent results</h2><div className="transform-runs-list">{recentJobs.map(item => <TransformRunRow key={item.id} job={item} name={transformNames.get(item.transform_id) || item.transform_id} />)}</div></section> : null}
+        <Link className="button-link subtle" to={`/projects/${projectId}/network/logs`} onClick={() => setRunsOpen(false)}>Open full logs</Link>
+      </div>
     </dialog>
   </main>
 }
