@@ -6,6 +6,7 @@ import re
 import json
 import secrets
 import sys
+import threading
 import zipfile
 from dataclasses import asdict, is_dataclass
 from datetime import datetime, timezone
@@ -72,7 +73,7 @@ from .schemas import (
     NetworkGraph, NetworkNode, NetworkEdge, NetworkManualNode,
     GraphBundle, GraphEntity, GraphRelationship, GraphInvestigation,
     InvestigationCreate, GraphEntityInput, GraphRelationshipInput,
-    GraphPreferencesInput, TransformManifest, TransformStart, TransformJob, TransformDefinitionInput, GraphIdentityInput, GraphMergeInput, GraphMergeResult,
+    GraphPreferencesInput, TransformManifest, TransformStart, TransformResume, TransformJob, TransformDefinitionInput, GraphIdentityInput, GraphMergeInput, GraphMergeResult,
     EvidenceInput, EvidenceRecord,
     RepeaterRequest,
     RepeaterResponse,
@@ -103,6 +104,7 @@ from .schemas import (
 router = APIRouter()
 
 _GRAPH_TRANSFORM_JOBS: dict[str, TransformJob] = {}
+_GRAPH_TRANSFORM_RESUME_LOCK = threading.RLock()
 _GRAPH_TRANSFORM_SECRETS: dict[str, dict] = {}
 _COMPOSITE_TRANSFORMS_FILE = ".awe-composite-transforms.json"
 _GRAPH_TRANSFORM_JOBS_FILE = ".awe-transform-jobs.json"
@@ -423,7 +425,10 @@ def _ingest_graph_results(
     investigation = graph_store.get(project_id, investigation_id)
     parent_id = source_id or f"target:{target}"
     created_entities: list[str] = []
-    created_relationships: list[str] = []
+    linked_entities: list[str] = []
+    linked_relationships: list[str] = []
+    existing_entities = {item.id for item in graph_store.entities(investigation)}
+    existing_relationships = {item.id for item in graph_store.relationships(investigation)}
     for index, result in enumerate(parsed[:1000]):
         data = asdict(result) if is_dataclass(result) else (result if isinstance(result, dict) else {"value": str(result)})
         kind = _graph_result_kind(data, manifest)
@@ -437,19 +442,26 @@ def _ingest_graph_results(
             id=entity_id, kind=kind, label=value[:500], value=value[:4096], data=data,
             source="transform", provenance=[{"transform_job_id": provenance_id, "tool_key": manifest.tool_key}],
         )
-        graph_store.add_entity(investigation, entity)
+        if entity_id not in existing_entities:
+            graph_store.add_entity(investigation, entity)
+            existing_entities.add(entity_id)
+            created_entities.append(entity_id)
+        linked_entities.append(entity_id)
         relationship = GraphRelationship(
             id=f"{entity_id}:edge", source_id=parent_id, target_id=entity_id,
             kind=_graph_result_edge(kind), source="transform",
             provenance=[{"transform_job_id": provenance_id, "tool_key": manifest.tool_key}],
         )
-        graph_store.add_relationship(investigation, relationship)
-        created_entities.append(entity_id)
-        created_relationships.append(relationship.id)
-    if created_entities or created_relationships:
+        if relationship.id not in existing_relationships:
+            graph_store.add_relationship(investigation, relationship)
+            existing_relationships.add(relationship.id)
+        linked_relationships.append(relationship.id)
+    entity_ids = list(dict.fromkeys([*investigation.entity_ids, *linked_entities]))
+    relationship_ids = list(dict.fromkeys([*investigation.relationship_ids, *linked_relationships]))
+    if entity_ids != investigation.entity_ids or relationship_ids != investigation.relationship_ids:
         graph_store.save(investigation.model_copy(update={
-            "entity_ids": [*investigation.entity_ids, *created_entities],
-            "relationship_ids": [*investigation.relationship_ids, *created_relationships],
+            "entity_ids": entity_ids,
+            "relationship_ids": relationship_ids,
         }), investigation.revision)
     return len(created_entities)
 
@@ -2219,6 +2231,45 @@ def delete_transform_definition(project_id: str, transform_id: str, store: Proje
         raise HTTPException(status_code=404, detail="Project not found") from exc
 
 
+def _launch_graph_transform_operation(
+    project_id: str, project_dir: Path, target: str, investigation_id: str,
+    transform: TransformManifest, entity_ids: list[str], source_entity_id: str,
+    params: dict, job_id: str, docker_operations: DockerOperationManager,
+    docker_service: DockerService, repositories: LegacyRepositoryFactory, *, resume: bool = False,
+    prior_logs: list[str] | None = None,
+) -> DockerOperation:
+    output_dir = project_dir / ".awe-transform-runs" / job_id
+
+    def on_complete(parsed: list, _output_dir: Path) -> dict:
+        parsed = _normalise_composite_results(transform, parsed)
+        count = _ingest_graph_results(project_id, project_dir, investigation_id, target, repositories, transform, parsed, source_entity_id, job_id)
+        existing_evidence = _evidence_store(project_dir).list(project_id, source_id=job_id)
+        evidence = existing_evidence[0] if existing_evidence else _create_evidence_record(project_id, project_dir, EvidenceInput(
+            investigation_id=investigation_id,
+            title=f"{transform.display_name} output",
+            summary=f"Parsed {len(parsed)} result(s) and ingested {count} graph output(s).",
+            kind="tool_output",
+            source_type="transform",
+            source_id=job_id,
+            entity_ids=entity_ids,
+            tags=["transform", transform.mode, *transform.output_types[:5]],
+            data={
+                "transform_id": transform.id,
+                "tool_key": transform.tool_key,
+                "operation_output_dir": str(_output_dir),
+                "parsed_count": len(parsed),
+                "ingested_count": count,
+                "stages": [stage.model_dump() for stage in transform.stages],
+                "parameters": _redact_transform_params(transform, params)[0],
+            },
+        ))
+        return {"ingested_count": count, "investigation_id": investigation_id, "evidence_id": evidence.id if evidence else ""}
+
+    if transform.stages:
+        return docker_operations.start_composite(transform.tool_key, [stage.model_dump() for stage in transform.stages], params, output_dir, docker_service, on_complete, resume=resume, prior_logs=prior_logs)
+    return docker_operations.start_tool(transform.tool_key, params, output_dir, docker_service, on_complete, resume=resume, prior_logs=prior_logs)
+
+
 @router.post("/projects/{project_id}/transforms", response_model=TransformJob, status_code=202, tags=["network"])
 def start_graph_transform(project_id: str, payload: TransformStart, store: ProjectStore = Depends(get_project_store), settings: Settings = Depends(get_settings), docker_operations: DockerOperationManager = Depends(get_docker_operation_manager), docker_service: DockerService = Depends(get_docker_service), repositories: LegacyRepositoryFactory = Depends(get_repository_factory)) -> TransformJob:
     try:
@@ -2241,34 +2292,7 @@ def start_graph_transform(project_id: str, payload: TransformStart, store: Proje
             params = {**_GRAPH_TRANSFORM_SECRETS.get(payload.source_job_id, {}), **params}
         for parameter in ("domain", "host", "url", "endpoint"):
             params.setdefault(parameter, _transform_seed(selected[0], parameter))
-        output_dir = project_dir / ".awe-transform-runs" / job_id
-        def on_complete(parsed: list, _output_dir: Path) -> dict:
-            parsed = _normalise_composite_results(transform, parsed)
-            count = _ingest_graph_results(project_id, project_dir, investigation.id, project.target, repositories, transform, parsed, selected[0].id if selected else "", job_id)
-            evidence = _create_evidence_record(project_id, project_dir, EvidenceInput(
-                investigation_id=investigation.id,
-                title=f"{transform.display_name} output",
-                summary=f"Parsed {len(parsed)} result(s) and ingested {count} graph output(s).",
-                kind="tool_output",
-                source_type="transform",
-                source_id=job_id,
-                entity_ids=payload.entity_ids,
-                tags=["transform", transform.mode, *transform.output_types[:5]],
-                data={
-                    "transform_id": transform.id,
-                    "tool_key": transform.tool_key,
-                    "operation_output_dir": str(_output_dir),
-                    "parsed_count": len(parsed),
-                    "ingested_count": count,
-                    "stages": [stage.model_dump() for stage in transform.stages],
-                    "parameters": _redact_transform_params(transform, params)[0],
-                },
-            ))
-            return {"ingested_count": count, "investigation_id": investigation.id, "evidence_id": evidence.id if evidence else ""}
-        if transform.stages:
-            operation = docker_operations.start_composite(transform.tool_key, [stage.model_dump() for stage in transform.stages], params, output_dir, docker_service, on_complete)
-        else:
-            operation = docker_operations.start_tool(transform.tool_key, params, output_dir, docker_service, on_complete)
+        operation = _launch_graph_transform_operation(project_id, project_dir, project.target, investigation.id, transform, payload.entity_ids, selected[0].id, params, job_id, docker_operations, docker_service, repositories)
         safe_params, secret_params = _redact_transform_params(transform, params)
         _GRAPH_TRANSFORM_SECRETS[job_id] = secret_params
         job = TransformJob(id=job_id, project_id=project_id, investigation_id=investigation.id, transform_id=transform.id, status="queued", entity_ids=payload.entity_ids, operation_id=operation.id, parameters=safe_params, created_at=datetime.now(timezone.utc))
@@ -2348,23 +2372,84 @@ def get_graph_transform(project_id: str, job_id: str, store: ProjectStore = Depe
     return job
 
 
+@router.post("/projects/{project_id}/transforms/{job_id}/resume", response_model=TransformJob, status_code=202, tags=["network"])
+def resume_graph_transform(project_id: str, job_id: str, payload: TransformResume, store: ProjectStore = Depends(get_project_store), settings: Settings = Depends(get_settings), docker_operations: DockerOperationManager = Depends(get_docker_operation_manager), docker_service: DockerService = Depends(get_docker_service), repositories: LegacyRepositoryFactory = Depends(get_repository_factory)) -> TransformJob:
+    with _GRAPH_TRANSFORM_RESUME_LOCK:
+        try:
+            project = store.get(project_id)
+            project_dir = store.project_dir(project_id)
+            _load_project_transform_jobs(project_dir)
+        except ProjectNotFoundError as exc:
+            raise HTTPException(status_code=404, detail="Project not found") from exc
+        job = _GRAPH_TRANSFORM_JOBS.get(job_id)
+        if not job or job.project_id != project_id:
+            raise HTTPException(status_code=404, detail="Transform job not found")
+        job, changed = _sync_transform_job_from_operation(job, docker_operations)
+        if changed:
+            _GRAPH_TRANSFORM_JOBS[job_id] = job
+            _save_project_transform_jobs(project_dir, project_id)
+        if job.status not in {"failed", "cancelled"}:
+            raise HTTPException(status_code=409, detail="Only failed or cancelled transforms can be resumed")
+        transform = next((item for item in _graph_transforms(settings, project_dir) if item.id == job.transform_id), None)
+        if not transform:
+            raise HTTPException(status_code=409, detail="The transform definition is no longer available")
+        if transform.requires_approval and not payload.approved:
+            raise HTTPException(status_code=409, detail="This transform requires explicit approval")
+        secret_keys = {str(item.get("key")) for item in transform.parameters if item.get("type") == "secret" or item.get("default") == "secret"}
+        if set(payload.parameters) - secret_keys:
+            raise HTTPException(status_code=422, detail="Only secret parameters may be supplied when resuming")
+        supplied = {key: value for key, value in payload.parameters.items() if value not in (None, "")}
+        params = {**job.parameters, **_GRAPH_TRANSFORM_SECRETS.get(job_id, {}), **supplied}
+        missing = [key for key in secret_keys if params.get(key) == "[redacted]"]
+        if missing:
+            raise HTTPException(status_code=422, detail=f"Re-enter secret parameters to resume: {', '.join(sorted(missing))}")
+        try:
+            investigation = _graph_store(project_dir).get(project_id, job.investigation_id)
+        except InvestigationNotFoundError as exc:
+            raise HTTPException(status_code=409, detail="The investigation is no longer available") from exc
+        bundle = _graph_bundle(project_id, project_dir, project.target, repositories, investigation.id)
+        entities = {entity.id: entity for entity in bundle.entities}
+        selected = [entities[item] for item in job.entity_ids if item in entities]
+        if not selected or len(selected) != len(job.entity_ids) or any(entity.kind not in transform.input_types for entity in selected):
+            raise HTTPException(status_code=409, detail="The original input entities are no longer compatible")
+        for parameter in ("domain", "host", "url", "endpoint"):
+            params.setdefault(parameter, _transform_seed(selected[0], parameter))
+        output_dir = project_dir / ".awe-transform-runs" / job_id
+        try:
+            docker_operations.validate_checkpoint(output_dir, transform.tool_key, [stage.model_dump() for stage in transform.stages], params)
+            if job.operation_id:
+                docker_operations.cleanup_interrupted_container(job.operation_id, docker_service)
+        except (ValueError, RuntimeError, docker.errors.DockerException, OSError) as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        operation = _launch_graph_transform_operation(project_id, project_dir, project.target, investigation.id, transform, job.entity_ids, selected[0].id, params, job_id, docker_operations, docker_service, repositories, resume=True, prior_logs=job.logs)
+        _GRAPH_TRANSFORM_SECRETS[job_id] = {key: params[key] for key in secret_keys if key in params}
+        resumed = job.model_copy(update={"status": "queued", "operation_id": operation.id, "message": "Resuming transform", "completed_at": None, "outputs_ingested": False, "progress_completed": 0, "progress_total": operation.progress_total, "logs": operation.logs})
+        _GRAPH_TRANSFORM_JOBS[job_id] = resumed
+        _save_project_transform_jobs(project_dir, project_id)
+        return resumed
+
+
 @router.post("/projects/{project_id}/transforms/{job_id}/cancel", response_model=TransformJob, tags=["network"])
 def cancel_graph_transform(project_id: str, job_id: str, store: ProjectStore = Depends(get_project_store), docker_operations: DockerOperationManager = Depends(get_docker_operation_manager)) -> TransformJob:
-    try:
-        project_dir = store.project_dir(project_id)
-        _load_project_transform_jobs(project_dir)
-    except ProjectNotFoundError as exc:
-        raise HTTPException(status_code=404, detail="Project not found") from exc
-    job = _GRAPH_TRANSFORM_JOBS.get(job_id)
-    if not job or job.project_id != project_id:
-        raise HTTPException(status_code=404, detail="Transform job not found")
-    if job.operation_id:
-        try: docker_operations.cancel(job.operation_id)
-        except DockerOperationNotFound: pass
-    job = job.model_copy(update={"status": "cancelled", "message": "Cancellation requested"})
-    _GRAPH_TRANSFORM_JOBS[job_id] = job
-    _save_project_transform_jobs(project_dir, project_id)
-    return job
+    with _GRAPH_TRANSFORM_RESUME_LOCK:
+        try:
+            project_dir = store.project_dir(project_id)
+            _load_project_transform_jobs(project_dir)
+        except ProjectNotFoundError as exc:
+            raise HTTPException(status_code=404, detail="Project not found") from exc
+        job = _GRAPH_TRANSFORM_JOBS.get(job_id)
+        if not job or job.project_id != project_id:
+            raise HTTPException(status_code=404, detail="Transform job not found")
+        job, _ = _sync_transform_job_from_operation(job, docker_operations)
+        if job.status not in {"queued", "running", "approval_required"}:
+            raise HTTPException(status_code=409, detail="Only active transforms can be cancelled")
+        if job.operation_id:
+            try: docker_operations.cancel(job.operation_id)
+            except DockerOperationNotFound: pass
+        job = job.model_copy(update={"status": "cancelled", "message": "Cancellation requested"})
+        _GRAPH_TRANSFORM_JOBS[job_id] = job
+        _save_project_transform_jobs(project_dir, project_id)
+        return job
 
 
 @router.get("/projects/{project_id}/evidence", response_model=list[EvidenceRecord], tags=["evidence"])

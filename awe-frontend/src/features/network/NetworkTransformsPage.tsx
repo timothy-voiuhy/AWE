@@ -41,7 +41,10 @@ function csv(value: string) {
 
 const activeJobStatuses = new Set<TransformJob['status']>(['queued', 'running', 'approval_required'])
 
-function TransformRunRow({ job, name }: { job: TransformJob; name: string }) {
+function TransformRunRow({ job, manifest, onResume, onCancel, busy }: { job: TransformJob; manifest?: TransformManifest; onResume: (job: TransformJob, parameters: Record<string, unknown>, manifest?: TransformManifest) => void; onCancel: (id: string) => void; busy: boolean }) {
+  const [secrets, setSecrets] = useState<Record<string, string>>({})
+  const secretSpecs = (manifest?.parameters || []).map(spec => spec as unknown as ToolParamSpec).filter(spec => spec.type === 'secret' || spec.default === 'secret')
+  const name = manifest?.display_name || job.transform_id
   const progress = job.progress_total
     ? Math.min(100, Math.round(((job.progress_completed || 0) / job.progress_total) * 100))
     : job.status === 'completed' ? 100 : activeJobStatuses.has(job.status) ? 18 : 100
@@ -51,6 +54,8 @@ function TransformRunRow({ job, name }: { job: TransformJob; name: string }) {
     <div className="transform-progress-track" role="progressbar" aria-label={`${name} progress`} aria-valuenow={progress} aria-valuemin={0} aria-valuemax={100}><span style={{ width: `${progress}%` }} /></div>
     {job.progress_total ? <small>{job.progress_completed || 0} of {job.progress_total} steps</small> : null}
     {job.logs?.length ? <details><summary>Latest output ({job.logs.length} lines)</summary><pre>{job.logs.slice(-30).join('\n')}</pre></details> : null}
+    {activeJobStatuses.has(job.status) ? <div className="transform-run-actions"><button type="button" className="subtle" onClick={() => onCancel(job.id)} disabled={busy}>Cancel run</button></div> : null}
+    {['failed', 'cancelled'].includes(job.status) ? <div className="transform-run-actions">{secretSpecs.length ? <details className="transform-resume-secrets"><summary>Resume run</summary><div>{secretSpecs.map(spec => <label key={spec.key}>{spec.label || spec.key}<input type="password" autoComplete="off" value={secrets[spec.key] || ''} onChange={event => setSecrets(current => ({ ...current, [spec.key]: event.target.value }))} placeholder="Re-enter after a backend restart if needed" /></label>)}<button type="button" onClick={() => onResume(job, secrets, manifest)} disabled={busy}>{busy ? 'Resuming…' : 'Resume transform'}</button></div></details> : <button type="button" onClick={() => onResume(job, {}, manifest)} disabled={busy}>{busy ? 'Resuming…' : 'Resume transform'}</button>}</div> : null}
   </article>
 }
 
@@ -127,7 +132,8 @@ export function NetworkTransformsPage() {
   const selected = transforms.data?.find(item => item.id === transformId)
   const transformNames = useMemo(() => new Map((transforms.data || []).map(item => [item.id, item.display_name])), [transforms.data])
   const activeJobs = jobs.data?.filter(item => activeJobStatuses.has(item.status)) || []
-  const recentJobs = jobs.data?.filter(item => !activeJobStatuses.has(item.status)).slice(0, 8) || []
+  const unfinishedJobs = jobs.data?.filter(item => ['failed', 'cancelled'].includes(item.status)) || []
+  const recentJobs = jobs.data?.filter(item => item.status === 'completed').slice(0, 8) || []
   const compatibleEntities = useMemo(() => graph.data?.entities.filter(entity => selected?.input_types.includes(entity.kind)) || [], [graph.data, selected])
   useEffect(() => { if (compatibleEntities.length && !compatibleEntities.some(entity => entity.id === entityId)) setEntityId(compatibleEntities[0].id || '') }, [compatibleEntities, entityId])
   useEffect(() => { setParameters({}) }, [transformId])
@@ -148,11 +154,23 @@ export function NetworkTransformsPage() {
     mutationFn: (id: string) => api.deleteTransformDefinition(projectId, id),
     onSuccess: () => { setNotice('Deleted custom transform.'); void qc.invalidateQueries({ queryKey: ['projects', projectId, 'transforms'] }) },
   })
+  const resume = useMutation({
+    mutationFn: ({ id, parameters, approved }: { id: string; parameters: Record<string, unknown>; approved: boolean }) => api.resumeGraphTransform(projectId, id, { parameters, approved }),
+    onSuccess: item => { setJobId(item.id); setNotice(`Resuming ${transformNames.get(item.transform_id) || item.transform_id}.`); void qc.invalidateQueries({ queryKey: ['projects', projectId, 'transform-jobs'] }) },
+  })
+  const cancelRun = useMutation({
+    mutationFn: (id: string) => api.cancelGraphTransform(projectId, id),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ['projects', projectId, 'transform-jobs'] }),
+  })
+  const resumeRun = (item: TransformJob, secrets: Record<string, unknown>, manifest?: TransformManifest) => {
+    if (manifest?.requires_approval && !window.confirm(`Resume ${manifest.display_name} in ${manifest.mode} mode? This may actively interact with the target.`)) return
+    resume.mutate({ id: item.id, parameters: secrets, approved: manifest?.requires_approval === true })
+  }
   const closeComposite = () => { setCompositeOpen(false); setComposite(emptyComposite); saveComposite.reset() }
 
   return <main className="page feature-page network-transforms-page">
     
-    <header className="page-header graph-tools-header"><div><p className="eyebrow">Network</p><h1>Transforms</h1><p className="muted">Run graph-capable Docker tools against selected investigation entities.</p></div><OptionsMenu label="Transform options"><button type="button" onClick={() => setRunsOpen(true)}>View running transforms</button><button type="button" onClick={() => { saveComposite.reset(); setCompositeOpen(true) }}>Create composite transform</button><Link to={`/projects/${projectId}/network/tools`}>Tool catalog</Link><Link to={`/projects/${projectId}/network/logs`}>Live logs</Link></OptionsMenu></header>
+    <header className="page-header graph-tools-header"><div><p className="eyebrow">Network</p><h1>Transforms</h1><p className="muted">Run graph-capable Docker tools against selected investigation entities.</p></div><OptionsMenu label="Transform options"><button type="button" onClick={() => { resume.reset(); cancelRun.reset(); setRunsOpen(true) }}>View running transforms</button><button type="button" onClick={() => { saveComposite.reset(); setCompositeOpen(true) }}>Create composite transform</button><Link to={`/projects/${projectId}/network/tools`}>Tool catalog</Link><Link to={`/projects/${projectId}/network/logs`}>Live logs</Link></OptionsMenu></header>
     {notice && <p className="success">{notice}</p>}{(run.isError || job.isError || transforms.isError || graph.isError || deleteComposite.isError) && <p className="error">{String((run.error || job.error || transforms.error || graph.error || deleteComposite.error)?.message)}</p>}
     <section className="network-transforms-workbench">
       <section className="panel graph-tool-runner"><header><div><b>Run graph transform</b><span>Outputs are parsed and attached to the selected investigation.</span></div><span className={`transform-risk risk-${selected?.mode || 'passive'}`}>{selected?.mode || 'passive'}</span></header><label>Investigation<select value={investigationId} onChange={event => setInvestigationId(event.target.value)}>{investigations.data?.map(item => <option value={item.id} key={item.id}>{item.name}</option>)}</select></label><label>Transform<select value={transformId} onChange={event => setTransformId(event.target.value)}>{groupByCategory(transforms.data || []).map(group => <optgroup label={group.category} key={group.category}>{group.entries.map(item => <option value={item.id} key={item.id}>{item.display_name} · {item.mode}</option>)}</optgroup>)}</select></label><label>Input entity<select value={entityId} onChange={event => setEntityId(event.target.value)}>{compatibleEntities.map(entity => <option value={entity.id} key={entity.id}>{entity.label} · {entity.kind}</option>)}</select></label>{selected && <><p className="muted">{selected.description}</p><small>Accepts: {selected.input_types.join(', ')} · Produces: {selected.output_types.join(', ')} · Relationships: {selected.relationship_types.join(', ')}</small><ParameterFields specs={selected.parameters} values={parameters} onChange={(key, value) => setParameters(current => ({ ...current, [key]: value }))} /><button onClick={() => run.mutate()} disabled={!selected || !entityId || run.isPending}>{run.isPending ? 'Starting...' : 'Run transform'}</button></>}</section>
@@ -167,8 +185,10 @@ export function NetworkTransformsPage() {
       <div className="transform-runs-content">
         {jobs.isPending && !jobs.data ? <p className="muted">Loading transform runs…</p> : null}
         {jobs.isError ? <p className="error" role="alert">{jobs.error.message}</p> : null}
-        <section><h2>Active <span>{activeJobs.length}</span></h2>{activeJobs.length ? <div className="transform-runs-list">{activeJobs.map(item => <TransformRunRow key={item.id} job={item} name={transformNames.get(item.transform_id) || item.transform_id} />)}</div> : !jobs.isPending ? <p className="muted">No transforms are running.</p> : null}</section>
-        {recentJobs.length ? <section><h2>Recent results</h2><div className="transform-runs-list">{recentJobs.map(item => <TransformRunRow key={item.id} job={item} name={transformNames.get(item.transform_id) || item.transform_id} />)}</div></section> : null}
+        {(resume.isError || cancelRun.isError) ? <p className="error" role="alert">{(resume.error || cancelRun.error)?.message}</p> : null}
+        <section><h2>Active <span>{activeJobs.length}</span></h2>{activeJobs.length ? <div className="transform-runs-list">{activeJobs.map(item => <TransformRunRow key={item.id} job={item} manifest={transforms.data?.find(manifest => manifest.id === item.transform_id)} onResume={resumeRun} onCancel={id => cancelRun.mutate(id)} busy={(resume.isPending && resume.variables?.id === item.id) || (cancelRun.isPending && cancelRun.variables === item.id)} />)}</div> : !jobs.isPending ? <p className="muted">No transforms are running.</p> : null}</section>
+        {unfinishedJobs.length ? <section><h2>Unfinished <span>{unfinishedJobs.length}</span></h2><div className="transform-runs-list">{unfinishedJobs.map(item => <TransformRunRow key={item.id} job={item} manifest={transforms.data?.find(manifest => manifest.id === item.transform_id)} onResume={resumeRun} onCancel={id => cancelRun.mutate(id)} busy={(resume.isPending && resume.variables?.id === item.id) || (cancelRun.isPending && cancelRun.variables === item.id)} />)}</div></section> : null}
+        {recentJobs.length ? <section><h2>Recent results</h2><div className="transform-runs-list">{recentJobs.map(item => <TransformRunRow key={item.id} job={item} manifest={transforms.data?.find(manifest => manifest.id === item.transform_id)} onResume={resumeRun} onCancel={id => cancelRun.mutate(id)} busy={(resume.isPending && resume.variables?.id === item.id) || (cancelRun.isPending && cancelRun.variables === item.id)} />)}</div></section> : null}
         <Link className="button-link subtle" to={`/projects/${projectId}/network/logs`} onClick={() => setRunsOpen(false)}>Open full logs</Link>
       </div>
     </dialog>

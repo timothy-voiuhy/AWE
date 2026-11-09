@@ -447,6 +447,11 @@ class TransformStart(BaseModel):
     source_job_id: str = Field(default="", max_length=100)
 
 
+class TransformResume(BaseModel):
+    parameters: dict = Field(default_factory=dict)
+    approved: bool = False
+
+
 class TransformJob(BaseModel):
     id: str
     project_id: str

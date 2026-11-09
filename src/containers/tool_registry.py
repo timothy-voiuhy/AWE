@@ -10,6 +10,7 @@ Each ToolConfig defines:
   - get_volumes(output_dir) → dict: volume mounts
 """
 import os
+import secrets
 import shlex
 import time
 from dataclasses import dataclass, field
@@ -39,9 +40,10 @@ class ToolConfig:
     input_types: tuple[str, ...] = ()
     execution_mode: str = "passive"
     credential_fields: tuple[str, ...] = ()
+    output_owner: tuple[int, int] | None = None
 
     def container_name(self) -> str:
-        return f"awe_{self.key}_{int(time.time())}"
+        return f"awe_{self.key}_{int(time.time())}_{secrets.token_hex(3)}"
 
     def get_volumes(self, output_dir: str, input_dir: str | None = None) -> dict:
         os.makedirs(output_dir, exist_ok=True)
@@ -78,11 +80,12 @@ class _Amass(ToolConfig):
     input_types: tuple[str, ...] = ("target", "domain", "subdomain")
     output_types: tuple[str, ...] = ("subdomain",)
     relationship_types: tuple[str, ...] = ("has_subdomain",)
+    # The image runs as user:user (1000:1000), not root.
+    output_owner: tuple[int, int] | None = (1000, 1000)
 
     def get_volumes(self, output_dir: str, input_dir: str | None = None) -> dict:
         os.makedirs(output_dir, exist_ok=True)
         # Mount output dir as /output (amass writes to /output/amass_results.txt via -o)
-        # Also expose it as /.config/amass so amass can persist its graph DB between runs
         vols = {
             output_dir: {"bind": "/output", "mode": "rw"},
         }

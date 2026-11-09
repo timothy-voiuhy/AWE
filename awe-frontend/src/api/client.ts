@@ -301,6 +301,7 @@ export const api = {
   listGraphTransformJobs:(projectId:string)=>request<TransformJob[]>(`/projects/${projectId}/transforms/jobs`),
   startGraphTransform:(projectId:string,data:{transform_id:string;entity_ids:string[];parameters?:Record<string,unknown>;investigation_id?:string;approved?:boolean;source_job_id?:string})=>request<TransformJob>(`/projects/${projectId}/transforms`,{method:'POST',body:JSON.stringify(data)}),
   getGraphTransform:(projectId:string,id:string)=>request<TransformJob>(`/projects/${projectId}/transforms/${id}`),
+  resumeGraphTransform:(projectId:string,id:string,data:{parameters?:Record<string,unknown>;approved?:boolean})=>request<TransformJob>(`/projects/${projectId}/transforms/${id}/resume`,{method:'POST',body:JSON.stringify(data)}),
   cancelGraphTransform:(projectId:string,id:string)=>request<TransformJob>(`/projects/${projectId}/transforms/${id}/cancel`,{method:'POST'}),
   listEvidence:(projectId:string,options:{investigation_id?:string;source_id?:string;entity_id?:string}={})=>{const params=new URLSearchParams();if(options.investigation_id)params.set('investigation_id',options.investigation_id);if(options.source_id)params.set('source_id',options.source_id);if(options.entity_id)params.set('entity_id',options.entity_id);const suffix=params.toString()?`?${params.toString()}`:'';return request<EvidenceRecord[]>(`/projects/${projectId}/evidence${suffix}`)},
   createEvidence:(projectId:string,data:EvidenceInput)=>request<EvidenceRecord>(`/projects/${projectId}/evidence`,{method:'POST',body:JSON.stringify(data)}),

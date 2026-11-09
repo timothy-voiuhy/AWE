@@ -1,11 +1,16 @@
 from __future__ import annotations
 
 import json
+import hashlib
+import os
 import secrets
+import shutil
 import threading
 from dataclasses import asdict, is_dataclass
 from pathlib import Path
 from typing import Callable
+
+import docker
 
 from .docker_service import DockerService
 from .schemas import DockerOperation
@@ -83,6 +88,65 @@ class DockerOperationManager:
                 self._persist_locked()
             return item.model_copy(deep=True)
 
+    def cleanup_interrupted_container(self, operation_id: str, service: DockerService) -> None:
+        """Stop a container left behind when its worker disappeared on restart."""
+        operation = self.get(operation_id)
+        container_id = operation.result.get("active_container_id")
+        client = service._client()
+        candidates = client.containers.list(all=True, filters={"label": f"awe.operation_id={operation_id}"})
+        if container_id:
+            try:
+                candidates.append(client.containers.get(container_id))
+            except docker.errors.NotFound:
+                pass
+        seen: set[str] = set()
+        for container in candidates:
+            if container.id in seen:
+                continue
+            seen.add(container.id)
+            if container.labels.get("awe.operation_id") != operation_id:
+                raise RuntimeError("Interrupted container identity does not match the transform operation")
+            container.reload()
+            if container.status in {"running", "restarting", "paused"}:
+                container.stop(timeout=5)
+            container.remove(force=True)
+
+    @staticmethod
+    def _checkpoint_path(output_dir: Path) -> Path:
+        return output_dir / ".awe-transform-checkpoint.json"
+
+    @staticmethod
+    def _checkpoint_signature(key: str, stages: list[dict], params: dict) -> str:
+        payload = json.dumps({"key": key, "stages": stages, "params": params}, sort_keys=True, default=str)
+        return hashlib.sha256(payload.encode()).hexdigest()
+
+    def _completed_units(self, output_dir: Path, signature: str) -> set[str]:
+        path = self._checkpoint_path(output_dir)
+        if not path.exists():
+            return set()
+        checkpoint = json.loads(path.read_text(encoding="utf-8"))
+        if checkpoint.get("signature") != signature:
+            raise ValueError("Transform definition or parameters changed; this run cannot resume from its checkpoint")
+        return set(checkpoint.get("completed", []))
+
+    def validate_checkpoint(self, output_dir: Path, key: str, stages: list[dict], params: dict) -> None:
+        self._completed_units(output_dir, self._checkpoint_signature(key, stages, params))
+
+    def _save_checkpoint(self, output_dir: Path, signature: str, completed: set[str]) -> None:
+        path = self._checkpoint_path(output_dir)
+        temporary = path.with_suffix(".tmp")
+        temporary.write_text(json.dumps({"signature": signature, "completed": sorted(completed)}), encoding="utf-8")
+        temporary.replace(path)
+
+    @staticmethod
+    def _parse_output(key: str, output_dir: Path) -> list:
+        import sys
+        source = str(Path(__file__).resolve().parents[2] / "src")
+        if source not in sys.path: sys.path.insert(0, source)
+        from containers.parsers import PARSERS
+        parser = PARSERS.get(key)
+        return (parser(str(output_dir)) or []) if parser else []
+
     def start_images(self, operation: str, service: DockerService) -> DockerOperation:
         item = self._start(f"images.{operation}", lambda oid: self._run_images(oid, operation, service))
         try:
@@ -98,8 +162,9 @@ class DockerOperationManager:
         return self.get(item.id)
 
     def start_tool(self, key: str, params: dict, output_dir: Path, service: DockerService,
-                   on_complete: Callable[[list, Path], dict] | None = None) -> DockerOperation:
-        return self._start(f"tool.{key}", lambda oid: self._run_tool(oid, key, params, output_dir, service, on_complete))
+                   on_complete: Callable[[list, Path], dict] | None = None, *, resume: bool = False,
+                   prior_logs: list[str] | None = None) -> DockerOperation:
+        return self._start(f"tool.{key}", lambda oid: self._run_tool(oid, key, params, output_dir, service, on_complete, resume), prior_logs)
 
     def start_composite(
         self,
@@ -109,8 +174,10 @@ class DockerOperationManager:
         output_dir: Path,
         service: DockerService,
         on_complete: Callable[[list, Path], dict] | None = None,
+        *, resume: bool = False,
+        prior_logs: list[str] | None = None,
     ) -> DockerOperation:
-        item = self._start(f"composite.{key}", lambda oid: self._run_composite(oid, key, stages, params, output_dir, service, on_complete))
+        item = self._start(f"composite.{key}", lambda oid: self._run_composite(oid, key, stages, params, output_dir, service, on_complete, resume), prior_logs)
         with self._lock:
             self._items[item.id].progress_total = sum(len(stage.get("tool_keys", [])) for stage in stages)
             self._persist_locked()
@@ -119,9 +186,9 @@ class DockerOperationManager:
     def start_one_image(self, key: str, operation: str, service: DockerService) -> DockerOperation:
         return self._start(f"image.{operation}.{key}", lambda oid: self._run_one_image(oid, key, operation, service))
 
-    def _start(self, kind: str, target) -> DockerOperation:
+    def _start(self, kind: str, target, prior_logs: list[str] | None = None) -> DockerOperation:
         oid = secrets.token_hex(12)
-        item = DockerOperation(id=oid, kind=kind, status="queued")
+        item = DockerOperation(id=oid, kind=kind, status="queued", logs=[*(prior_logs or [])[-self._max_logs + 1:], "Resuming transform run"] if prior_logs else [])
         with self._lock:
             self._items[oid] = item
             self._persist_locked()
@@ -157,25 +224,38 @@ class DockerOperationManager:
         except Exception as exc: self._log(oid, f"ERROR: {exc}"); self._fail(oid, exc)
 
     def _run_tool(self, oid: str, key: str, params: dict, output_dir: Path, service: DockerService,
-                  on_complete: Callable[[list, Path], dict] | None = None) -> None:
+                  on_complete: Callable[[list, Path], dict] | None = None, resume: bool = False) -> None:
         self._running(oid)
         try:
-            parsed, container_id = self._run_tool_sync(oid, key, params, output_dir, service)
+            signature = self._checkpoint_signature(key, [], params)
+            completed = self._completed_units(output_dir, signature) if resume else set()
+            if "tool" in completed:
+                self._log(oid, f"Resuming {key} from completed tool output")
+                parsed, container_id = self._parse_output(key, output_dir), ""
+            else:
+                if resume and output_dir.exists():
+                    shutil.rmtree(output_dir)
+                parsed, container_id = self._run_tool_sync(oid, key, params, output_dir, service)
+                if oid in self._cancelled:
+                    return self._finish(oid, {"output_dir": str(output_dir)})
+                completed.add("tool")
+                self._save_checkpoint(output_dir, signature, completed)
             result = {"container_id": container_id, "output_dir": str(output_dir), "parsed_count": len(parsed)}
             if on_complete and parsed:
-                try:
-                    result.update(on_complete(parsed, output_dir) or {})
-                except Exception as exc:
-                    self._log(oid, f"Graph ingestion warning: {exc}")
-                    result["ingestion_error"] = str(exc)
+                result.update(on_complete(parsed, output_dir) or {})
             self._finish(oid, result)
         except Exception as exc: self._fail(oid, exc)
 
     def _run_composite(self, oid: str, key: str, stages: list[dict], params: dict, output_dir: Path, service: DockerService,
-                       on_complete: Callable[[list, Path], dict] | None = None) -> None:
+                       on_complete: Callable[[list, Path], dict] | None = None, resume: bool = False) -> None:
         self._running(oid)
         try:
             output_dir.mkdir(parents=True, exist_ok=True)
+            signature = self._checkpoint_signature(key, stages, params)
+            completed = self._completed_units(output_dir, signature) if resume else set()
+            with self._lock:
+                self._items[oid].progress_completed = len(completed)
+                self._persist_locked()
             previous: list = []
             source_map: dict[str, set[str]] = {}
             for index, stage in enumerate(stages):
@@ -198,26 +278,33 @@ class DockerOperationManager:
                     stage_params.setdefault("input_file", "/input/input.txt")
                     self._log(oid, f"[{name}] Tunneled {len(values)} value(s) through /input/input.txt")
                 stage_results: list = []
-                for tool_key in tool_keys:
+                for tool_index, tool_key in enumerate(tool_keys):
                     if oid in self._cancelled:
                         return self._finish(oid, {"output_dir": str(output_dir)})
+                    unit = f"{index}:{tool_index}:{tool_key}"
                     tool_dir = output_dir / f"stage_{index + 1}_{tool_key}"
-                    parsed, _container_id = self._run_tool_sync(oid, tool_key, stage_params, tool_dir, service, input_dir, f"[{name}/{tool_key}] ")
+                    if unit in completed:
+                        self._log(oid, f"[{name}/{tool_key}] Reusing completed output")
+                        parsed = self._parse_output(tool_key, tool_dir)
+                    else:
+                        if resume and tool_dir.exists():
+                            shutil.rmtree(tool_dir)
+                        parsed, _container_id = self._run_tool_sync(oid, tool_key, stage_params, tool_dir, service, input_dir, f"[{name}/{tool_key}] ")
+                        if oid in self._cancelled:
+                            return self._finish(oid, {"output_dir": str(output_dir)})
+                        completed.add(unit)
+                        self._save_checkpoint(output_dir, signature, completed)
+                        with self._lock:
+                            self._items[oid].progress_completed += 1
+                            self._persist_locked()
                     self._attach_previous_sources(parsed, source_map)
                     stage_results.extend(parsed)
-                    with self._lock:
-                        self._items[oid].progress_completed += 1
-                        self._persist_locked()
                 previous = self._merge_results(stage_results)
                 source_map = self._source_map(previous)
                 self._log(oid, f"[{name}] Produced {len(previous)} deduped result(s)")
             result = {"output_dir": str(output_dir), "parsed_count": len(previous), "stages": len(stages)}
             if on_complete:
-                try:
-                    result.update(on_complete(previous, output_dir) or {})
-                except Exception as exc:
-                    self._log(oid, f"Graph ingestion warning: {exc}")
-                    result["ingestion_error"] = str(exc)
+                result.update(on_complete(previous, output_dir) or {})
             self._finish(oid, result)
         except Exception as exc: self._fail(oid, exc)
 
@@ -233,6 +320,8 @@ class DockerOperationManager:
             self._log(oid, f"{prefix}Preparing image {tool.image}")
             service.one_tool_image_operation(key, "build" if tool.dockerfile else "pull")
         output_dir.mkdir(parents=True, exist_ok=True)
+        if tool.output_owner:
+            os.chown(output_dir, *tool.output_owner)
         command = tool.build_command(**params)
         self._log(oid, f"{prefix}Starting {tool.image}: {command}")
         environment = tool.build_environment(**params)
@@ -243,9 +332,13 @@ class DockerOperationManager:
             name=tool.container_name(),
             volumes=tool.get_volumes(str(output_dir), str(input_dir) if input_dir else None),
             environment=environment or None,
+            labels={"awe.operation_id": oid},
             detach=True,
         )
-        with self._lock: self._containers.setdefault(oid, []).append(container)
+        with self._lock:
+            self._containers.setdefault(oid, []).append(container)
+            self._items[oid].result["active_container_id"] = container.id
+            self._persist_locked()
         try:
             for chunk in container.logs(stream=True, follow=True):
                 self._log(oid, f"{prefix}{chunk.decode(errors='replace').rstrip()}")
@@ -269,6 +362,9 @@ class DockerOperationManager:
                 self._containers[oid] = [item for item in containers if item is not container]
             try:
                 container.remove(force=True)
+                with self._lock:
+                    self._items[oid].result.pop("active_container_id", None)
+                    self._persist_locked()
             except Exception as exc:
                 self._log(oid, f"{prefix}Could not remove finished container: {exc}")
 
