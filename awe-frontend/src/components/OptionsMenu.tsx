@@ -18,6 +18,9 @@ export function OptionsMenu({ children, label = 'Page options' }: { children: Re
     }
   }}>
     <summary aria-label={label} title={label}><span aria-hidden="true">⋮</span></summary>
-    <div className="page-options-panel" onClick={() => ref.current?.removeAttribute('open')}>{children}</div>
+    <div className="page-options-panel" onClick={event => {
+      const action = (event.target as HTMLElement).closest('button, a')
+      if (action && !action.hasAttribute('disabled')) ref.current?.removeAttribute('open')
+    }}>{children}</div>
   </details>
 }

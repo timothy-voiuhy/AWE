@@ -4,6 +4,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useParams } from 'react-router-dom'
 
 import { api, type GraphBundle, type GraphEntity, type GraphRelationship } from '../../api/client'
+import { OptionsMenu } from '../../components/OptionsMenu'
 import { Spinner } from '../../components/Spinner'
 
 const palette: Record<string, string> = {
@@ -64,6 +65,7 @@ export function NetworkGraphPage() {
   const { projectId = '' } = useParams()
   const queryClient = useQueryClient()
   const cyRef = useRef<Core | null>(null)
+  const canvasSnapshotRef = useRef<{ graphKey: string; layoutKey: string; positions: Record<string, { x: number; y: number }>; zoom: number; pan: { x: number; y: number } } | null>(null)
   const hostRef = useRef<HTMLDivElement>(null)
   const minimapRef = useRef<HTMLCanvasElement>(null)
   const [investigationId, setInvestigationId] = useState('')
@@ -187,6 +189,12 @@ export function NetworkGraphPage() {
   const viewSnapshot = useMemo<ViewSnapshot>(() => ({ query, kind, focusId, focusDepth, graphOrientation, layoutMode, edgeCurve, showArrows, showEdgeLabels, labelPolicy, relationshipGrouping, visibleRelationshipKinds, selectedIds, neighborhoodOnly, componentOnly, analysisDepth }), [query, kind, focusId, focusDepth, graphOrientation, layoutMode, edgeCurve, showArrows, showEdgeLabels, labelPolicy, relationshipGrouping, visibleRelationshipKinds, selectedIds, neighborhoodOnly, componentOnly, analysisDepth])
   const viewSnapshotKey = JSON.stringify(viewSnapshot)
   const viewPreferences = useMemo(() => ({ layoutMode, edgeCurve, showArrows, showEdgeLabels, labelPolicy, relationshipGrouping, visibleRelationshipKinds, graphOrientation }), [layoutMode, edgeCurve, showArrows, showEdgeLabels, labelPolicy, relationshipGrouping, visibleRelationshipKinds, graphOrientation])
+  const graphViewRef = useRef(graphView)
+  const viewPreferencesRef = useRef(viewPreferences)
+  const lassoModeRef = useRef(lassoMode)
+  graphViewRef.current = graphView
+  viewPreferencesRef.current = viewPreferences
+  lassoModeRef.current = lassoMode
   useEffect(() => {
     if (!graphView || preferencesHydratedRef.current || graphView.investigation.id !== investigationId) return
     const stored = graphView.investigation.preferences?.view as Partial<typeof viewPreferences> | undefined
@@ -319,20 +327,39 @@ export function NetworkGraphPage() {
   const relationshipSignature = useMemo(() => {
     const allowed = new Set(visibleEntities.map(item => item.id))
     return displayRelationships.filter(edge => allowed.has(edge.source_id) && allowed.has(edge.target_id)).map(edge => `${edge.id}:${edge.source_id}:${edge.target_id}:${edge.label || edge.kind}`).join('|')
-  }, [renderSignature, visibleEntities, displayRelationships])
-  const selectedSignature = selectedIds.join('|')
-  const pathSignature = `${pathNodeIds.join('|')}:${pathEdgeIds.join('|')}`
+  }, [visibleEntities, displayRelationships])
+  const visibleEntitiesRef = useRef(visibleEntities)
+  const displayRelationshipsRef = useRef(displayRelationships)
+  visibleEntitiesRef.current = visibleEntities
+  displayRelationshipsRef.current = displayRelationships
+  const hasGraph = Boolean(graphView)
 
   useEffect(() => {
-    if (!hostRef.current || !graphView) return
-    cyRef.current?.destroy()
+    const currentGraph = graphViewRef.current
+    if (!hostRef.current || !currentGraph) return
+    const visibleEntities = visibleEntitiesRef.current
+    const displayRelationships = displayRelationshipsRef.current
+    const previous = canvasSnapshotRef.current
+    const graphKey = `${projectId}:${investigationId}:${renderSignature}`
+    const layoutKey = `${layoutMode}:${graphOrientation}`
+    const reusePositions = previous?.graphKey === graphKey && previous.layoutKey === layoutKey
+    const oldPositions = reusePositions ? previous.positions : {}
+    const oldViewport = reusePositions ? { zoom: previous.zoom, pan: previous.pan } : null
     const allowed = new Set(visibleEntities.map(item => item.id))
+    const savedPositions = currentGraph.investigation.preferences?.positions as Record<string, { x: number; y: number }> | undefined
+    const initialInvestigation = !previous || !previous.graphKey.startsWith(`${projectId}:${investigationId}:`)
+    const hasSavedPositions = initialInvestigation && Boolean(visibleEntities.length && visibleEntities.every(entity => {
+      const position = savedPositions?.[entity.id]
+      return position && Number.isFinite(position.x) && Number.isFinite(position.y)
+    }))
     const elements: cytoscape.ElementDefinition[] = [
-      ...visibleEntities.map(entity => ({ data: { id: entity.id, label: entity.label, kind: entity.kind, color: color(entity.kind), source: entity.source }, position: { x: entity.x || 0, y: entity.y || 0 } })),
+      ...visibleEntities.map(entity => ({ data: { id: entity.id, label: entity.label, kind: entity.kind, color: color(entity.kind), source: entity.source }, position: oldPositions[entity.id] || savedPositions?.[entity.id] || { x: entity.x || 0, y: entity.y || 0 } })),
       ...displayRelationships.filter(edge => allowed.has(edge.source_id) && allowed.has(edge.target_id)).map(edge => ({ data: { id: edge.id, source: edge.source_id, target: edge.target_id, label: edge.label || edge.kind, kind: edge.kind } })),
     ]
     const rootId = visibleEntities.find(entity => entity.kind === 'target')?.id
-    const layout = layoutMode === 'hierarchy'
+    const layout = reusePositions || hasSavedPositions
+      ? { name: 'preset', fit: !reusePositions, padding: 40 }
+      : layoutMode === 'hierarchy'
       ? { name: 'breadthfirst', directed: true, roots: rootId ? [rootId] : undefined, animate: false, padding: 40, spacingFactor: 1.25 }
       : layoutMode === 'radial'
         ? { name: 'concentric', animate: false, padding: 40, concentric: (node: cytoscape.NodeSingular) => node.id() === rootId ? 3 : 1, levelWidth: () => 1 }
@@ -341,13 +368,14 @@ export function NetworkGraphPage() {
           : layoutMode === 'timeline'
             ? { name: 'grid', animate: false, padding: 40, rows: 1, cols: Math.max(1, visibleEntities.length) }
             : { name: 'cose', animate: false, padding: 40, numIter: 250 }
-    const cy = cytoscape({ container: hostRef.current, elements, boxSelectionEnabled: lassoMode, selectionType: 'additive', style: [
+    const cy = cytoscape({ container: hostRef.current, elements, boxSelectionEnabled: lassoModeRef.current, selectionType: 'additive', style: [
       { selector: 'node', style: { 'background-color': 'data(color)', label: labelPolicy === 'all' ? 'data(label)' : '', color: '#cdd6f4', 'font-size': '10px', 'text-wrap': 'ellipsis', 'text-max-width': '120px', 'text-valign': 'bottom', 'text-margin-y': '8px', width: 34, height: 34, 'border-width': 2, 'border-color': '#313244' } as unknown as cytoscape.Css.Node },
       { selector: 'node[kind = "target"], node:selected, node.hovered, node.zoom-label', style: { label: labelPolicy === 'none' ? '' : 'data(label)', 'text-background-color': '#11111b', 'text-background-opacity': 0.86, 'text-background-padding': '3px', 'text-border-width': 1, 'text-border-color': '#313244' } as unknown as cytoscape.Css.Node },
       { selector: 'node:selected', style: { 'border-color': '#f9e2af', 'border-width': 4, 'overlay-color': '#f9e2af', 'overlay-opacity': 0.12 } as unknown as cytoscape.Css.Node },
       { selector: 'edge', style: { width: 1, opacity: 0.48, 'line-color': '#585b70', 'target-arrow-color': '#7f849c', 'target-arrow-shape': showArrows ? 'triangle' : 'none', label: showEdgeLabels ? 'data(label)' : '', color: '#cdd6f4', 'font-size': '8px', 'curve-style': edgeCurve, 'text-rotation': 'autorotate' } as unknown as cytoscape.Css.Edge },
       { selector: 'edge.hovered', style: { width: 2.5, opacity: 1, 'line-color': '#89b4fa', 'target-arrow-color': '#89b4fa', 'target-arrow-shape': 'triangle', label: 'data(label)', 'text-background-color': '#11111b', 'text-background-opacity': 0.9, 'text-background-padding': '3px' } as unknown as cytoscape.Css.Edge },
     ], layout })
+    if (oldViewport) { cy.zoom(oldViewport.zoom); cy.pan(oldViewport.pan) }
     cy.on('tap', 'node', event => {
       const node = event.target
       const id = node.id()
@@ -439,19 +467,15 @@ export function NetworkGraphPage() {
     }
     cy.on('render position layoutstop', drawMinimap)
     drawMinimap()
-    cy.nodes().unselect()
-    selectedIds.forEach(id => cy.$id(id).select())
-    if (selectedId && !selectedIds.includes(selectedId)) cy.$id(selectedId).select()
-    pathNodeIds.forEach(id => cy.$id(id).addClass('path-node'))
-    pathEdgeIds.forEach(id => cy.$id(id).addClass('path-edge'))
     cy.on('dragfree', 'node', () => {
       const positions: Record<string, { x: number; y: number }> = {}
       cy.nodes().forEach(node => { positions[node.id()] = node.position() })
-      if (graphView) void api.saveGraphPreferences(projectId, graphView.investigation.id, { preferences: { ...(graphView.investigation.preferences || {}), positions, view: viewPreferences }, revision: preferenceRevisionRef.current || graphView.investigation.revision }).then(saved => { preferenceRevisionRef.current = saved.revision }).catch(() => setNotice('Could not save the graph layout position.'))
+      const currentGraph = graphViewRef.current
+      if (currentGraph) void api.saveGraphPreferences(projectId, currentGraph.investigation.id, { preferences: { ...(currentGraph.investigation.preferences || {}), positions, view: viewPreferencesRef.current }, revision: preferenceRevisionRef.current || currentGraph.investigation.revision }).then(saved => { preferenceRevisionRef.current = saved.revision }).catch(() => setNotice('Could not save the graph layout position.'))
     })
     cyRef.current = cy
     let rotationFrame = 0
-    if (graphOrientation === 'landscape') {
+    if (graphOrientation === 'landscape' && !reusePositions && !hasSavedPositions) {
       rotationFrame = window.requestAnimationFrame(() => {
         const nodes = cy.nodes()
         if (!nodes.length || cyRef.current !== cy) return
@@ -464,8 +488,31 @@ export function NetworkGraphPage() {
         cy.fit(undefined, 40)
       })
     }
-    return () => { if (rotationFrame) window.cancelAnimationFrame(rotationFrame); cy.removeListener('zoom', updateZoomLabels); cy.removeListener('render position layoutstop', drawMinimap); cy.destroy(); cyRef.current = null }
-  }, [projectId, renderSignature, relationshipSignature, graphOrientation, selectedSignature, pathSignature, lassoMode, layoutMode, edgeCurve, showArrows, showEdgeLabels, labelPolicy, viewPreferences, graphView?.investigation.revision])
+    return () => {
+      if (rotationFrame) window.cancelAnimationFrame(rotationFrame)
+      canvasSnapshotRef.current = { graphKey, layoutKey, positions: Object.fromEntries(cy.nodes().map(node => [node.id(), node.position()])), zoom: cy.zoom(), pan: cy.pan() }
+      cy.removeListener('zoom', updateZoomLabels)
+      cy.removeListener('render position layoutstop', drawMinimap)
+      cy.destroy()
+      cyRef.current = null
+    }
+  }, [projectId, investigationId, hasGraph, renderSignature, relationshipSignature, graphOrientation, layoutMode, edgeCurve, showArrows, showEdgeLabels, labelPolicy])
+
+  useEffect(() => {
+    const cy = cyRef.current
+    if (!cy) return
+    cy.batch(() => {
+      cy.nodes().unselect()
+      selectedIds.forEach(id => cy.$id(id).select())
+      if (selectedId && !selectedIds.includes(selectedId)) cy.$id(selectedId).select()
+      cy.nodes().removeClass('path-node')
+      cy.edges().removeClass('path-edge')
+      pathNodeIds.forEach(id => cy.$id(id).addClass('path-node'))
+      pathEdgeIds.forEach(id => cy.$id(id).addClass('path-edge'))
+    })
+  }, [selectedIds, selectedId, pathNodeIds, pathEdgeIds, renderSignature, relationshipSignature])
+
+  useEffect(() => { cyRef.current?.boxSelectionEnabled(lassoMode) }, [lassoMode])
 
   const createInvestigation = useMutation({ mutationFn: () => api.createInvestigation(projectId, 'New investigation'), onSuccess: item => { setInvestigationId(item.id); void queryClient.invalidateQueries({ queryKey: ['projects', projectId, 'investigations'] }) } })
   const createEntity = useMutation({ mutationFn: () => api.createGraphEntity(projectId, investigationId, { ...entityDraft, data: {}, confidence: 1, severity: '', scope: 'unknown', x: 0, y: 0 }), onSuccess: () => { setEntityDraft({ kind: 'custom', label: '', value: '' }); void queryClient.invalidateQueries({ queryKey: ['projects', projectId, 'investigation-graph', investigationId] }) } })
@@ -707,11 +754,40 @@ export function NetworkGraphPage() {
   </div>
 
   const graphControls = <section className="graph-control-panel">
-    <header><div><b>Network</b><span>{visibleEntities.length} entities · {graphView?.relationships.length || 0} links{selectedIds.length > 0 ? ` · ${selectedIds.length} selected` : ''}</span></div><button className="graph-icon-button" title="New investigation" aria-label="New investigation" onClick={() => createInvestigation.mutate()} disabled={createInvestigation.isPending}>＋</button></header>
+    <header><div><b>Network</b><span>{visibleEntities.length} entities · {graphView?.relationships.length || 0} links{selectedIds.length > 0 ? ` · ${selectedIds.length} selected` : ''}</span></div><OptionsMenu label="Network options">
+      <span className="graph-options-heading">Investigation</span>
+      <button type="button" onClick={() => createInvestigation.mutate()} disabled={createInvestigation.isPending}>New investigation</button>
+      <button type="button" onClick={exportGraph} disabled={!graphView}>Export investigation JSON</button>
+      <hr />
+      <span className="graph-options-heading">Graph layout</span>
+      <button type="button" onClick={() => cyRef.current?.fit(undefined, 40)}>Fit graph</button>
+      <button type="button" onClick={() => cyRef.current?.layout({ name: 'cose', animate: true, padding: 40, numIter: 250 }).run()}>Auto layout</button>
+      <button type="button" onClick={() => setGraphOrientation(value => value === 'portrait' ? 'landscape' : 'portrait')}>Rotate to {graphOrientation === 'portrait' ? 'landscape' : 'portrait'}</button>
+      <button type="button" onClick={() => setGraphExpanded(value => !value)}>{graphExpanded ? 'Exit full workspace' : 'View full workspace'}</button>
+      <button type="button" onClick={() => setDisplayMenuOpen(value => !value)}>Display &amp; relationships</button>
+      <button type="button" onClick={() => setViewsMenuOpen(value => !value)}>Saved views{savedViews.length ? ` · ${savedViews.length}` : ''}</button>
+      <label className="graph-option-select">Edge density<select aria-label="Edge density" value={relationshipGrouping} onChange={event => setRelationshipGrouping(event.target.value as RelationshipGrouping)}><option value="all">All relationships</option><option value="pairs">Group parallel edges</option></select></label>
+      <label className="graph-option-select">Labels<select aria-label="Graph labels" value={labelPolicy} onChange={event => setLabelPolicy(event.target.value as LabelPolicy)}><option value="smart">Smart zoom</option><option value="all">Always show</option><option value="none">Hide labels</option></select></label>
+      <hr />
+      <span className="graph-options-heading">Selection</span>
+      <button type="button" onClick={() => expandNeighbors.mutate()} disabled={!selected || expandNeighbors.isPending}>Expand neighbors</button>
+      <button type="button" onClick={findPathToTarget} disabled={!selected}>Shortest path to target</button>
+      <button type="button" onClick={() => setLassoMode(value => !value)}>{lassoMode ? 'Disable area selection' : 'Enable area selection'}</button>
+      <button type="button" onClick={() => setSelectionMenuOpen(value => !value)}>Selection tools &amp; saved sets</button>
+      <button type="button" onClick={() => selected && setFocusId(selected.id)} disabled={!selected}>Focus selected entity</button>
+      {focusId && <button type="button" onClick={() => setFocusId('')}>Return to overview</button>}
+      <button type="button" onClick={zoomToSelection} disabled={!selectedIds.length && !selected}>Zoom selection</button>
+      {selectedIds.length > 0 && <button type="button" onClick={clearSelection}>Clear selection and path</button>}
+      <label className="graph-option-select">Focus depth<select aria-label="Focus depth" value={focusDepth} onChange={event => setFocusDepth(Number(event.target.value))}><option value={1}>1 hop</option><option value={2}>2 hops</option><option value={3}>3 hops</option></select></label>
+      <hr />
+      <span className="graph-options-heading">History</span>
+      <button type="button" onClick={undoView} disabled={!historyAvailable.undo}>Undo</button>
+      <button type="button" onClick={redoView} disabled={!historyAvailable.redo}>Redo</button>
+      <button type="button" onClick={() => cyRef.current?.fit(undefined, 40)}>Overview</button>
+      <button type="button" onClick={resetGraphView}>Reset view</button>
+    </OptionsMenu></header>
     <div className="graph-control-fields"><select aria-label="Investigation" value={investigationId} onChange={event => { setInvestigationId(event.target.value); setSelectedId(''); setSelectedIds([]); setFocusId('') }}>{investigations.data?.map(item => <option value={item.id} key={item.id}>{item.name}</option>)}</select><input value={query} onChange={event => setQuery(event.target.value)} placeholder="Search entities…"/><select aria-label="Entity type" value={kind} onChange={event => setKind(event.target.value)}><option value="">All entity types</option>{kinds.map(item => <option value={item} key={item}>{item}</option>)}</select></div>
-    <nav className="graph-icon-actions" aria-label="Graph actions"><button className="graph-icon-button" title="Fit graph" aria-label="Fit graph" onClick={() => cyRef.current?.fit(undefined, 40)}>⌖</button><button className="graph-icon-button" title="Auto layout" aria-label="Auto layout" onClick={() => cyRef.current?.layout({ name: 'cose', animate: true, padding: 40, numIter: 250 }).run()}>✣</button><button className="graph-icon-button" title="Expand neighbors without replacing the current graph" aria-label="Expand neighbors" onClick={() => expandNeighbors.mutate()} disabled={!selected || expandNeighbors.isPending}>⊕</button><button className="graph-icon-button" title="Shortest path to target" aria-label="Shortest path to target" onClick={findPathToTarget} disabled={!selected}>⌁</button><button className={`graph-icon-button${lassoMode ? ' active' : ''}`} title={lassoMode ? 'Disable area selection' : 'Enable area selection'} aria-label={lassoMode ? 'Disable area selection' : 'Enable area selection'} onClick={() => setLassoMode(value => !value)}>▧</button><button className="graph-icon-button" title="Selection tools and saved sets" aria-label="Selection tools and saved sets" onClick={() => setSelectionMenuOpen(value => !value)}>▦</button><button className={`graph-icon-button${displayMenuOpen ? ' active' : ''}`} title="Display and relationship controls" aria-label="Display and relationship controls" onClick={() => setDisplayMenuOpen(value => !value)}>◍</button><button className="graph-icon-button" title={`Rotate graph to ${graphOrientation === 'portrait' ? 'landscape' : 'portrait'}`} aria-label={`Rotate graph to ${graphOrientation === 'portrait' ? 'landscape' : 'portrait'}`} onClick={() => setGraphOrientation(value => value === 'portrait' ? 'landscape' : 'portrait')}>↻</button><select aria-label="Focus depth" title="Focus depth" value={focusDepth} onChange={event => setFocusDepth(Number(event.target.value))}><option value={1}>D1</option><option value={2}>D2</option><option value={3}>D3</option></select><button className="graph-icon-button" title="Focus selected entity" aria-label="Focus selected entity" onClick={() => selected && setFocusId(selected.id)} disabled={!selected}>◎</button>{focusId && <button className="graph-icon-button" title="Return to overview" aria-label="Return to overview" onClick={() => setFocusId('')}>◌</button>}{selectedIds.length > 0 && <button className="graph-icon-button" title="Clear selection and path" aria-label="Clear selection and path" onClick={clearSelection}>×</button>}<button className="graph-icon-button" title="Export investigation JSON" aria-label="Export investigation JSON" onClick={exportGraph} disabled={!graphView}>⇩</button><button className="graph-icon-button" title={graphExpanded ? 'Exit full workspace' : 'View graph full workspace'} aria-label={graphExpanded ? 'Exit full workspace' : 'View graph full workspace'} onClick={() => setGraphExpanded(value => !value)}>⛶</button></nav>
-    <label className="graph-density-control">Edge density<select value={relationshipGrouping} onChange={event => setRelationshipGrouping(event.target.value as RelationshipGrouping)}><option value="all">All relationships</option><option value="pairs">Group parallel edges</option></select></label>
-    <section className="graph-secondary-toolbar"><div className="graph-secondary-group"><button onClick={undoView} disabled={!historyAvailable.undo} title="Undo (Ctrl/Cmd+Z)">↶ Undo</button><button onClick={redoView} disabled={!historyAvailable.redo} title="Redo (Ctrl/Cmd+Shift+Z)">↷ Redo</button><button onClick={zoomToSelection} disabled={!selectedIds.length && !selected}>Zoom selection</button><button onClick={() => cyRef.current?.fit(undefined, 40)}>Overview</button><button onClick={resetGraphView}>Reset view</button></div><label className="graph-secondary-label">Labels<select value={labelPolicy} onChange={event => setLabelPolicy(event.target.value as LabelPolicy)}><option value="smart">Smart zoom</option><option value="all">Always show</option><option value="none">Hide labels</option></select></label>{viewsMenuOpen && <div className="graph-views-popover"><header><b>Saved views</b><button onClick={() => setViewsMenuOpen(false)} aria-label="Close saved views">×</button></header><form onSubmit={event => { event.preventDefault(); saveView() }}><input value={savedViewName} onChange={event => setSavedViewName(event.target.value)} placeholder="View name"/><button disabled={!savedViewName.trim()}>Save current</button></form>{savedViews.length ? <div className="graph-saved-views">{savedViews.map(item => <div key={item.name}><button onClick={() => { applyViewSnapshot(item.snapshot); setNotice(`Loaded graph view “${item.name}”.`) }}>{item.name}</button><button onClick={() => deleteView(item.name)} aria-label={`Delete ${item.name}`}>×</button></div>)}</div> : <small>No saved views yet.</small>}</div>}<button className={`graph-views-toggle${viewsMenuOpen ? ' active' : ''}`} onClick={() => setViewsMenuOpen(value => !value)}>▣ Views{savedViews.length ? ` · ${savedViews.length}` : ''}</button></section>
+    {viewsMenuOpen && <div className="graph-views-popover"><header><b>Saved views</b><button onClick={() => setViewsMenuOpen(false)} aria-label="Close saved views">×</button></header><form onSubmit={event => { event.preventDefault(); saveView() }}><input value={savedViewName} onChange={event => setSavedViewName(event.target.value)} placeholder="View name"/><button disabled={!savedViewName.trim()}>Save current</button></form>{savedViews.length ? <div className="graph-saved-views">{savedViews.map(item => <div key={item.name}><button onClick={() => { applyViewSnapshot(item.snapshot); setNotice(`Loaded graph view “${item.name}”.`) }}>{item.name}</button><button onClick={() => deleteView(item.name)} aria-label={`Delete ${item.name}`}>×</button></div>)}</div> : <small>No saved views yet.</small>}</div>}
     {displayMenuOpen && <div className="graph-display-popover"><header><b>Display &amp; relationships</b><button onClick={() => setDisplayMenuOpen(false)} aria-label="Close display controls">×</button></header><label className="graph-display-row">Layout<select value={layoutMode} onChange={event => setLayoutMode(event.target.value as LayoutMode)}><option value="force">Force-directed</option><option value="hierarchy">Hierarchy</option><option value="radial">Radial target map</option><option value="concentric">Concentric</option><option value="timeline">Timeline</option></select></label><label className="graph-display-row">Edge shape<select value={edgeCurve} onChange={event => setEdgeCurve(event.target.value as EdgeCurve)}><option value="bezier">Curved</option><option value="straight">Straight</option><option value="taxi">Orthogonal</option></select></label><label className="graph-display-check"><input type="checkbox" checked={showArrows} onChange={event => setShowArrows(event.target.checked)}/> Arrowheads</label><label className="graph-display-check"><input type="checkbox" checked={showEdgeLabels} onChange={event => setShowEdgeLabels(event.target.checked)}/> Relationship labels</label><div className="graph-display-kinds"><small>Relationship types</small>{relationshipKinds.length ? relationshipKinds.map(item => <label key={item}><input type="checkbox" checked={!visibleRelationshipKinds || visibleRelationshipKinds.includes(item)} onChange={() => setVisibleRelationshipKinds(current => { if (!current) return relationshipKinds.filter(kind => kind !== item); return current.includes(item) ? current.filter(kind => kind !== item) : [...current, item] })}/>{item}</label>) : <span>No relationships</span>}<button onClick={() => setVisibleRelationshipKinds(null)} disabled={!visibleRelationshipKinds}>Show all types</button></div></div>}
     {selectionMenuOpen && <div className="graph-selection-popover"><header><b>Selection tools</b><button onClick={() => setSelectionMenuOpen(false)} aria-label="Close selection tools">×</button></header><div className="graph-selection-actions"><button onClick={() => setLassoMode(value => !value)}>{lassoMode ? 'Disable area select' : 'Enable area select'}</button><button onClick={copySelection} disabled={!selectedEntities.length}>Copy values</button><button onClick={exportSelection} disabled={!selectedEntities.length}>Export selection</button><button onClick={showSelectedNeighborhood} disabled={!selectedIds.length}>{neighborhoodOnly ? 'Show full graph' : 'Selected neighborhood'}</button><button onClick={showSelectedComponents} disabled={!selectedIds.length}>{componentOnly ? 'Show full graph' : 'Connected component'}</button></div><label className="graph-selection-depth">Neighborhood depth<select value={analysisDepth} onChange={event => setAnalysisDepth(Number(event.target.value))}><option value={1}>1 hop</option><option value={2}>2 hops</option><option value={3}>3 hops</option></select></label><form className="graph-selection-save" onSubmit={event => { event.preventDefault(); saveSelectionSet() }}><input value={selectionSetName} onChange={event => setSelectionSetName(event.target.value)} placeholder="Selection set name"/><button disabled={!selectedIds.length || !selectionSetName.trim()}>Save set</button></form>{selectionSets.length > 0 && <div className="graph-selection-sets"><small>Saved sets</small>{selectionSets.map(item => <div key={item.name}><button onClick={() => applySelectionSet(item)} title={`Load ${item.name}`}>{item.name}<span>{item.ids.length}</span></button><button onClick={() => deleteSelectionSet(item.name)} aria-label={`Delete ${item.name}`}>×</button></div>)}</div>}</div>}
   </section>
