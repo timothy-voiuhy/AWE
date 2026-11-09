@@ -64,6 +64,11 @@ class DockerOperationManager:
             if not item: raise DockerOperationNotFound(operation_id)
             return item.model_copy(deep=True)
 
+    def recent_tool_runs(self, limit: int = 30) -> list[DockerOperation]:
+        with self._lock:
+            runs = [item for item in reversed(list(self._items.values())) if item.kind.startswith(("tool.", "composite."))]
+            return [item.model_copy(deep=True, update={"logs": []}) for item in runs[:limit]]
+
     def cancel(self, operation_id: str) -> DockerOperation:
         with self._lock:
             item = self._items.get(operation_id)
@@ -262,6 +267,10 @@ class DockerOperationManager:
             with self._lock:
                 containers = self._containers.get(oid, [])
                 self._containers[oid] = [item for item in containers if item is not container]
+            try:
+                container.remove(force=True)
+            except Exception as exc:
+                self._log(oid, f"{prefix}Could not remove finished container: {exc}")
 
     def _result_data(self, result) -> dict:
         return asdict(result) if is_dataclass(result) else (result if isinstance(result, dict) else {"value": str(result)})

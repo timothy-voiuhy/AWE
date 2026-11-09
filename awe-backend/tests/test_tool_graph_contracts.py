@@ -71,6 +71,16 @@ def test_graph_enabled_coverage_is_complete():
     assert len(enabled) == len(TOOL_REGISTRY) - len(NON_GRAPH_TOOLS)
 
 
+def test_graph_transforms_inherit_tool_categories():
+    from awe_backend.api import _graph_transforms
+    from awe_backend.config import Settings
+
+    manifests = _graph_transforms(Settings())
+    assert manifests
+    assert all(item.category.strip() for item in manifests)
+    assert next(item for item in manifests if item.tool_key == "subfinder").category == TOOL_REGISTRY["subfinder"].category
+
+
 # Tools that actively probe, brute-force, fuzz, or exploit the target must be
 # gated behind explicit approval (execution_mode in the active/high_risk set).
 APPROVAL_REQUIRED = {

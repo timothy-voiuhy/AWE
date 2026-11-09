@@ -3,6 +3,8 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useParams } from 'react-router-dom'
 
 import { api, type DockerTool, type DockerToolInput } from '../../api/client'
+import { CategoryGroup, groupByCategory } from '../../components/CategoryGroup'
+import { OptionsMenu } from '../../components/OptionsMenu'
 
 const emptyTool: DockerToolInput = {
   key: '', display_name: '', category: 'architecture', image: '', description: '',
@@ -23,7 +25,7 @@ function graphToolGaps(tool: DockerTool) {
 
 function GraphToolCatalog({ tools, projectId }: { tools: DockerTool[]; projectId: string }) {
   return <section className="panel graph-tool-catalog"><header><div><b>Tool catalog</b><span>{tools.length} Docker tools · {tools.filter(item => item.graph_enabled).length} graph enabled</span></div></header>
-    <div>{tools.map(tool => {
+    <div className="catalog-groups">{groupByCategory(tools).map(group => <CategoryGroup key={group.category} name={group.category} count={group.entries.length}><div className="graph-tool-catalog-grid">{group.entries.map(tool => {
       const gaps = graphToolGaps(tool)
       return <article className={tool.graph_enabled ? 'graph-catalog-row enabled' : 'graph-catalog-row disabled'} key={tool.key}>
         <div><b>{tool.display_name}</b><span>{tool.category} · {tool.execution_mode} · {tool.source}</span><code>{tool.image}</code></div>
@@ -31,7 +33,7 @@ function GraphToolCatalog({ tools, projectId }: { tools: DockerTool[]; projectId
         <p>{tool.graph_enabled ? `Accepts ${tool.input_types.join(', ')} and produces ${tool.output_types.join(', ')} via ${tool.relationship_types.join(', ')}.` : gaps.join(' · ')}</p>
         {tool.graph_enabled && <Link className="button-link subtle" to={`/projects/${projectId}/network/transforms`}>Run transform</Link>}
       </article>
-    })}</div>
+    })}</div></CategoryGroup>)}</div>
   </section>
 }
 
@@ -52,7 +54,7 @@ export function GraphToolsPage() {
 
   return <main className="page feature-page graph-tools-page">
     
-    <header className="page-header graph-tools-header"><div><p className="eyebrow">Graph automation</p><h1>Graph Tools</h1><p className="muted">Review Docker graph compatibility and create custom graph-capable tools.</p></div><Link className="button-link" to={`/projects/${projectId}/network/transforms`}>Transforms</Link></header>
+    <header className="page-header graph-tools-header"><div><p className="eyebrow">Graph automation</p><h1>Graph Tools</h1><p className="muted">Review Docker graph compatibility and create custom graph-capable tools.</p></div><OptionsMenu label="Graph tool options"><Link to={`/projects/${projectId}/network/transforms`}>Transforms</Link></OptionsMenu></header>
     {notice && <p className="success">{notice}</p>}{(create.isError || tools.isError) && <p className="error">{String((create.error || tools.error)?.message)}</p>}
     <section className="graph-tools-workbench">
       {sortedTools.length > 0 ? <GraphToolCatalog tools={sortedTools} projectId={projectId} /> : <section className="panel empty">No Docker tools are registered.</section>}

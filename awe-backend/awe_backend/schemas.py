@@ -399,6 +399,7 @@ class TransformManifest(BaseModel):
     id: str
     tool_key: str
     display_name: str
+    category: str = "Other"
     description: str = ""
     input_types: list[str] = Field(default_factory=list)
     output_types: list[str] = Field(default_factory=list)
@@ -420,6 +421,7 @@ class TransformStage(BaseModel):
 class TransformDefinitionInput(BaseModel):
     id: str = Field(default="", max_length=100)
     display_name: str = Field(min_length=1, max_length=200)
+    category: str = Field(default="Custom", min_length=1, max_length=80)
     description: str = Field(default="", max_length=2000)
     input_types: list[str] = Field(default_factory=lambda: ["target", "domain", "subdomain"], max_length=50)
     output_types: list[str] = Field(default_factory=lambda: ["subdomain"], max_length=50)

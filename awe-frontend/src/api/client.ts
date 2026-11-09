@@ -142,8 +142,8 @@ export interface GraphInvestigation { id:string; project_id:string; name:string;
 export interface GraphBundle { investigation:GraphInvestigation; entities:GraphEntity[]; relationships:GraphRelationship[]; revision:number }
 export interface GraphMergeResult { entity:GraphEntity; merged_entity_ids:string[]; rewired_relationships:number; removed_relationships:number; revision:number }
 export interface TransformStage { name:string; tool_keys:string[]; input_source:'seed'|'previous'; parameters:Record<string, unknown> }
-export interface TransformManifest { id:string; tool_key:string; display_name:string; description:string; input_types:string[]; output_types:string[]; relationship_types:string[]; mode:'passive'|'safe_active'|'active'|'high_risk'; requires_approval:boolean; scope_required:boolean; parameters:Array<Record<string,unknown>>; stages:TransformStage[] }
-export interface TransformDefinitionInput { id?:string; display_name:string; description:string; input_types:string[]; output_types:string[]; relationship_types:string[]; mode:'passive'|'safe_active'|'active'|'high_risk'; requires_approval:boolean; scope_required:boolean; parameters:Array<Record<string,unknown>>; stages:TransformStage[] }
+export interface TransformManifest { id:string; tool_key:string; display_name:string; category:string; description:string; input_types:string[]; output_types:string[]; relationship_types:string[]; mode:'passive'|'safe_active'|'active'|'high_risk'; requires_approval:boolean; scope_required:boolean; parameters:Array<Record<string,unknown>>; stages:TransformStage[] }
+export interface TransformDefinitionInput { id?:string; display_name:string; category:string; description:string; input_types:string[]; output_types:string[]; relationship_types:string[]; mode:'passive'|'safe_active'|'active'|'high_risk'; requires_approval:boolean; scope_required:boolean; parameters:Array<Record<string,unknown>>; stages:TransformStage[] }
 export interface TransformJob { id:string; project_id:string; investigation_id:string; transform_id:string; status:'queued'|'running'|'completed'|'failed'|'cancelled'|'approval_required'; entity_ids:string[]; operation_id:string; parameters:Record<string,unknown>; message:string; created_at:string; completed_at:string|null; outputs_ingested?:boolean; progress_completed?:number; progress_total?:number; logs?:string[] }
 export type EvidenceKind = 'tool_output'|'http'|'screenshot'|'note'|'finding'|'file'|'manual'
 export interface EvidenceInput { investigation_id?:string; title:string; summary:string; kind:EvidenceKind; source_type:string; source_id:string; entity_ids:string[]; relationship_ids:string[]; tags:string[]; data:Record<string,unknown> }
@@ -332,6 +332,7 @@ export const api = {
   listDockerTools:()=>request<DockerTool[]>('/docker/tools'),
   dockerStatus:()=>request<{available:boolean;version:string;message:string}>('/docker/status'),
   dockerOperation:(id:string)=>request<DockerOperation>(`/docker/operations/${id}`),
+  recentDockerToolRuns:()=>request<DockerOperation[]>('/docker/operations'),
   cancelDockerOperation:(id:string)=>request<DockerOperation>(`/docker/operations/${id}/cancel`,{method:'POST'}),
   runDockerTool:(projectId:string,key:string,params:Record<string,unknown>,output_subdir:string,options:{investigation_id?:string;ingest_to_graph?:boolean;approved?:boolean}={})=>request<DockerOperation>(`/projects/${projectId}/docker/tools/${encodeURIComponent(key)}/runs`,{method:'POST',body:JSON.stringify({params,output_subdir,...options})}),
   listVault:(id:string)=>request<VaultItem[]>(`/projects/${id}/vault`),

@@ -3,6 +3,8 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useParams } from 'react-router-dom'
 
 import { api, type DockerTool, type ToolParamSpec, type TransformDefinitionInput, type TransformManifest, type TransformStage } from '../../api/client'
+import { CategoryGroup, groupByCategory } from '../../components/CategoryGroup'
+import { OptionsMenu } from '../../components/OptionsMenu'
 
 function valueFor(spec: ToolParamSpec, values: Record<string, unknown>) {
   if (values[spec.key] !== undefined) return values[spec.key]
@@ -21,7 +23,7 @@ function ParameterFields({ specs, values, onChange }: { specs: Array<Record<stri
 }
 
 const emptyComposite: TransformDefinitionInput = {
-  id: '', display_name: 'Enumerate live subdomains', description: 'Run multiple subdomain tools, tunnel results into live probing, and ingest only the final graph-ready output.',
+  id: '', display_name: 'Enumerate live subdomains', category: 'subdomain', description: 'Run multiple subdomain tools, tunnel results into live probing, and ingest only the final graph-ready output.',
   input_types: ['target', 'domain', 'subdomain'], output_types: ['subdomain'], relationship_types: ['has_subdomain'],
   mode: 'safe_active', requires_approval: false, scope_required: true, parameters: [
     { key: 'domain', label: 'Target domain', type: 'text', default: '' },
@@ -38,14 +40,15 @@ function csv(value: string) {
 }
 
 function TransformCatalog({ transforms, selectedId, onSelect, onDelete }: { transforms: TransformManifest[]; selectedId: string; onSelect: (id: string) => void; onDelete: (id: string) => void }) {
+  const groups = groupByCategory(transforms)
   return <section className="panel transform-catalog"><header><div><b>Transform catalog</b><span>{transforms.length} available graph transforms</span></div></header>
-    <div>{transforms.map(item => <article className={item.id === selectedId ? 'selected' : ''} key={item.id}>
+    <div className="catalog-groups">{groups.map(group => <CategoryGroup key={group.category} name={group.category} count={group.entries.length}><div className="transform-catalog-grid">{group.entries.map(item => <article className={item.id === selectedId ? 'selected' : ''} key={item.id}>
       <header><div><b>{item.display_name}</b><span>{item.mode}{item.requires_approval ? ' · approval required' : ''}{item.stages?.length ? ` · ${item.stages.length} stages` : ' · single tool'}</span></div><button type="button" onClick={() => onSelect(item.id)}>Select</button></header>
       <p>{item.description || 'No transform description provided.'}</p>
       <dl><dt>Tool</dt><dd><code>{item.tool_key}</code></dd><dt>Inputs</dt><dd>{item.input_types.join(', ') || 'None declared'}</dd><dt>Outputs</dt><dd>{item.output_types.join(', ') || 'None declared'}</dd><dt>Relationships</dt><dd>{item.relationship_types.join(', ') || 'None declared'}</dd></dl>
       {item.stages?.length ? <ol className="transform-stage-list">{item.stages.map((stage, index) => <li key={`${item.id}-${index}`}><b>{stage.name || `Stage ${index + 1}`}</b><span>{stage.tool_keys.join(', ')} · input: {stage.input_source}</span></li>)}</ol> : null}
       {item.id.startsWith('custom:') && <button type="button" className="subtle" onClick={() => onDelete(item.id)}>Delete custom transform</button>}
-    </article>)}</div>
+    </article>)}</div></CategoryGroup>)}</div>
   </section>
 }
 
@@ -56,6 +59,7 @@ function CompositeBuilder({ tools, value, onChange, onSave, saving }: { tools: D
     <div className="graph-tool-editor-grid">
       <label>Id<input value={value.id || ''} onChange={event => onChange({ ...value, id: event.target.value })} placeholder="custom:live-subdomains" /></label>
       <label>Display name<input value={value.display_name} onChange={event => onChange({ ...value, display_name: event.target.value })} /></label>
+      <label>Category<input value={value.category} onChange={event => onChange({ ...value, category: event.target.value })} placeholder="Subdomain" required /></label>
       <label>Mode<select value={value.mode} onChange={event => onChange({ ...value, mode: event.target.value as TransformDefinitionInput['mode'] })}><option value="passive">Passive</option><option value="safe_active">Safe active</option><option value="active">Active</option><option value="high_risk">High risk</option></select></label>
       <label className="wide">Description<input value={value.description} onChange={event => onChange({ ...value, description: event.target.value })} /></label>
       <label>Input types<input value={value.input_types.join(', ')} onChange={event => onChange({ ...value, input_types: csv(event.target.value) })} /></label>
@@ -115,10 +119,10 @@ export function NetworkTransformsPage() {
 
   return <main className="page feature-page network-transforms-page">
     
-    <header className="page-header graph-tools-header"><div><p className="eyebrow">Network</p><h1>Transforms</h1><p className="muted">Run graph-capable Docker tools against selected investigation entities.</p></div><div className="network-transform-actions"><Link className="button-link subtle" to={`/projects/${projectId}/network/tools`}>Tool catalog</Link><Link className="button-link" to={`/projects/${projectId}/network/logs`}>Live logs</Link></div></header>
+    <header className="page-header graph-tools-header"><div><p className="eyebrow">Network</p><h1>Transforms</h1><p className="muted">Run graph-capable Docker tools against selected investigation entities.</p></div><OptionsMenu label="Transform options"><Link to={`/projects/${projectId}/network/tools`}>Tool catalog</Link><Link to={`/projects/${projectId}/network/logs`}>Live logs</Link></OptionsMenu></header>
     {notice && <p className="success">{notice}</p>}{(run.isError || job.isError || transforms.isError || graph.isError || saveComposite.isError || deleteComposite.isError) && <p className="error">{String((run.error || job.error || transforms.error || graph.error || saveComposite.error || deleteComposite.error)?.message)}</p>}
     <section className="network-transforms-workbench">
-      <section className="panel graph-tool-runner"><header><div><b>Run graph transform</b><span>Outputs are parsed and attached to the selected investigation.</span></div><span className={`transform-risk risk-${selected?.mode || 'passive'}`}>{selected?.mode || 'passive'}</span></header><label>Investigation<select value={investigationId} onChange={event => setInvestigationId(event.target.value)}>{investigations.data?.map(item => <option value={item.id} key={item.id}>{item.name}</option>)}</select></label><label>Transform<select value={transformId} onChange={event => setTransformId(event.target.value)}>{transforms.data?.map(item => <option value={item.id} key={item.id}>{item.display_name} · {item.mode}</option>)}</select></label><label>Input entity<select value={entityId} onChange={event => setEntityId(event.target.value)}>{compatibleEntities.map(entity => <option value={entity.id} key={entity.id}>{entity.label} · {entity.kind}</option>)}</select></label>{selected && <><p className="muted">{selected.description}</p><small>Accepts: {selected.input_types.join(', ')} · Produces: {selected.output_types.join(', ')} · Relationships: {selected.relationship_types.join(', ')}</small><ParameterFields specs={selected.parameters} values={parameters} onChange={(key, value) => setParameters(current => ({ ...current, [key]: value }))} /><button onClick={() => run.mutate()} disabled={!selected || !entityId || run.isPending}>{run.isPending ? 'Starting...' : 'Run transform'}</button></>}</section>
+      <section className="panel graph-tool-runner"><header><div><b>Run graph transform</b><span>Outputs are parsed and attached to the selected investigation.</span></div><span className={`transform-risk risk-${selected?.mode || 'passive'}`}>{selected?.mode || 'passive'}</span></header><label>Investigation<select value={investigationId} onChange={event => setInvestigationId(event.target.value)}>{investigations.data?.map(item => <option value={item.id} key={item.id}>{item.name}</option>)}</select></label><label>Transform<select value={transformId} onChange={event => setTransformId(event.target.value)}>{groupByCategory(transforms.data || []).map(group => <optgroup label={group.category} key={group.category}>{group.entries.map(item => <option value={item.id} key={item.id}>{item.display_name} · {item.mode}</option>)}</optgroup>)}</select></label><label>Input entity<select value={entityId} onChange={event => setEntityId(event.target.value)}>{compatibleEntities.map(entity => <option value={entity.id} key={entity.id}>{entity.label} · {entity.kind}</option>)}</select></label>{selected && <><p className="muted">{selected.description}</p><small>Accepts: {selected.input_types.join(', ')} · Produces: {selected.output_types.join(', ')} · Relationships: {selected.relationship_types.join(', ')}</small><ParameterFields specs={selected.parameters} values={parameters} onChange={(key, value) => setParameters(current => ({ ...current, [key]: value }))} /><button onClick={() => run.mutate()} disabled={!selected || !entityId || run.isPending}>{run.isPending ? 'Starting...' : 'Run transform'}</button></>}</section>
       <section className="panel graph-tool-status"><header><b>Execution status</b><span>{job.data?.status || 'No graph run selected'}</span></header>{job.data ? <><p>{job.data.message || 'Waiting for operation output...'}</p><div className="transform-progress-track"><span style={{ width: `${job.data.progress_total ? Math.round(((job.data.progress_completed || 0) / job.data.progress_total) * 100) : job.data.status === 'completed' ? 100 : 18}%` }} /></div><pre>{job.data.logs?.slice(-30).join('\n') || 'No logs yet.'}</pre><Link className="button-link subtle" to={`/projects/${projectId}/network/logs`}>Open full logs</Link></> : <p className="muted">Run a transform to monitor parsing, approval, and graph ingestion.</p>}</section>
     </section>
     <CompositeBuilder tools={tools.data || []} value={composite} onChange={setComposite} onSave={() => saveComposite.mutate()} saving={saveComposite.isPending} />

@@ -227,6 +227,7 @@ def _default_composite_transforms(available: set[str]) -> list[TransformManifest
         id="composite:enumerate_subdomains",
         tool_key="composite:enumerate_subdomains",
         display_name="Enumerate subdomains",
+        category="subdomain",
         description="Collect subdomains from multiple enumeration tools, tunnel the deduped list into httpx, and ingest only live hosts.",
         input_types=["target", "domain", "subdomain"],
         output_types=["subdomain"],
@@ -289,6 +290,7 @@ def _graph_transforms(settings: Settings, project_dir: Path | None = None) -> li
         mode = getattr(tool, "execution_mode", "passive")
         manifests.append(TransformManifest(
             id=f"docker:{key}", tool_key=key, display_name=label,
+            category=getattr(tool, "category", "Other") or "Other",
             description=getattr(tool, "description", ""),
             input_types=list(tool.input_types),
             output_types=list(tool.output_types),
@@ -316,6 +318,7 @@ def _graph_transforms(settings: Settings, project_dir: Path | None = None) -> li
             continue
         manifests.append(TransformManifest(
             id=f"docker:{key}", tool_key=key, display_name=tool.display_name,
+            category=getattr(tool, "category", "Other") or "Other",
             description=getattr(tool, "description", ""),
             input_types=list(tool.input_types), output_types=list(tool.output_types),
             relationship_types=list(getattr(tool, "relationship_types", ())) or ["discovered_by"],
@@ -2184,6 +2187,7 @@ def save_transform_definition(project_id: str, payload: TransformDefinitionInput
             id=transform_id,
             tool_key=transform_id,
             display_name=payload.display_name,
+            category=payload.category,
             description=payload.description,
             input_types=payload.input_types,
             output_types=payload.output_types,
@@ -2823,6 +2827,11 @@ def docker_status(service: DockerService = Depends(get_docker_service)) -> dict:
 def get_docker_operation(operation_id: str, manager: DockerOperationManager = Depends(get_docker_operation_manager)) -> DockerOperation:
     try: return manager.get(operation_id)
     except DockerOperationNotFound as exc: raise HTTPException(status_code=404, detail="Operation not found") from exc
+
+
+@router.get("/docker/operations", response_model=list[DockerOperation], tags=["docker"])
+def list_recent_docker_tool_runs(manager: DockerOperationManager = Depends(get_docker_operation_manager)) -> list[DockerOperation]:
+    return manager.recent_tool_runs()
 
 
 @router.post("/docker/operations/{operation_id}/cancel", response_model=DockerOperation, tags=["docker"])
