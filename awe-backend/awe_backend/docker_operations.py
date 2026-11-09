@@ -21,15 +21,26 @@ class DockerOperationNotFound(LookupError):
 
 
 class DockerOperationManager:
-    def __init__(self, storage_path: Path | None = None, max_logs: int = 2000, max_operations: int = 1000):
+    def __init__(self, storage_path: Path | None = None, max_logs: int = 2000, max_operations: int = 1000,
+                 workspace_dir: Path | None = None, docker_workspace_dir: Path | None = None):
         self._max_logs = max_logs
         self._max_operations = max_operations
         self._storage_path = storage_path
+        self._workspace_dir = workspace_dir.resolve() if workspace_dir else None
+        self._docker_workspace_dir = docker_workspace_dir
         self._items: dict[str, DockerOperation] = {}
         self._cancelled: set[str] = set()
         self._containers: dict[str, list[object]] = {}
         self._lock = threading.RLock()
         self._load()
+
+    def _docker_host_path(self, path: Path) -> Path:
+        if self._workspace_dir and self._docker_workspace_dir:
+            try:
+                return self._docker_workspace_dir / path.resolve().relative_to(self._workspace_dir)
+            except ValueError:
+                pass
+        return path
 
     def _load(self) -> None:
         if not self._storage_path or not self._storage_path.is_file():
@@ -325,12 +336,16 @@ class DockerOperationManager:
         command = tool.build_command(**params)
         self._log(oid, f"{prefix}Starting {tool.image}: {command}")
         environment = tool.build_environment(**params)
+        volumes = {
+            str(self._docker_host_path(Path(source))): mount
+            for source, mount in tool.get_volumes(str(output_dir), str(input_dir) if input_dir else None).items()
+        }
         container = service._client().containers.run(
             image=tool.image,
             command=["-c", command],
             entrypoint=["sh"],
             name=tool.container_name(),
-            volumes=tool.get_volumes(str(output_dir), str(input_dir) if input_dir else None),
+            volumes=volumes,
             environment=environment or None,
             labels={"awe.operation_id": oid},
             detach=True,

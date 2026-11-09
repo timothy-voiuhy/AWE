@@ -78,13 +78,22 @@ def test_amass_output_directory_is_owned_by_image_user(tmp_path):
     client.containers.run.return_value = container
     service = Mock()
     service._client.return_value = client
-    manager = DockerOperationManager()
+    workspace = tmp_path / "backend-workspace"
+    host_workspace = tmp_path / "docker-host-workspace"
+    output_dir = workspace / "project-1" / "amass-output"
+    input_dir = workspace / "project-1" / "stage-input"
+    input_dir.mkdir(parents=True)
+    manager = DockerOperationManager(workspace_dir=workspace, docker_workspace_dir=host_workspace)
     manager._items["operation"] = DockerOperation(id="operation", kind="tool.amass", status="running")
 
     with patch("awe_backend.docker_operations.os.chown") as chown:
-        manager._run_tool_sync("operation", "amass", {"domain": "example.com"}, tmp_path, service)
+        manager._run_tool_sync("operation", "amass", {"domain": "example.com"}, output_dir, service, input_dir)
 
-    chown.assert_called_once_with(tmp_path, 1000, 1000)
+    chown.assert_called_once_with(output_dir, 1000, 1000)
+    assert client.containers.run.call_args.kwargs["volumes"] == {
+        str(host_workspace / "project-1" / "amass-output"): {"bind": "/output", "mode": "rw"},
+        str(host_workspace / "project-1" / "stage-input"): {"bind": "/input", "mode": "ro"},
+    }
 
 
 def test_composite_resume_skips_checkpointed_tool_and_keeps_progress(tmp_path):

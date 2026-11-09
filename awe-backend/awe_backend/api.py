@@ -631,12 +631,12 @@ def get_docker_service() -> DockerService: return DockerService()
 
 
 @lru_cache
-def _docker_operation_manager(workspace: str) -> DockerOperationManager:
-    return DockerOperationManager(Path(workspace) / ".awe-docker-operations.json")
+def _docker_operation_manager(workspace: str, docker_workspace: str) -> DockerOperationManager:
+    return DockerOperationManager(Path(workspace) / ".awe-docker-operations.json", workspace_dir=Path(workspace), docker_workspace_dir=Path(docker_workspace))
 
 
 def get_docker_operation_manager(settings: Settings = Depends(get_settings)) -> DockerOperationManager:
-    return _docker_operation_manager(str(settings.workspace_dir.resolve()))
+    return _docker_operation_manager(str(settings.workspace_dir.resolve()), str(settings.docker_workspace_dir))
 
 
 def get_vault_service(settings: Settings = Depends(get_settings)) -> VaultService:
