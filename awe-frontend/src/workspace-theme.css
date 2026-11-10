@@ -289,6 +289,16 @@ tbody tr:hover { background: #1a2b3d; }
 .graph-evidence-panel, .graph-evidence-panel article, .host-nodes article,
 .network-host, .scope-row { border-radius: 0; }
 .scope-row { background: transparent; border-top: 0; border-right: 0; border-bottom-color: var(--workspace-soft-line); }
+.repeater-page { padding-top: 10px; }
+.repeater-tabbar { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: stretch; min-width: 0; background: #151d27; border-bottom: 1px solid var(--workspace-line); }
+.repeater-tabs { min-width: 0; padding: 4px 0 0; background: transparent; border: 0; border-radius: 0; }
+.repeater-tabs > button { border-radius: 3px 3px 0 0; }
+.repeater-tabbar .page-options { display: grid; align-self: stretch; place-items: center; margin: 0; padding: 0 4px; }
+.repeater-tabbar .page-options > summary,
+.repeater-tabbar .page-options > summary:hover,
+.repeater-tabbar .page-options[open] > summary { background: transparent; border-color: transparent; }
+.repeater-tabbar .page-options > summary:hover { color: var(--workspace-blue); }
+.repeater-actions { margin-bottom: 8px; padding: 6px 0; border-top: 0; border-radius: 0; }
 .vault-page { width: min(1400px, calc(100% - 64px)); padding-top: 26px; }
 .vault-header-stats > div { background: transparent; border: 0; border-left: 1px solid var(--workspace-line); border-radius: 0; }
 .vault-content-header { background: transparent; border: 0; border-bottom: 1px solid var(--workspace-line); border-radius: 0; padding: 10px 0 18px; }
