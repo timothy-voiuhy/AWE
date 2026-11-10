@@ -579,3 +579,7 @@ tbody tr:hover { background: #1a2b3d; }
   .graph-tool-runner > header > div:first-child > span { display: none; }
 }
 .transform-catalog > header > div, .pipeline-parameter-editor > header { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 8px; }
+
+@media (min-width: 851px) {
+  .page.jwt-page { width: calc(100% - 32px); max-width: none; }
+}
