@@ -80,6 +80,33 @@ class AweRepository:
         )
         return [_flatten(d) for d in cursor]
 
+    def dashboard_metrics(self) -> dict[str, Any]:
+        """Small aggregate used by the portfolio dashboard without loading result bodies."""
+        session_filter = {
+            "project_dir": self._project_dir,
+            "pipeline_key": {"$ne": self.PROXY_SESSION_KEY},
+        }
+        latest = self._db.scan_sessions.find_one(
+            session_filter,
+            {"started_at": 1, "completed_at": 1},
+            sort=[("started_at", -1)],
+        )
+        session_ids = self._all_session_ids_including_proxy()
+        result_filter = {"session_id": {"$in": session_ids}} if session_ids else {"_id": {"$exists": False}}
+        return {
+            "session_count": self._db.scan_sessions.count_documents(session_filter),
+            "result_count": self._db.results.count_documents(result_filter),
+            "reviewed_count": self._db.reviewed_results.count_documents({
+                "project_dir": self._project_dir,
+                "reviewed": True,
+            }),
+            "active_sessions": self._db.scan_sessions.count_documents({
+                **session_filter,
+                "status": {"$in": ["queued", "running", "stopping"]},
+            }),
+            "last_session_at": (latest or {}).get("completed_at") or (latest or {}).get("started_at"),
+        }
+
     def delete_session(self, session_id: str):
         oid = _oid(session_id)
         self._db.results.delete_many({"session_id": session_id})

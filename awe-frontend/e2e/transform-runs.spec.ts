@@ -9,7 +9,7 @@ async function signInAndGetProject(page: Page) {
   await page.getByLabel('Username').fill(username)
   await page.locator('input[autocomplete="current-password"]').fill(password)
   await page.getByRole('button', { name: 'Sign in' }).click()
-  await expect(page.getByRole('heading', { name: 'Start an engagement' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Operations dashboard' })).toBeVisible()
 
   const projects = await page.request.get('/api/v1/projects')
   expect(projects.ok()).toBeTruthy()

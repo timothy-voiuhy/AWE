@@ -76,6 +76,8 @@ class FakeJobManager:
 class FakeRepository:
     deleted_sessions = []
     reviewed_results = set()
+    def dashboard_metrics(self):
+        return {"session_count": 1, "result_count": 3, "reviewed_count": 1, "active_sessions": 0, "last_session_at": "2026-01-01T00:00:00+00:00"}
     def list_sessions(self, limit):
         return [{
             "id": "session-1", "pipeline_key": "quick", "pipeline_name": "Quick",
@@ -228,6 +230,15 @@ def test_health_and_project_endpoints(tmp_path: Path, monkeypatch):
         )
         assert created.status_code == 201
         project = created.json()
+
+        dashboard = client.get("/api/v1/dashboard")
+        assert dashboard.status_code == 200
+        assert dashboard.json()["total_projects"] == 1
+        assert dashboard.json()["configured_targets"] == 1
+        assert dashboard.json()["total_sessions"] == 1
+        assert dashboard.json()["total_results"] == 3
+        assert dashboard.json()["reviewed_results"] == 1
+        assert dashboard.json()["projects"][0]["id"] == project["id"]
 
         settings_payload = {
             "default_threads": 24,

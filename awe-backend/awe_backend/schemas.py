@@ -49,6 +49,25 @@ class Project(BaseModel):
     updated_at: datetime
 
 
+class DashboardProject(Project):
+    session_count: int = 0
+    result_count: int = 0
+    reviewed_count: int = 0
+    active_runs: int = 0
+    last_activity: datetime
+
+
+class DashboardOverview(BaseModel):
+    total_projects: int = 0
+    configured_targets: int = 0
+    recent_projects: int = 0
+    total_sessions: int = 0
+    total_results: int = 0
+    reviewed_results: int = 0
+    active_runs: int = 0
+    projects: list[DashboardProject] = Field(default_factory=list)
+
+
 class ScopeEntry(BaseModel):
     value: str = Field(min_length=1, max_length=2048)
     entry_type: Literal["domain", "wildcard", "url", "regex"] = "domain"

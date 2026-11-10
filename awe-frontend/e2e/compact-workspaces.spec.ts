@@ -9,7 +9,7 @@ test('compact workspaces keep secondary actions available', async ({ page }) => 
   await page.getByLabel('Username').fill(username)
   await page.locator('input[autocomplete="current-password"]').fill(password)
   await page.getByRole('button', { name: 'Sign in' }).click()
-  await expect(page.getByRole('heading', { name: 'Start an engagement' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Operations dashboard' })).toBeVisible()
   const projects = await page.request.get('/api/v1/projects')
   const projectId = (await projects.json())[0]?.id as string
   expect(projectId).toBeTruthy()
@@ -101,7 +101,7 @@ test('vault collection actions open a note composer dialog', async ({ page }) =>
   await page.getByLabel('Username').fill(username)
   await page.locator('input[autocomplete="current-password"]').fill(password)
   await page.getByRole('button', { name: 'Sign in' }).click()
-  await expect(page.getByRole('heading', { name: 'Start an engagement' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Operations dashboard' })).toBeVisible()
   await page.route('**/api/v1/vault/categories', route => route.fulfill({ json: [{ id: 'test-collection', name: 'Research', accent: '#89b4fa' }] }))
   let savedNote = ''
   await page.route('**/api/v1/vault/categories/test-collection/items', async route => {
@@ -137,7 +137,7 @@ test('secondary workspace pages start at their working controls', async ({ page 
   await page.getByLabel('Username').fill(username)
   await page.locator('input[autocomplete="current-password"]').fill(password)
   await page.getByRole('button', { name: 'Sign in' }).click()
-  await expect(page.getByRole('heading', { name: 'Start an engagement' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Operations dashboard' })).toBeVisible()
   const projects = await page.request.get('/api/v1/projects')
   const projectId = (await projects.json())[0]?.id as string
   expect(projectId).toBeTruthy()
@@ -162,7 +162,7 @@ test('page options share the first control row on narrow desktop', async ({ page
   await page.getByLabel('Username').fill(username)
   await page.locator('input[autocomplete="current-password"]').fill(password)
   await page.getByRole('button', { name: 'Sign in' }).click()
-  await expect(page.getByRole('heading', { name: 'Start an engagement' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Operations dashboard' })).toBeVisible()
   const projectId = (await (await page.request.get('/api/v1/projects')).json())[0]?.id as string
   expect(projectId).toBeTruthy()
   await expect(page.getByRole('button', { name: 'Open navigation sidebar' })).toBeVisible()
@@ -204,7 +204,7 @@ test('touch mobile uses the edge swipe zone without a top navigation button', as
     await page.getByLabel('Username').fill(username)
     await page.locator('input[autocomplete="current-password"]').fill(password)
     await page.getByRole('button', { name: 'Sign in' }).click()
-    await expect(page.getByRole('heading', { name: 'Start an engagement' })).toBeVisible()
+    await expect(page.getByRole('heading', { name: 'Operations dashboard' })).toBeVisible()
 
     await expect(page.getByRole('button', { name: 'Open navigation sidebar' })).not.toBeVisible()
     await expect(page.locator('.sidebar-swipe-zone')).toBeVisible()

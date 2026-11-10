@@ -11,6 +11,25 @@ export interface CreateProjectInput {
   target: string
 }
 
+export interface DashboardProject extends Project {
+  session_count: number
+  result_count: number
+  reviewed_count: number
+  active_runs: number
+  last_activity: string
+}
+
+export interface DashboardOverview {
+  total_projects: number
+  configured_targets: number
+  recent_projects: number
+  total_sessions: number
+  total_results: number
+  reviewed_results: number
+  active_runs: number
+  projects: DashboardProject[]
+}
+
 export type ScopeEntryType = 'domain' | 'wildcard' | 'url' | 'regex'
 
 export interface ScopeEntry {
@@ -230,6 +249,7 @@ export const api = {
     }),
   logout: () => request<void>('/auth/logout', { method: 'POST' }),
   listProjects: () => request<Project[]>('/projects'),
+  getDashboard: () => request<DashboardOverview>('/dashboard'),
   getProject: (projectId: string) => request<Project>(`/projects/${projectId}`),
   createProject: (input: CreateProjectInput) =>
     request<Project>('/projects', {

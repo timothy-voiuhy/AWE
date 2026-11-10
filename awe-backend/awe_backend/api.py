@@ -10,7 +10,7 @@ import sys
 import threading
 import zipfile
 from dataclasses import asdict, is_dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import docker.errors
 from pathlib import Path
 from functools import lru_cache
@@ -47,7 +47,7 @@ from .schemas import (
     LoginRequest,
     SetupRequest,
     SetupStatus,
-    Project,
+    Project, DashboardProject, DashboardOverview,
     ProjectCreate,
     ProjectUpdate,
     ScopeConfig,
@@ -771,6 +771,48 @@ def list_pipelines(
 @router.get("/projects", response_model=list[Project], tags=["projects"])
 def list_projects(store: ProjectStore = Depends(get_project_store)) -> list[Project]:
     return store.list()
+
+
+@router.get("/dashboard", response_model=DashboardOverview, tags=["projects"])
+def get_dashboard(
+    store: ProjectStore = Depends(get_project_store),
+    repositories: LegacyRepositoryFactory = Depends(get_repository_factory),
+    jobs: PipelineJobManager = Depends(get_job_manager),
+) -> DashboardOverview:
+    projects = store.list()
+    summaries: list[DashboardProject] = []
+    for project in projects:
+        metrics = repositories(store.project_dir(project.id)).dashboard_metrics()
+        memory_active = sum(
+            item.status in {"queued", "running", "stopping"}
+            for item in jobs.list_for_project(project.id)
+        )
+        last_activity = project.updated_at
+        if metrics.get("last_session_at"):
+            session_activity = datetime.fromisoformat(str(metrics["last_session_at"]).replace("Z", "+00:00"))
+            if session_activity.tzinfo is None:
+                session_activity = session_activity.replace(tzinfo=timezone.utc)
+            last_activity = max(last_activity, session_activity)
+        summaries.append(DashboardProject(
+            **project.model_dump(),
+            session_count=int(metrics.get("session_count", 0)),
+            result_count=int(metrics.get("result_count", 0)),
+            reviewed_count=int(metrics.get("reviewed_count", 0)),
+            active_runs=max(int(metrics.get("active_sessions", 0)), memory_active),
+            last_activity=last_activity,
+        ))
+    summaries.sort(key=lambda item: item.last_activity, reverse=True)
+    recent_cutoff = datetime.now(timezone.utc) - timedelta(days=7)
+    return DashboardOverview(
+        total_projects=len(summaries),
+        configured_targets=sum(bool(item.target) for item in summaries),
+        recent_projects=sum(item.last_activity >= recent_cutoff for item in summaries),
+        total_sessions=sum(item.session_count for item in summaries),
+        total_results=sum(item.result_count for item in summaries),
+        reviewed_results=sum(item.reviewed_count for item in summaries),
+        active_runs=sum(item.active_runs for item in summaries),
+        projects=summaries,
+    )
 
 
 @router.post(
