@@ -358,3 +358,65 @@ tbody tr:hover { background: #1a2b3d; }
   .project-mark { width: 30px; height: 30px; }
   .mobile-nav { background: rgb(12 17 24 / 96%); border-top-color: var(--workspace-line); }
 }
+
+/* Keep page context in navigation and give each workbench its vertical space. */
+.page > .page-header:not(.docker-manager-header):not(.target-workspace-header) {
+  display: flex;
+  min-height: 28px;
+  justify-content: flex-end;
+  align-items: center;
+  margin-bottom: 10px;
+  padding: 0;
+  border: 0;
+}
+.page > .page-header:not(.docker-manager-header):not(.target-workspace-header) > div:first-child {
+  display: none;
+}
+.page > .page-header:not(.docker-manager-header):not(.target-workspace-header):has(> div:only-child),
+.page > .vault-page-header {
+  display: none !important;
+}
+.page > .page-header .pipeline-health,
+.page > .page-header .terminal-actions,
+.page > .page-header .results-header-actions { display: flex; align-items: center; gap: 8px; }
+.page > .page-header .pipeline-health { flex-direction: row; }
+.page > .page-header .page-options > summary,
+.page > .page-header .page-options > summary:hover,
+.page > .page-header .page-options[open] > summary {
+  background: transparent;
+  border-color: transparent;
+}
+.page > .page-header .page-options > summary:hover { color: var(--workspace-blue); }
+@media (max-width: 600px) {
+  .page > .page-header:not(.docker-manager-header):not(.target-workspace-header) { min-height: 26px; }
+}
+
+.vault-content-header { min-height: 52px; margin-bottom: 10px; padding: 7px 12px; }
+.vault-section-heading > i { height: 28px; }
+.vault-section-heading h2 { font-size: 15px; }
+.vault-section-heading .vault-label { display: none; }
+.vault-actions .page-options > summary,
+.vault-actions .page-options > summary:hover,
+.vault-actions .page-options[open] > summary { padding: 4px 8px; background: transparent; border-color: transparent; }
+.vault-composer-dialog { width: min(520px, calc(100vw - 24px)); max-height: calc(100dvh - 24px); padding: 0; overflow: auto; color: #e1e8f2; background: #151d27; border: 1px solid var(--workspace-line); }
+.vault-composer-dialog::backdrop { background: rgb(0 0 0 / 70%); }
+.vault-composer-dialog .vault-composer { margin: 0; border: 0; }
+.vault-composer-dialog .vault-composer-fields { grid-template-columns: 1fr; }
+.browser-empty, .ai-empty { display: grid; justify-items: center; gap: 10px; }
+.browser-empty button, .ai-empty button { width: fit-content; }
+
+.history-toolbar, .sitemap-toolbar, .evidence-toolbar, .network-log-summary { align-items: center; }
+.history-toolbar .page-options, .sitemap-toolbar .page-options,
+.evidence-toolbar .page-options, .network-log-summary .page-options { margin-left: auto; }
+.graphql-editor { overflow: visible; }
+.graphql-editor .page-options > summary,
+.graphql-editor .page-options > summary:hover,
+.graphql-editor .page-options[open] > summary { background: transparent; border-color: transparent; }
+.jwt-toolbar .page-options > summary,
+.jwt-toolbar .page-options > summary:hover,
+.jwt-toolbar .page-options[open] > summary { background: transparent; border-color: transparent; }
+.page > .page-header.graph-tools-header > div:first-child,
+.page > .page-header.network-logs-header > div:first-child,
+.page > .page-header.network-evidence-header > div:first-child { display: none !important; }
+.page > .page-header.network-logs-header,
+.page > .page-header.network-evidence-header { flex-direction: row; align-items: center; justify-content: flex-end; }

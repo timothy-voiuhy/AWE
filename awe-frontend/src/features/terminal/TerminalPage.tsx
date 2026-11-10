@@ -4,6 +4,7 @@ import { FitAddon } from '@xterm/addon-fit'
 import '@xterm/xterm/css/xterm.css'
 import { useMutation, useQuery } from '@tanstack/react-query'
 import { Link, useParams } from 'react-router-dom'
+import { OptionsMenu } from '../../components/OptionsMenu'
 import { api } from '../../api/client'
 
 const rejectedKeyExtensions = new Set([
@@ -137,7 +138,7 @@ export function TerminalPage() {
 
   return <main className={`page feature-page terminal-page${connected ? ' terminal-live' : ''}`}>
     {!connected && <>
-    <header className="page-header"><div><p className="eyebrow">Remote operations</p><h1>Terminal</h1><p className="muted">Interactive SSH session through the AWE backend broker.</p></div><div className="terminal-actions"><span className="live-dot">Disconnected</span><Link className="button-link" to={`/projects/${projectId}/terminal/config`}>＋ New profile</Link></div></header>
+    <header className="page-header"><div><p className="eyebrow">Remote operations</p><h1>Terminal</h1><p className="muted">Interactive SSH session through the AWE backend broker.</p></div><div className="terminal-actions"><span className="live-dot">Disconnected</span><OptionsMenu label="Terminal options"><Link to={`/projects/${projectId}/terminal/config`}>Manage profiles</Link></OptionsMenu></div></header>
     <section className="panel terminal-profile-picker">
       <header><div><p className="eyebrow">Connections</p><h2>Saved profiles</h2></div><span>{profiles.data?.length || 0} saved</span></header>
       {profiles.data?.map((item, i) => <article className={`terminal-profile-row${item.id === profile?.id ? ' selected' : ''}`} key={item.id}>

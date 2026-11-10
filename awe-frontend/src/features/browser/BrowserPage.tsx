@@ -2,6 +2,7 @@ import { FormEvent, useEffect, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import RFB from '@novnc/novnc'
 import { useParams } from 'react-router-dom'
+import { OptionsMenu } from '../../components/OptionsMenu'
 import { api, BrowserSession } from '../../api/client'
 
 export function BrowserPage() {
@@ -113,7 +114,7 @@ export function BrowserPage() {
   return <main className="page feature-page browser-page">
     <header className="page-header">
       <div><p className="eyebrow">Controlled browser</p><h1>Browser</h1><p className="muted">Interactive Chromium desktop routed through AWE’s proxy.</p></div>
-      <button onClick={() => create.mutate()} disabled={create.isPending}>{create.isPending ? 'Starting…' : 'New session'}</button>
+      <OptionsMenu label="Browser options"><button onClick={() => create.mutate()} disabled={create.isPending}>{create.isPending ? 'Starting…' : 'New session'}</button>{sessionId && <button className="danger" onClick={() => close.mutate()} disabled={close.isPending}>Close session</button>}</OptionsMenu>
     </header>
     <section className="browser-toolbar panel">
       <select value={sessionId} onChange={event => { setSessionId(event.target.value); const session = sessions.data?.find(item => item.id === event.target.value); if (session) setUrl(session.url) }}>
@@ -124,7 +125,6 @@ export function BrowserPage() {
         <input value={url} onChange={event => { editingUrl.current = true; setUrl(event.target.value) }} placeholder="https://target.example" disabled={!sessionId} />
         <button disabled={!sessionId || navigate.isPending}>{navigate.isPending ? 'Loading…' : 'Go'}</button>
       </form>
-      {sessionId && <button className="danger" onClick={() => close.mutate()}>Close</button>}
     </section>
     {(error || create.isError || navigate.isError) && <p className="error">{error || ((create.error || navigate.error) as Error)?.message}</p>}
     {sessionId && <section className="browser-stage panel">
@@ -132,6 +132,6 @@ export function BrowserPage() {
       <div ref={canvasHost} className="browser-vnc" tabIndex={0} aria-label="Interactive remote browser desktop" />
       <p className="muted">Click the remote desktop to focus it. Keyboard, scrolling, tabs, downloads, and browser chrome are handled by VNC.</p>
     </section>}
-    {!sessionId && <div className="panel empty">Create a browser session to begin.</div>}
+    {!sessionId && <div className="panel empty browser-empty"><span>Create a browser session to begin.</span><button type="button" onClick={() => create.mutate()} disabled={create.isPending}>{create.isPending ? 'Starting…' : 'New session'}</button></div>}
   </main>
 }

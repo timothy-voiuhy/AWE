@@ -2,6 +2,7 @@ import { useMemo } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useParams } from 'react-router-dom'
 
+import { OptionsMenu } from '../../components/OptionsMenu'
 import { api, type TransformJob, type TransformManifest } from '../../api/client'
 import { Spinner } from '../../components/Spinner'
 
@@ -69,9 +70,9 @@ export function NetworkLogsPage() {
 
   return <main className="page feature-page network-logs-page">
     
-    <header className="page-header network-logs-header"><div><p className="eyebrow">Network</p><h1>Transform Logs</h1><p className="muted">Live Docker output for graph transforms running from the Network workspace.</p></div><Link className="button-link" to={`/projects/${projectId}/network/tools`}>Graph Tools</Link></header>
+    <header className="page-header network-logs-header"><div><p className="eyebrow">Network</p><h1>Transform Logs</h1><p className="muted">Live Docker output for graph transforms running from the Network workspace.</p></div><OptionsMenu label="Transform log options"><Link to={`/projects/${projectId}/network/tools`}>Graph tools</Link></OptionsMenu></header>
     {(jobs.isError || transforms.isError || cancel.isError) && <p className="error">{String((jobs.error || transforms.error || cancel.error)?.message)}</p>}
-    <section className="panel network-log-summary"><div><strong>{jobs.data?.length || 0}</strong><span>Transform jobs</span></div><div><strong>{activeCount}</strong><span>Running now</span></div><button onClick={() => void jobs.refetch()}>Refresh</button></section>
+    <section className="panel network-log-summary"><div><strong>{jobs.data?.length || 0}</strong><span>Transform jobs</span></div><div><strong>{activeCount}</strong><span>Running now</span></div><OptionsMenu label="Transform log list options"><button onClick={() => void jobs.refetch()}>Refresh</button></OptionsMenu></section>
     <section className="network-log-grid">
       {jobs.data?.map(job => <TransformLogCard key={job.id} job={job} manifest={manifestById.get(job.transform_id)} onCancel={id => cancel.mutate(id)} />)}
       {!jobs.isPending && !jobs.data?.length && <div className="panel empty">No graph transform logs yet. Run a transform from Network or Graph Tools to see live Docker output here.</div>}

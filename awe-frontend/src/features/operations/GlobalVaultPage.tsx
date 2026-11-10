@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type ChangeEvent, type DragEvent, type FormEvent } from 'react'
 import { Link } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { OptionsMenu } from '../../components/OptionsMenu'
 import { api, type VaultCategory, type VaultItemRecord } from '../../api/client'
 
 const noteLanguages = ['txt', 'md', 'json', 'js', 'py', 'html', 'css', 'sql', 'yaml', 'xml', 'sh', 'http', 'c', 'cpp', 'go', 'rust', 'php', 'ruby']
@@ -25,6 +26,8 @@ export function GlobalVaultPage() {
   const [text, setText] = useState('')
   const [lang, setLang] = useState('txt')
   const fileInput = useRef<HTMLInputElement>(null)
+  const composerDialog = useRef<HTMLDialogElement>(null)
+  useEffect(() => { if (composer) composerDialog.current?.showModal(); else composerDialog.current?.close() }, [composer])
   const categories = useQuery({ queryKey: ['vault', 'categories'], queryFn: api.listVaultCategories })
   const items = useQuery({ queryKey: ['vault', 'items', cid], queryFn: () => api.listVaultItems(cid), enabled: !!cid })
   useEffect(() => { if (!cid && categories.data?.[0]) setCid(categories.data[0].id) }, [cid, categories.data])
@@ -112,14 +115,14 @@ export function GlobalVaultPage() {
         {!selected ? <div className="panel empty vault-no-selection"><span className="vault-empty-icon">✦</span><strong>Create or select a collection</strong><span>Start a collection on the left to keep your vault tidy.</span></div> : <>
           <header className="vault-content-header">
             <div className="vault-section-heading"><i style={{ background: selected.accent }} /><div><p className="vault-label">Collection</p><h2>{selected.name}</h2><span>{itemCountLabel}</span></div></div>
-            <div className="vault-actions"><span className="vault-drop-hint">Drop files anywhere in this area</span><button type="button" className="vault-action-primary" onClick={() => setComposer('link')}>＋ Add link</button><button type="button" onClick={() => setComposer('note')}>＋ Add note</button><button type="button" onClick={() => fileInput.current?.click()}>＋ Upload</button><button type="button" onClick={pasteClipboard}>Paste</button><input ref={fileInput} hidden type="file" multiple onChange={onFileChange} /></div>
+            <div className="vault-actions"><OptionsMenu label="Vault collection options"><button type="button" onClick={() => setComposer('link')}>Add link</button><button type="button" onClick={() => setComposer('note')}>Add note</button><button type="button" onClick={() => fileInput.current?.click()}>Upload files</button><button type="button" onClick={pasteClipboard}>Paste from clipboard</button></OptionsMenu><input ref={fileInput} hidden type="file" multiple onChange={onFileChange} /></div>
           </header>
-          {composer && <form className="panel vault-composer" onSubmit={submitItem}>
+          {composer && <dialog className="vault-composer-dialog" ref={composerDialog} onClose={resetComposer}><form className="panel vault-composer" onSubmit={submitItem}>
             <header><div><p className="vault-label">Quick add</p><b>{composer === 'link' ? 'Save a useful link' : 'Write a note'}</b></div><button type="button" onClick={resetComposer}>Cancel</button></header>
             <div className="vault-composer-fields"><label>Title <input value={title} onChange={event => setTitle(event.target.value)} placeholder="Optional title"/></label>{composer === 'link' ? <label>URL <input required type="url" value={url} onChange={event => setUrl(event.target.value)} placeholder="https://target.example"/></label> : <label>Language <select value={lang} onChange={event => setLang(event.target.value)}>{noteLanguages.map(value => <option key={value}>{value}</option>)}</select></label>}</div>
             {composer === 'note' && <label>Note content <textarea required value={text} onChange={event => setText(event.target.value)} placeholder="Write or paste your note here…" /></label>}
             <footer><button type="submit" disabled={createItem.isPending}>Save {composer}</button></footer>
-          </form>}
+          </form></dialog>}
           <div className="vault-items-heading"><div><p className="vault-label">Contents</p><h2>{itemCount ? 'Saved items' : 'Nothing saved yet'}</h2></div>{itemCount > 0 && <span>{itemCountLabel}</span>}</div>
           {!items.data?.length ? <div className="panel empty vault-empty"><span className="vault-empty-icon">＋</span><strong>Your collection is ready</strong><span>Use the actions above, paste content, or drop files here to get started.</span></div> : <section className="vault-item-grid">{items.data.map(item => <article className="panel vault-item-card" key={item.id}>
             <div className={`vault-item-preview vault-preview-${item.type}`}>{item.type === 'image' ? <img src={fileUrl(item.id)} alt={item.title || 'Vault image'} /> : <span>{item.type === 'pdf' ? '▤' : item.type === 'link' ? '↗' : item.type === 'note' ? '✎' : '⛁'}</span>}</div>

@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useParams } from 'react-router-dom'
 
+import { OptionsMenu } from '../../components/OptionsMenu'
 import { api, type EvidenceInput, type EvidenceKind, type EvidenceRecord } from '../../api/client'
 import { Spinner } from '../../components/Spinner'
 
@@ -82,10 +83,10 @@ export function NetworkEvidencePage() {
 
   return <main className="page feature-page network-evidence-page">
     
-    <header className="page-header network-evidence-header"><div><p className="eyebrow">Network</p><h1>Evidence</h1><p className="muted">Durable project evidence from transforms, Docker tools, HTTP captures, findings, screenshots, files, and analyst notes.</p></div><Link className="button-link" to={`/projects/${projectId}/network/logs`}>Transform logs</Link></header>
+    <header className="page-header network-evidence-header"><div><p className="eyebrow">Network</p><h1>Evidence</h1><p className="muted">Durable project evidence from transforms, Docker tools, HTTP captures, findings, screenshots, files, and analyst notes.</p></div><OptionsMenu label="Evidence options"><Link to={`/projects/${projectId}/network/logs`}>Transform logs</Link></OptionsMenu></header>
     {notice && <p className={notice.includes('invalid') || notice.includes('failed') ? 'error' : 'success'}>{notice}</p>}
     {(evidence.isError || remove.isError) && <p className="error">{String((evidence.error || remove.error)?.message)}</p>}
-    <section className="panel evidence-toolbar"><div><strong>{rows.length}</strong><span>evidence records</span></div><input value={query} onChange={event => setQuery(event.target.value)} placeholder="Search evidence..." /><select value={kind} onChange={event => setKind(event.target.value)}><option value="">All kinds</option>{(['tool_output','http','screenshot','note','finding','file','manual'] as EvidenceKind[]).map(item => <option value={item} key={item}>{item}</option>)}</select><button onClick={() => void evidence.refetch()}>Refresh</button></section>
+    <section className="panel evidence-toolbar"><div><strong>{rows.length}</strong><span>evidence records</span></div><input value={query} onChange={event => setQuery(event.target.value)} placeholder="Search evidence..." /><select value={kind} onChange={event => setKind(event.target.value)}><option value="">All kinds</option>{(['tool_output','http','screenshot','note','finding','file','manual'] as EvidenceKind[]).map(item => <option value={item} key={item}>{item}</option>)}</select><OptionsMenu label="Evidence list options"><button onClick={() => void evidence.refetch()}>Refresh</button></OptionsMenu></section>
     <section className="evidence-workbench">
       <section className="panel evidence-list">
         {rows.map(item => <EvidenceCard key={item.id} record={item} selected={selected?.id === item.id} onSelect={() => setSelectedId(item.id)} onDelete={() => { if (confirm('Delete this evidence record?')) remove.mutate(item.id) }} />)}

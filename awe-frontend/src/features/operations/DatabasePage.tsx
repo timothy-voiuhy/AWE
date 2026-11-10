@@ -2,6 +2,7 @@ import { useMemo } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
 
+import { OptionsMenu } from '../../components/OptionsMenu'
 import { api, type DatabaseCollectionStats, type DatabaseStats } from '../../api/client'
 
 function formatBytes(value: number) {
@@ -50,7 +51,7 @@ export function DatabasePage() {
         <h1>Database</h1>
         <p className="muted">Inspect MongoDB usage and reclaim space from captured proxy traffic.</p>
       </div>
-      <button onClick={() => void overview.refetch()} disabled={overview.isFetching}>↻ Refresh</button>
+      <OptionsMenu label="Database options"><button onClick={() => void overview.refetch()} disabled={overview.isFetching}>Refresh</button></OptionsMenu>
     </header>
 
     {overview.isError && <p className="error">Could not load database statistics: {overview.error.message}</p>}
