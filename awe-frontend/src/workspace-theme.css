@@ -449,3 +449,58 @@ tbody tr:hover { background: #1a2b3d; }
   .repeater-pane .raw-http-editor { min-height: 240px; }
   .response-pane > pre, .response-pane > .http-code, .response-pane > iframe { min-height: 190px; max-height: 320px; }
 }
+
+/* The graph owns its route: the canvas and inspector use the available viewport. */
+.page.network-page {
+  width: 100%;
+  max-width: none;
+  height: 100dvh;
+  margin: 0;
+  padding: 8px;
+  overflow: hidden;
+}
+.page.network-page > .graph-workbench {
+  width: 100%;
+  min-width: 0;
+  min-height: 0;
+  flex: 1;
+  grid-template-columns: minmax(0, 1fr) clamp(320px, 24vw, 380px);
+}
+.page.network-page.network-expanded {
+  position: absolute;
+  inset: 0;
+  width: auto;
+  height: auto;
+  min-height: 0;
+  padding: 8px 14px 10px;
+  overflow: hidden;
+}
+.page.network-page.network-expanded > .graph-workbench { grid-template-columns: minmax(0, 1fr); }
+@media (max-width: 900px) {
+  .page.network-page {
+    height: auto;
+    min-height: 100dvh;
+    padding: 62px 12px 24px;
+    overflow: visible;
+  }
+  .page.network-page > .graph-workbench {
+    height: auto;
+    flex: initial;
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(440px, 56dvh) auto;
+  }
+  .page.network-page .graph-canvas { min-height: 440px; height: 56dvh; }
+  .page.network-page .graph-inspector { height: auto; min-height: 0; }
+  .page.network-page .graph-minimap { right: 8px; bottom: 8px; width: 112px; height: 72px; }
+  .page.network-page.network-expanded { height: 100dvh; padding: 8px; overflow: hidden; }
+  .page.network-page.network-expanded > .graph-workbench {
+    height: 100%;
+    flex: 1;
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr);
+  }
+  .page.network-page.network-expanded .graph-canvas { height: auto; min-height: 0; }
+}
+@media (min-width: 601px) and (max-width: 900px) {
+  .page.network-page { padding-top: 12px; }
+}

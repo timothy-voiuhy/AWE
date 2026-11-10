@@ -45,6 +45,14 @@ test('dragging a graph node does not rebuild the graph on save or refresh', asyn
 
   await page.goto(`/projects/${projectId}/network`)
   await expect(page.locator('.cytoscape-host canvas')).toHaveCount(3)
+  const desktopBounds = await page.evaluate(() => {
+    const route = document.querySelector('.route-content')!.getBoundingClientRect()
+    const workspace = document.querySelector('.network-page')!.getBoundingClientRect()
+    const canvas = document.querySelector('.graph-canvas')!.getBoundingClientRect()
+    return { rightGap: route.right - workspace.right, bottomGap: window.innerHeight - canvas.bottom }
+  })
+  expect(desktopBounds.rightGap).toBeLessThanOrEqual(1)
+  expect(desktopBounds.bottomGap).toBeLessThanOrEqual(12)
   await expect(page.locator('.graph-icon-actions, .graph-secondary-toolbar')).toHaveCount(0)
   await page.getByLabel('Network options').click()
   const options = page.locator('.graph-control-panel .page-options-panel')
@@ -87,4 +95,17 @@ test('dragging a graph node does not rebuild the graph on save or refresh', asyn
   await expect.poll(() => savedPositions).toBeGreaterThan(0)
   await expect.poll(() => graphFetches, { timeout: 10_000 }).toBeGreaterThan(1)
   expect(await page.evaluate(() => (window as typeof window & { __graphRebuilds?: number }).__graphRebuilds)).toBe(0)
+
+  await page.setViewportSize({ width: 390, height: 844 })
+  const mobileBounds = await page.evaluate(() => {
+    const canvas = document.querySelector('.graph-canvas')!.getBoundingClientRect()
+    const inspector = document.querySelector('.graph-inspector')!.getBoundingClientRect()
+    return { canvasWidth: canvas.width, inspectorTop: inspector.top, canvasBottom: canvas.bottom }
+  })
+  expect(mobileBounds.canvasWidth).toBeGreaterThanOrEqual(360)
+  expect(mobileBounds.inspectorTop).toBeGreaterThanOrEqual(mobileBounds.canvasBottom)
+  await page.getByLabel('Network options').click()
+  await page.locator('.graph-control-panel .page-options-panel').getByRole('button', { name: 'View full workspace' }).click()
+  await expect(page.locator('.network-page')).toHaveClass(/network-expanded/)
+  expect(await page.locator('.graph-canvas').evaluate(element => element.getBoundingClientRect().width)).toBeGreaterThanOrEqual(360)
 })
