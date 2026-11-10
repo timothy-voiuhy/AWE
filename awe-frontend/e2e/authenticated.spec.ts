@@ -13,7 +13,7 @@ test('test account signs in, creates projects from the dashboard menu, and can a
   await page.locator('input[autocomplete="current-password"]').fill(password)
   await page.getByRole('button', { name: 'Sign in' }).click()
 
-  await expect(page.getByRole('heading', { name: 'Operations dashboard' })).toBeVisible()
+  await expect(page.getByLabel('Dashboard options')).toBeVisible()
   await expect(page.getByRole('region', { name: 'Workspace metrics' })).toBeVisible()
   const session = await page.request.get('/api/v1/auth/session')
   expect(session.ok()).toBeTruthy()
