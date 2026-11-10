@@ -46,6 +46,16 @@ test('compact workspaces keep secondary actions available', async ({ page }) => 
   await page.getByRole('button', { name: 'Show filters' }).click()
   await expect(page.getByPlaceholder('Search URL, headers, or body…')).toBeVisible()
 
+  await page.goto(`/projects/${projectId}/intercept`)
+  await expect(page.locator('.intercept-toolbar')).toHaveCount(0)
+  await expect(page.locator('.intercept-queue > header').getByRole('button', { name: 'Enable intercept' })).toBeVisible()
+  await page.getByLabel('Intercept options').click()
+  await page.getByRole('button', { name: 'Configure host patterns' }).click()
+  const patternDialog = page.getByRole('dialog', { name: 'Host patterns' })
+  await expect(patternDialog).toBeVisible()
+  await patternDialog.getByRole('button', { name: 'Close host patterns' }).click()
+  await expect(patternDialog).not.toBeVisible()
+
   await page.goto(`/projects/${projectId}/sitemap`)
   await page.getByLabel('Site map options').click()
   await expect(page.getByRole('button', { name: 'Sync to Results' })).toBeVisible()
