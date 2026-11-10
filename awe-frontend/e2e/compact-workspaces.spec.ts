@@ -39,7 +39,10 @@ test('compact workspaces keep secondary actions available', async ({ page }) => 
   await expect(page.getByRole('button', { name: 'Refresh' })).toBeVisible()
 
   await page.goto(`/projects/${projectId}/history`)
+  await expect(page.getByRole('button', { name: /Scope:/ })).toHaveCount(0)
   await page.getByLabel('History options').click()
+  await expect(page.getByLabel('History options')).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)')
+  await expect(page.getByRole('button', { name: 'Show all requests' })).toBeVisible()
   await page.getByRole('button', { name: 'Show filters' }).click()
   await expect(page.getByPlaceholder('Search URL, headers, or body…')).toBeVisible()
 

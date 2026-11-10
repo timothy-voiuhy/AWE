@@ -407,6 +407,10 @@ tbody tr:hover { background: #1a2b3d; }
 .history-toolbar, .sitemap-toolbar, .evidence-toolbar, .network-log-summary { align-items: center; }
 .history-toolbar .page-options, .sitemap-toolbar .page-options,
 .evidence-toolbar .page-options, .network-log-summary .page-options { margin-left: auto; }
+.history-page .history-toolbar .page-options > summary,
+.history-page .history-toolbar .page-options > summary:hover,
+.history-page .history-toolbar .page-options[open] > summary { background: transparent; border-color: transparent; }
+.history-page .history-toolbar .page-options > summary:hover { color: var(--workspace-blue); }
 .graphql-editor { overflow: visible; }
 .graphql-editor .page-options > summary,
 .graphql-editor .page-options > summary:hover,
