@@ -14,6 +14,10 @@ test('compact workspaces keep secondary actions available', async ({ page }) => 
   const projectId = (await projects.json())[0]?.id as string
   expect(projectId).toBeTruthy()
 
+  await page.goto(`/projects/${projectId}`)
+  await expect(page.locator('.target-workspace-header')).toHaveCount(0)
+  await expect(page.getByRole('navigation', { name: 'Target window sections' })).toBeVisible()
+
   await page.goto(`/projects/${projectId}/browser`)
   await expect(page.getByRole('heading', { name: 'Browser', exact: true })).not.toBeVisible()
   await expect(page.locator('.browser-toolbar .page-options')).toHaveCount(1)

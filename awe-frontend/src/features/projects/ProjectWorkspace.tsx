@@ -123,10 +123,6 @@ export function ProjectWorkspace() {
   if (project.isError || scopeQuery.isError) return <main className="page"><p className="error">Could not load this project.</p></main>
 
   return <main className="page target-workspace">
-    <header className="page-header workspace-header target-workspace-header">
-      <div><p className="eyebrow">Target window</p><h1>{project.data.name}</h1><p className="target-address"><span className="target-online" /> {project.data.target || 'Target not configured'} <small>· {displayHost(project.data.target)}</small></p></div>
-    </header>
-
     <nav className="target-workbench-tabs" aria-label="Target window sections">
       {([['target', 'Target', '⌂'], ['scope', 'Scope', '◎'], ['sessions', 'Sessions', '⚿'], ['flow', 'Testing Flow', '⚡'], ['notes', 'Notes', '▤']] as [WorkbenchTab, string, string][]).map(([key, label, glyph]) => <button className={tab === key ? 'selected' : ''} onClick={() => setTab(key)} key={key}><span>{glyph}</span>{label}{key === 'sessions' && authSessions.data?.length ? <em>{authSessions.data.length}</em> : null}</button>)}
     </nav>
