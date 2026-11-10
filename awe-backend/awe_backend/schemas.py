@@ -198,6 +198,14 @@ class StoredResult(BaseModel):
     data: dict = Field(default_factory=dict)
     sources: list[str] = Field(default_factory=list)
     created_at: str = ""
+    reviewed: bool = False
+
+
+class ResultActionInput(BaseModel):
+    category: str = Field(min_length=1, max_length=100)
+    result_key: str = Field(min_length=1, max_length=4096)
+    session_id: str | None = Field(default=None, max_length=100)
+    reviewed: bool = True
 
 
 class ReportGenerateRequest(BaseModel):

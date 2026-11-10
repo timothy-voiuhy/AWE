@@ -75,6 +75,7 @@ class FakeJobManager:
 
 class FakeRepository:
     deleted_sessions = []
+    reviewed_results = set()
     def list_sessions(self, limit):
         return [{
             "id": "session-1", "pipeline_key": "quick", "pipeline_name": "Quick",
@@ -96,6 +97,20 @@ class FakeRepository:
 
     def get_results_project(self, category=None):
         return self.get_results("session-1", category=category, limit=5000)
+
+    def get_reviewed_keys(self, category):
+        return {key for item_category, key in self.reviewed_results if item_category == category}
+
+    def mark_result_reviewed(self, category, key, reviewed=True):
+        pair = (category, key)
+        if reviewed:
+            self.reviewed_results.add(pair)
+        else:
+            self.reviewed_results.discard(pair)
+
+    def delete_results(self, category, result_keys, session_id=None):
+        self.reviewed_results -= {(category, key) for key in result_keys}
+        return len(result_keys)
 
     def get_tool_runs(self, session_id):
         return [
@@ -333,6 +348,22 @@ def test_health_and_project_endpoints(tmp_path: Path, monkeypatch):
         project_results = client.get(f"/api/v1/projects/{project['id']}/results")
         assert project_results.status_code == 200
         assert project_results.json()[0]["sources"] == ["httpx"]
+        assert project_results.json()[0]["reviewed"] is False
+
+        reviewed = client.put(f"/api/v1/projects/{project['id']}/results/reviewed", json={
+            "category": "http", "result_key": "https://example.com", "reviewed": True,
+        })
+        assert reviewed.status_code == 200
+        assert reviewed.json()["reviewed"] is True
+
+        reviewed_results = client.get(f"/api/v1/projects/{project['id']}/results")
+        assert reviewed_results.json()[0]["reviewed"] is True
+
+        deleted = client.request("DELETE", f"/api/v1/projects/{project['id']}/results", json={
+            "category": "http", "result_key": "https://example.com",
+        })
+        assert deleted.status_code == 200
+        assert deleted.json()["deleted_count"] == 1
 
         tool_runs = client.get(f"/api/v1/projects/{project['id']}/sessions/session-1/tool-runs")
         assert tool_runs.status_code == 200

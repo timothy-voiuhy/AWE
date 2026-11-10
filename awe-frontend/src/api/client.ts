@@ -93,6 +93,7 @@ export interface StoredResult {
   data: Record<string, unknown>
   sources: string[]
   created_at: string
+  reviewed: boolean
 }
 export type ReportTemplate = 'hackerone' | 'bugcrowd' | 'general'
 export type ReportSeverity = 'informational' | 'low' | 'medium' | 'high' | 'critical'
@@ -268,6 +269,8 @@ export const api = {
   listSessionToolRuns: (projectId:string,sessionId:string)=>request<PipelineToolRun[]>(`/projects/${projectId}/sessions/${sessionId}/tool-runs`),
   deleteSession: (projectId:string,sessionId:string)=>request<void>(`/projects/${projectId}/sessions/${sessionId}`,{method:'DELETE'}),
   listProjectResults: (projectId: string) => request<StoredResult[]>(`/projects/${projectId}/results`),
+  setResultReviewed: (projectId:string,data:{category:string;result_key:string;reviewed:boolean}) => request<{category:string;result_key:string;reviewed:boolean}>(`/projects/${projectId}/results/reviewed`,{method:'PUT',body:JSON.stringify(data)}),
+  deleteResult: (projectId:string,data:{category:string;result_key:string;session_id?:string}) => request<{category:string;result_key:string;deleted_count:number}>(`/projects/${projectId}/results`,{method:'DELETE',body:JSON.stringify(data)}),
   generateReport: (projectId:string,data:ReportGenerateRequest)=>request<ReportGenerateResponse>(`/projects/${projectId}/reports/generate`,{method:'POST',body:JSON.stringify(data)}),
   importSubdomains: (projectId:string,file:File,options:{investigation_id?:string;attach_to_graph?:boolean}={})=>{const data=new FormData();data.append('upload',file);data.append('investigation_id',options.investigation_id||'');data.append('attach_to_graph',String(options.attach_to_graph ?? true));return request<ImportSubdomainsResult>(`/projects/${projectId}/results/import-subdomains`,{method:'POST',body:data})},
   listResults: (projectId: string, sessionId: string) =>

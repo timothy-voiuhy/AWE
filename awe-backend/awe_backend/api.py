@@ -63,6 +63,7 @@ from .schemas import (
     ScanSession,
     PipelineToolRun,
     StoredResult,
+    ResultActionInput,
     ReportGenerateRequest,
     ReportGenerateResponse,
     ImportSubdomainsResult,
@@ -1300,7 +1301,21 @@ def _merged_project_results(repository, category: str | None = None, limit: int 
             merged[key]["sources"] = list(item.get("sources", []))
         else:
             merged[key]["sources"] = sorted(set(merged[key]["sources"]) | set(item.get("sources", [])))
-    return [StoredResult.model_validate(item) for item in list(merged.values())[:limit]]
+    return _results_with_review_state(repository, list(merged.values())[:limit])
+
+
+def _results_with_review_state(repository, results: list[dict]) -> list[StoredResult]:
+    reviewed_by_category = {
+        category: repository.get_reviewed_keys(category)
+        for category in {str(item.get("category", "")) for item in results}
+    }
+    return [
+        StoredResult.model_validate({
+            **item,
+            "reviewed": item.get("result_key", "") in reviewed_by_category.get(str(item.get("category", "")), set()),
+        })
+        for item in results
+    ]
 
 
 @router.get(
@@ -1350,10 +1365,49 @@ def list_session_results(
         raise HTTPException(status_code=503, detail="Database unavailable") from exc
     if session is None:
         raise HTTPException(status_code=404, detail="Scan session not found")
-    return [
-        StoredResult.model_validate(item)
-        for item in results
-    ]
+    return _results_with_review_state(repository, results)
+
+
+@router.put(
+    "/projects/{project_id}/results/reviewed",
+    tags=["results"],
+)
+def set_result_reviewed(
+    project_id: str,
+    payload: ResultActionInput,
+    store: ProjectStore = Depends(get_project_store),
+    repositories: LegacyRepositoryFactory = Depends(get_repository_factory),
+) -> dict:
+    try:
+        repository = repositories(store.project_dir(project_id))
+        repository.mark_result_reviewed(payload.category, payload.result_key, payload.reviewed)
+    except ProjectNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Project not found") from exc
+    except PyMongoError as exc:
+        raise HTTPException(status_code=503, detail="Database unavailable") from exc
+    return {"category": payload.category, "result_key": payload.result_key, "reviewed": payload.reviewed}
+
+
+@router.delete(
+    "/projects/{project_id}/results",
+    tags=["results"],
+)
+def delete_stored_result(
+    project_id: str,
+    payload: ResultActionInput,
+    store: ProjectStore = Depends(get_project_store),
+    repositories: LegacyRepositoryFactory = Depends(get_repository_factory),
+) -> dict:
+    try:
+        repository = repositories(store.project_dir(project_id))
+        deleted = repository.delete_results(payload.category, [payload.result_key], session_id=payload.session_id)
+    except ProjectNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Project not found") from exc
+    except PyMongoError as exc:
+        raise HTTPException(status_code=503, detail="Database unavailable") from exc
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Result not found")
+    return {"category": payload.category, "result_key": payload.result_key, "deleted_count": deleted}
 
 
 _REPORT_RESULT_FIELDS = (

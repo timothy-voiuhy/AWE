@@ -1,14 +1,15 @@
 import { FormEvent, useEffect, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import RFB from '@novnc/novnc'
-import { useParams } from 'react-router-dom'
+import { useParams, useSearchParams } from 'react-router-dom'
 import { OptionsMenu } from '../../components/OptionsMenu'
 import { api, BrowserSession } from '../../api/client'
 
 export function BrowserPage() {
   const { projectId = '' } = useParams()
+  const [searchParams] = useSearchParams()
   const queryClient = useQueryClient()
-  const [sessionId, setSessionId] = useState('')
+  const [sessionId, setSessionId] = useState(() => searchParams.get('session') || '')
   const [url, setUrl] = useState('')
   const [error, setError] = useState('')
   const [connected, setConnected] = useState(false)
