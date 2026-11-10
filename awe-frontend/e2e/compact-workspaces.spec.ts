@@ -17,6 +17,12 @@ test('compact workspaces keep secondary actions available', async ({ page }) => 
   await page.goto(`/projects/${projectId}`)
   await expect(page.locator('.target-workspace-header')).toHaveCount(0)
   await expect(page.getByRole('navigation', { name: 'Target window sections' })).toBeVisible()
+  await page.getByLabel('Target options').click()
+  await page.getByRole('button', { name: 'Import subdomains' }).click()
+  const targetImportDialog = page.getByRole('dialog', { name: 'Subdomains' })
+  await expect(targetImportDialog).toBeVisible()
+  await targetImportDialog.getByRole('button', { name: 'Close import dialog' }).click()
+  await expect(targetImportDialog).not.toBeVisible()
 
   await page.goto(`/projects/${projectId}/browser`)
   await expect(page.getByRole('heading', { name: 'Browser', exact: true })).not.toBeVisible()
