@@ -30,7 +30,7 @@ def _safe_name(value: str) -> str:
 
 
 class VaultService:
-    """Global category/item vault matching the Qt VaultStore contract."""
+    """Global category/item vault shared by the web application."""
 
     def __init__(self, secret_key="development-only-change-me"):
         self._data: dict | None = None

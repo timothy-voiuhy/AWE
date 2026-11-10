@@ -470,7 +470,7 @@ def _ingest_graph_results(
 
 @router.post("/jwt/scan", tags=["jwt"])
 def scan_jwt(payload: JwtScanRequest) -> dict:
-    """Run jwt_tool in an isolated Docker container, matching the Qt workbench."""
+    """Run jwt_tool in an isolated Docker container for the web workbench."""
     args = [payload.token]
     if payload.url and payload.mode != "decode":
         args += ["-t", payload.url]
@@ -1959,7 +1959,7 @@ def _traffic_belongs_to_project(
 
 
 def _network_graph(project_dir: Path, target: str, repositories: LegacyRepositoryFactory) -> NetworkGraph:
-    """Build the same typed attack-surface graph used by the Qt client."""
+    """Build the typed attack-surface graph used by the web client."""
     repo = repositories(project_dir); nodes: dict[str, NetworkNode] = {}; edges: dict[tuple[str,str,str], NetworkEdge] = {}
     sessions = sorted(repo.list_sessions(limit=0), key=lambda x: x.get("started_at", ""))
     live_hosts: set[str] = set()

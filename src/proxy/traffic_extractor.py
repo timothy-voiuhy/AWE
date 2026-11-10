@@ -47,20 +47,6 @@ import time
 from pathlib import PurePosixPath
 from urllib.parse import urlsplit, parse_qs
 
-try:
-    from PySide6.QtCore import QThread, Signal
-except ModuleNotFoundError:  # The extraction engine is also used by the web backend.
-    class QThread:  # pragma: no cover - only the Qt wrapper instantiates this.
-        def __init__(self, *args, **kwargs):
-            super().__init__()
-
-    class Signal:  # pragma: no cover
-        def __init__(self, *args, **kwargs):
-            pass
-
-        def emit(self, *args, **kwargs):
-            raise RuntimeError("Qt signals require PySide6")
-
 from containers.results.models import (
     SubdomainResult, LiveHost, EndpointResult, ParamResult, CdnResult,
     VulnFinding, BaseResult,
@@ -507,35 +493,3 @@ def _hdr_str(headers: dict, key: str) -> str:
     if isinstance(v, list):
         v = v[0] if v else ""
     return str(v).strip()
-
-
-class _ExtractWorker(QThread):
-    done  = Signal(dict, dict)   # (results, review_candidates)
-    error = Signal(str)
-
-    def __init__(self, col, scope: ScopeConfig | None = None, parent=None) -> None:
-        super().__init__(parent)
-        self._col   = col
-        self._scope = scope
-        self._stop_requested = False
-
-    def stop(self) -> None:
-        self._stop_requested = True
-        self.requestInterruption()
-
-    def _should_stop(self) -> bool:
-        return self._stop_requested or self.isInterruptionRequested()
-
-    def run(self) -> None:
-        try:
-            results, review_candidates = TrafficExtractor().extract(
-                self._col,
-                self._scope,
-                should_stop=self._should_stop,
-            )
-            if self._should_stop():
-                return
-            self.done.emit(results, review_candidates)
-        except Exception as exc:
-            log.exception("TrafficExtractor failed")
-            self.error.emit(str(exc))

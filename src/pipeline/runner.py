@@ -38,7 +38,7 @@ logger = logging.getLogger(__name__)
 
 
 class EventHook:
-    """Minimal thread-safe signal used by non-Qt application services."""
+    """Minimal thread-safe event hook used by application services."""
 
     def __init__(self):
         self._callbacks = []

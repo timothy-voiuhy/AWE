@@ -12,8 +12,8 @@ RUN apt-get update \
 COPY awe-backend /app/awe-backend
 RUN python -m pip install --no-cache-dir /app/awe-backend
 
-# Migration bridge: the backend currently reuses AWE's Qt-free pipeline,
-# repository, container registry, and parser modules from the legacy tree.
+# Shared runtime modules used by the backend's pipeline, repository, container,
+# parser, and proxy services.
 COPY src /app/src
 COPY dockerfiles /app/dockerfiles
 COPY resources /app/resources

@@ -1,6 +1,6 @@
 """Passive detection heuristics run over captured proxy traffic.
 
-Pure functions only — no Qt, no Mongo — so they're cheap to unit test and safe
+Pure functions only — no UI or Mongo — so they're cheap to unit test and safe
 to call from anywhere traffic documents are processed (the traffic writer
 thread, TrafficExtractor, etc.).
 """

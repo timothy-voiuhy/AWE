@@ -1,7 +1,7 @@
-"""Migration adapter for the existing Qt-free pipeline catalogue.
+"""Adapter for the shared pipeline catalogue.
 
-Only definitions and dataclasses are loaded. The Qt-based executor remains
-outside the backend process until it is replaced by the job service.
+Only definitions and dataclasses are loaded; execution is handled by the
+backend job service.
 """
 
 import sys
@@ -30,7 +30,7 @@ class PipelineCatalog:
         ]
 
     def get_legacy_template(self, pipeline_key: str):
-        self.list()  # validates and adds the legacy source directory to sys.path
+        self.list()  # validates and adds the shared source directory to sys.path
         from pipeline.definitions import PIPELINE_REGISTRY
 
         return PIPELINE_REGISTRY.get(pipeline_key)
