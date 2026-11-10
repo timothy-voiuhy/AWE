@@ -73,6 +73,10 @@ def _default_composite_transforms(available: set[str]) -> list[TransformManifest
     )]
 
 
+def execution_options(tool) -> dict:
+    return {"execution_kind": tool.execution_kind, "output_channels": list(tool.output_channels), "artifact_paths": list(tool.artifact_paths), "execution_timeout": tool.execution_timeout, "session_idle_timeout": tool.session_idle_timeout, "source_metadata": tool.source_metadata}
+
+
 def _graph_transforms(settings: Settings, project_dir: Path | None = None) -> list[TransformManifest]:
     """Expose safe graph adapters over the existing Docker tool registry."""
     source = str(settings.legacy_src_dir)
@@ -113,10 +117,11 @@ def _graph_transforms(settings: Settings, project_dir: Path | None = None) -> li
     manifests: list[TransformManifest] = _default_composite_transforms(set(TOOL_REGISTRY))
     for key, label in curated_labels.items():
         tool = TOOL_REGISTRY.get(key)
-        if not tool or not getattr(tool, "input_types", ()) or not getattr(tool, "output_types", ()):
+        if not tool or not getattr(tool, "input_types", ()) or not getattr(tool, "output_channels", ()):
             continue
         mode = getattr(tool, "execution_mode", "passive")
         manifests.append(TransformManifest(
+            **execution_options(tool),
             id=f"docker:{key}", tool_key=key, display_name=label,
             category=getattr(tool, "category", "Other") or "Other",
             description=getattr(tool, "description", ""),
@@ -142,9 +147,10 @@ def _graph_transforms(settings: Settings, project_dir: Path | None = None) -> li
     # being mistaken for a typed transform.
     existing = {item.tool_key for item in manifests}
     for key, tool in TOOL_REGISTRY.items():
-        if key in existing or not getattr(tool, "input_types", ()) or not getattr(tool, "output_types", ()):
+        if key in existing or not getattr(tool, "input_types", ()) or not getattr(tool, "output_channels", ()):
             continue
         manifests.append(TransformManifest(
+            **execution_options(tool),
             id=f"docker:{key}", tool_key=key, display_name=tool.display_name,
             category=getattr(tool, "category", "Other") or "Other",
             description=getattr(tool, "description", ""),

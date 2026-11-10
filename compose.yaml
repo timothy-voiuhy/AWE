@@ -40,6 +40,8 @@ services:
     # Browser sessions spawn Chromium, whose helper processes reparent to PID 1.
     # Without an init to reap them the container collects zombies.
     init: true
+    ports:
+      - "${AWE_CALLBACK_BIND_ADDRESS:-127.0.0.1}:${AWE_CALLBACK_PORT_START:-45000}-${AWE_CALLBACK_PORT_END:-45009}:${AWE_CALLBACK_PORT_START:-45000}-${AWE_CALLBACK_PORT_END:-45009}"
     environment:
       AWE_ENVIRONMENT: ${AWE_ENVIRONMENT:-production}
       AWE_WORKSPACE_DIR: /data/projects
@@ -61,12 +63,21 @@ services:
       AWE_PROXY_PUBLIC_PORT: ${AWE_PROXY_PUBLIC_PORT:-8080}
       AWE_PROXY_USERNAME: ${AWE_PROXY_USERNAME:-}
       AWE_PROXY_PASSWORD: ${AWE_PROXY_PASSWORD:-}
+      AWE_CALLBACK_ADVERTISE_HOST: ${AWE_CALLBACK_ADVERTISE_HOST:-127.0.0.1}
+      AWE_CALLBACK_BIND_HOST: 0.0.0.0
+      AWE_CALLBACK_PORT_START: ${AWE_CALLBACK_PORT_START:-45000}
+      AWE_CALLBACK_PORT_END: ${AWE_CALLBACK_PORT_END:-45009}
+      AWE_RUN_LOG_MAX_BYTES: ${AWE_RUN_LOG_MAX_BYTES:-104857600}
+      AWE_RUN_ARTIFACT_MAX_BYTES: ${AWE_RUN_ARTIFACT_MAX_BYTES:-1073741824}
+      AWE_SESSION_MAX_PER_PROJECT: ${AWE_SESSION_MAX_PER_PROJECT:-4}
+      AWE_SESSION_IDLE_SECONDS: ${AWE_SESSION_IDLE_SECONDS:-3600}
       AWE_ALLOWED_ORIGINS: '["https://${AWE_HOST:-awe.solidpilot.tech}"]'
     volumes:
       - ./.awe-projects:/data/projects
       - awe_auth:/data/auth
       - awe_vault:/root/.config/awe/vault
       - proxy_data:/data/proxy:ro
+      - awe_custom_tools:/root/AWE/CustomTools
       # Pipeline tools require Docker control. Never expose the backend publicly;
       # only the authenticated gateway should be reachable.
       - /var/run/docker.sock:/var/run/docker.sock
@@ -123,6 +134,7 @@ services:
       retries: 10
 
 volumes:
+  awe_custom_tools:
   awe_projects:
   awe_auth:
   awe_vault:

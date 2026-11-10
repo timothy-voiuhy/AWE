@@ -41,6 +41,12 @@ class ToolConfig:
     execution_mode: str = "passive"
     credential_fields: tuple[str, ...] = ()
     output_owner: tuple[int, int] | None = None
+    execution_kind: str = "batch"
+    output_channels: tuple[str, ...] = ("logs", "structured")
+    artifact_paths: tuple[str, ...] = ("**/*",)
+    execution_timeout: int = 3600
+    session_idle_timeout: int = 3600
+    source_metadata: dict = field(default_factory=dict)
 
     def container_name(self) -> str:
         return f"awe_{self.key}_{int(time.time())}_{secrets.token_hex(3)}"

@@ -34,6 +34,15 @@ class Settings(BaseSettings):
     proxy_public_port: int = 8080
     proxy_username: str = ""
     proxy_password: str = ""
+    session_max_per_project: int = 4
+    session_idle_seconds: int = 3600
+    callback_bind_host: str = "127.0.0.1"
+    callback_advertise_host: str = "127.0.0.1"
+    callback_port_start: int = 45000
+    callback_port_end: int = 45009
+    pty_runner_path: Path = Path("/usr/local/lib/awe/pty-runner")
+    run_log_max_bytes: int = 100 * 1024 * 1024
+    run_artifact_max_bytes: int = 1024 ** 3
     proxy_certificate_path: Path = Path("/data/proxy/AWE/proxycert/CA/rootCACert.pem")
 
     @model_validator(mode="after")

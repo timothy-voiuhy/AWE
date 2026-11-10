@@ -96,7 +96,7 @@ def _load_one(tool_dir: str, strict_parser: bool) -> str:
             f"invalid tool key {key!r} — must be lowercase letters, digits, underscore only"
         )
     category = meta.get("category", "")
-    if category not in CATEGORY_MODEL:
+    if category not in CATEGORY_MODEL and "structured" in meta.get("output_channels", ["logs", "structured"]):
         raise ValueError(
             f"unknown category {category!r} — must be one of {sorted(CATEGORY_MODEL)}"
         )
@@ -106,7 +106,7 @@ def _load_one(tool_dir: str, strict_parser: bool) -> str:
     parser_path = os.path.join(tool_dir, meta.get("parser_file") or "parser.py")
 
     parse_fn = None
-    if os.path.exists(parser_path):
+    if os.path.exists(parser_path) and "structured" in meta.get("output_channels", ["logs", "structured"]):
         try:
             module_name = f"awe_custom_parser_{key}"
             spec = importlib.util.spec_from_file_location(module_name, parser_path)
@@ -121,7 +121,7 @@ def _load_one(tool_dir: str, strict_parser: bool) -> str:
                 raise
             logger.warning("Custom tool %r parser failed to load: %s", key, exc)
             parse_fn = None
-    elif strict_parser:
+    elif strict_parser and "structured" in meta.get("output_channels", ["logs", "structured"]):
         raise FileNotFoundError(f"parser file not found: {parser_path}")
 
     cfg = CustomToolConfig(
@@ -140,6 +140,12 @@ def _load_one(tool_dir: str, strict_parser: bool) -> str:
         credential_fields=tuple(meta.get("credential_fields", []) or ()),
         tool_dir=tool_dir,
         parser_path=parser_path,
+        execution_kind=meta.get("execution_kind", "batch"),
+        output_channels=tuple(meta.get("output_channels", ["logs", "structured"])),
+        artifact_paths=tuple(meta.get("artifact_paths", ["**/*"])),
+        execution_timeout=int(meta.get("execution_timeout", 3600)),
+        session_idle_timeout=int(meta.get("session_idle_timeout", 3600)),
+        source_metadata=meta.get("source_metadata", {}),
     )
 
     # In-place mutation only — never reassign TOOL_REGISTRY / TOOL_CATEGORIES

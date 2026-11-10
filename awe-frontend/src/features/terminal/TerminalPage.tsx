@@ -3,9 +3,10 @@ import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import '@xterm/xterm/css/xterm.css'
 import { useMutation, useQuery } from '@tanstack/react-query'
-import { Link, useParams } from 'react-router-dom'
+import { Link, useNavigate, useParams } from 'react-router-dom'
 import { OptionsMenu } from '../../components/OptionsMenu'
 import { api } from '../../api/client'
+import { runtime } from '../../api/runtime'
 
 const rejectedKeyExtensions = new Set([
   '7z', 'avi', 'bmp', 'doc', 'docx', 'exe', 'gif', 'gz', 'jpeg', 'jpg', 'mov',
@@ -14,6 +15,7 @@ const rejectedKeyExtensions = new Set([
 ])
 
 export function TerminalPage() {
+  const navigate = useNavigate()
   const { projectId = '' } = useParams()
   const profiles = useQuery({ queryKey: ['terminal-profiles', projectId], queryFn: () => api.listTerminalProfiles(projectId) })
   const [index, setIndex] = useState(0)
@@ -66,7 +68,8 @@ export function TerminalPage() {
   }
 
   const connect = useMutation({
-    mutationFn: () => api.createTerminalSession(projectId, {
+    mutationFn: () => runtime.createSession(projectId, {
+      kind: 'ssh',
       host: activeProfile!.host,
       port: activeProfile!.port,
       username: activeProfile!.username,
@@ -81,20 +84,7 @@ export function TerminalPage() {
         sessionStorage.setItem(passphraseStorage(activeProfile.id), passphrase)
       }
       setPassword(''); setError(''); setConfiguringId(null)
-      const protocol = location.protocol === 'https:' ? 'wss' : 'ws'
-      const ws = new WebSocket(`${protocol}://${location.host}/api/v1/projects/${projectId}/terminal/sessions/${session.id}/stream`)
-      intentionalClose.current = false
-      socket.current = ws
-      ws.onopen = () => { setConnected(true); setError(''); requestAnimationFrame(fitTerminal) }
-      ws.onmessage = e => termRef.current?.write(e.data)
-      ws.onclose = event => {
-        if (socket.current === ws) socket.current = null
-        setConnected(false)
-        if (intentionalClose.current) { intentionalClose.current = false; setError(''); return }
-        const reason = event.reason || (event.code === 1006 ? 'unexpected network or server disconnect' : `close code ${event.code}`)
-        setError(`Terminal disconnected: ${reason}. Reconnect to start a new session.`)
-      }
-      ws.onerror = () => setError('Terminal connection encountered a network error.')
+      navigate(`/projects/${projectId}/terminal/sessions?session=${session.id}`)
     },
   })
 
@@ -137,6 +127,7 @@ export function TerminalPage() {
   }
 
   return <main className={`page feature-page terminal-page${connected ? ' terminal-live' : ''}`}>
+    <Link className="button-link subtle" to={`/projects/${projectId}/terminal/sessions`}>Interactive sessions — consoles, SSH, and TCP</Link>
     {!connected && <>
     <section className="panel terminal-profile-picker">
       <header><div><p className="eyebrow">Connections</p><h2>Saved profiles</h2></div><div className="terminal-profile-header-actions"><span>{profiles.data?.length || 0} saved</span><span className="live-dot">Disconnected</span><OptionsMenu label="Terminal options"><Link to={`/projects/${projectId}/terminal/config`}>Manage profiles</Link></OptionsMenu></div></header>

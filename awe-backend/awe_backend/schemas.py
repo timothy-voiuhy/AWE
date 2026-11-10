@@ -422,7 +422,32 @@ class GraphPreferencesInput(BaseModel):
     revision: int = Field(default=1, ge=1)
 
 
-class TransformManifest(BaseModel):
+class ToolExecutionOptions(BaseModel):
+    execution_kind: Literal["batch", "interactive"] = "batch"
+    output_channels: list[Literal["structured", "logs", "artifacts", "session"]] = Field(default_factory=lambda: ["logs", "structured"])
+    artifact_paths: list[str] = Field(default_factory=lambda: ["**/*"])
+    execution_timeout: int = Field(default=3600, ge=1, le=604800)
+    session_idle_timeout: int = Field(default=3600, ge=1, le=604800)
+    source_metadata: dict = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def interactive_channel(self):
+        if not self.output_channels:
+            raise ValueError("Declare at least one output channel")
+        if self.execution_kind == "interactive" and "session" not in self.output_channels:
+            self.output_channels.append("session")
+        return self
+
+    @field_validator("artifact_paths")
+    @classmethod
+    def relative_artifact_paths(cls, values):
+        from pathlib import PurePosixPath
+        if any(PurePosixPath(v).is_absolute() or ".." in PurePosixPath(v).parts for v in values):
+            raise ValueError("Artifact paths must stay within /output")
+        return values
+
+
+class TransformManifest(ToolExecutionOptions):
     id: str
     tool_key: str
     display_name: str
@@ -445,7 +470,7 @@ class TransformStage(BaseModel):
     parameters: dict = Field(default_factory=dict)
 
 
-class TransformDefinitionInput(BaseModel):
+class TransformDefinitionInput(ToolExecutionOptions):
     id: str = Field(default="", max_length=100)
     display_name: str = Field(min_length=1, max_length=200)
     category: str = Field(default="Custom", min_length=1, max_length=80)
@@ -564,7 +589,7 @@ class DockerImage(BaseModel):
     size_mb: float
 
 
-class DockerTool(BaseModel):
+class DockerTool(ToolExecutionOptions):
     key: str
     display_name: str
     category: str
@@ -593,7 +618,7 @@ class DockerImageBuild(BaseModel):
     tag: str = Field(min_length=1, max_length=256, pattern=r"^[a-zA-Z0-9._:/-]+$")
     dockerfile: str = Field(min_length=1, max_length=200_000)
 
-class DockerToolCreate(BaseModel):
+class DockerToolCreate(ToolExecutionOptions):
     key: str = Field(pattern=r"^[a-z0-9_]+$", min_length=1, max_length=64)
     display_name: str = Field(min_length=1, max_length=120)
     category: str = Field(min_length=1, max_length=80)
@@ -602,7 +627,7 @@ class DockerToolCreate(BaseModel):
     description: str = ""
     param_specs: list[dict] = Field(default_factory=list)
     dockerfile: str = Field(min_length=1, max_length=200_000)
-    parser: str = Field(min_length=1, max_length=500_000)
+    parser: str = Field(default="", max_length=500_000)
     input_types: list[str] = Field(default_factory=list, max_length=100)
     output_types: list[str] = Field(default_factory=list, max_length=100)
     relationship_types: list[str] = Field(default_factory=list, max_length=100)

@@ -1,3 +1,5 @@
+import type { ExecutionOptions } from './runtime'
+
 export interface Project {
   id: string
   name: string
@@ -162,7 +164,7 @@ export interface GraphInvestigation { id:string; project_id:string; name:string;
 export interface GraphBundle { investigation:GraphInvestigation; entities:GraphEntity[]; relationships:GraphRelationship[]; revision:number }
 export interface GraphMergeResult { entity:GraphEntity; merged_entity_ids:string[]; rewired_relationships:number; removed_relationships:number; revision:number }
 export interface TransformStage { name:string; tool_keys:string[]; input_source:'seed'|'previous'; parameters:Record<string, unknown> }
-export interface TransformManifest { id:string; tool_key:string; display_name:string; category:string; description:string; input_types:string[]; output_types:string[]; relationship_types:string[]; mode:'passive'|'safe_active'|'active'|'high_risk'; requires_approval:boolean; scope_required:boolean; parameters:Array<Record<string,unknown>>; stages:TransformStage[] }
+export interface TransformManifest extends ExecutionOptions { id:string; tool_key:string; display_name:string; category:string; description:string; input_types:string[]; output_types:string[]; relationship_types:string[]; mode:'passive'|'safe_active'|'active'|'high_risk'; requires_approval:boolean; scope_required:boolean; parameters:Array<Record<string,unknown>>; stages:TransformStage[] }
 export interface TransformDefinitionInput { id?:string; display_name:string; category:string; description:string; input_types:string[]; output_types:string[]; relationship_types:string[]; mode:'passive'|'safe_active'|'active'|'high_risk'; requires_approval:boolean; scope_required:boolean; parameters:Array<Record<string,unknown>>; stages:TransformStage[] }
 export interface TransformJob { id:string; project_id:string; investigation_id:string; transform_id:string; status:'queued'|'running'|'completed'|'failed'|'cancelled'|'approval_required'; entity_ids:string[]; source_job_id?:string; operation_id:string; parameters:Record<string,unknown>; message:string; created_at:string; completed_at:string|null; outputs_ingested?:boolean; progress_completed?:number; progress_total?:number; logs?:string[] }
 export type EvidenceKind = 'tool_output'|'http'|'screenshot'|'note'|'finding'|'file'|'manual'
@@ -175,9 +177,9 @@ export interface ProxyInfo { host:string;port:number;certificate_url:string;sche
 export interface DockerContainer { id:string;name:string;image:string;status:string;created:string;is_service:boolean }
 export interface DockerImage { id:string;tags:string[];size_mb:number }
 export interface ToolParamSpec { key:string;label?:string;type?:'text'|'check'|'combo'|'secret';default?:unknown;options?:string[] }
-export interface DockerTool { key:string;display_name:string;category:string;image:string;description:string;param_specs:ToolParamSpec[];source:'build'|'hub';image_present:boolean;is_custom:boolean;status:string;command_template:string;dockerfile:string;parser:string;input_types:string[];output_types:string[];relationship_types:string[];execution_mode:'passive'|'safe_active'|'active'|'high_risk';credential_fields:string[];graph_enabled:boolean }
+export interface DockerTool extends ExecutionOptions { key:string;display_name:string;category:string;image:string;description:string;param_specs:ToolParamSpec[];source:'build'|'hub';image_present:boolean;is_custom:boolean;status:string;command_template:string;dockerfile:string;parser:string;input_types:string[];output_types:string[];relationship_types:string[];execution_mode:'passive'|'safe_active'|'active'|'high_risk';credential_fields:string[];graph_enabled:boolean }
 export interface DockerOperation { id:string;kind:string;status:'queued'|'running'|'completed'|'failed'|'cancelling'|'cancelled';progress_completed:number;progress_total:number;message:string;logs:string[];result:Record<string,unknown> }
-export interface DockerToolInput {
+export interface DockerToolInput extends ExecutionOptions {
   key:string; display_name:string; category:string; image:string; description:string;
   command_template:string; param_specs:ToolParamSpec[]; dockerfile:string; parser:string;
   input_types:string[]; output_types:string[]; relationship_types:string[];
@@ -210,7 +212,7 @@ class ApiError extends Error {
   }
 }
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
+export async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const csrf = document.cookie.split('; ').find((item) => item.startsWith('awe_csrf='))?.split('=')[1]
   const isMultipart = typeof FormData !== 'undefined' && init?.body instanceof FormData
   const response = await fetch(`/api/v1${path}`, {

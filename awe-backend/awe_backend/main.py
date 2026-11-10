@@ -33,6 +33,27 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.on_event("shutdown")
     async def shutdown_browser_sessions() -> None:
         await get_browser_manager().shutdown()
+        from .session_service import session_service
+        await session_service().shutdown()
+
+    @app.on_event("startup")
+    async def start_sessions() -> None:
+        import sys
+        source = str(settings.legacy_src_dir)
+        if source not in sys.path:
+            sys.path.insert(0, source)
+        from containers.custom_tools import load_custom_tools
+        load_custom_tools()
+        from .routes.dependencies import get_docker_operation_manager
+        get_docker_operation_manager(settings)
+        from .run_outputs import project_runs, RunOutputs
+        for project_dir in settings.workspace_dir.iterdir() if settings.workspace_dir.is_dir() else []:
+            if project_dir.is_dir():
+                for run in project_runs(project_dir):
+                    if run.get("kind", "").startswith("poc.build.") and run.get("status") == "running":
+                        RunOutputs(project_dir, run["id"]).update(status="failed", message="PoC build interrupted by backend restart; register the source again to retry")
+        from .session_service import session_service
+        await session_service().start()
 
     return app
 

@@ -27,6 +27,7 @@ from .dependencies import get_docker_operation_manager, get_docker_service, get_
 from .graph import _ensure_investigation, _ingest_graph_results
 from .stores import _create_evidence_record
 from .transform_catalog import _graph_transforms
+from .transform_catalog import execution_options
 from fastapi import APIRouter
 
 router = APIRouter()
@@ -132,7 +133,7 @@ def _docker_tool_detail(key: str) -> DockerTool:
     input_types = list(getattr(tool, "input_types", ()) or ())
     output_types = list(getattr(tool, "output_types", ()) or ())
     relationship_types = list(getattr(tool, "relationship_types", ()) or ())
-    return DockerTool(key=key, display_name=tool.display_name, category=tool.category, image=tool.image, description=tool.description, param_specs=tool.param_spec(), source="build" if tool.dockerfile else "hub", is_custom=is_custom, status="ok" if key in PARSERS else "no parser", command_template=getattr(tool, "command_template", ""), dockerfile=Path(tool.dockerfile).read_text(errors="replace") if is_custom and tool.dockerfile and Path(tool.dockerfile).exists() else "", parser=Path(tool.parser_path).read_text(errors="replace") if is_custom and tool.parser_path and Path(tool.parser_path).exists() else "", input_types=input_types, output_types=output_types, relationship_types=relationship_types, execution_mode=getattr(tool, "execution_mode", "passive"), credential_fields=list(getattr(tool, "credential_fields", ()) or ()), graph_enabled=bool(input_types and output_types and key in PARSERS))
+    return DockerTool(**execution_options(tool), key=key, display_name=tool.display_name, category=tool.category, image=tool.image, description=tool.description, param_specs=tool.param_spec(), source="build" if tool.dockerfile else "hub", is_custom=is_custom, status="ok" if key in PARSERS or "structured" not in tool.output_channels else "no parser", command_template=getattr(tool, "command_template", ""), dockerfile=Path(tool.dockerfile).read_text(errors="replace") if is_custom and tool.dockerfile and Path(tool.dockerfile).exists() else "", parser=Path(tool.parser_path).read_text(errors="replace") if is_custom and tool.parser_path and Path(tool.parser_path).exists() else "", input_types=input_types, output_types=output_types, relationship_types=relationship_types, execution_mode=getattr(tool, "execution_mode", "passive"), credential_fields=list(getattr(tool, "credential_fields", ()) or ()), graph_enabled=bool(input_types and tool.output_channels))
 
 
 @router.put("/docker/tools/{key}", response_model=DockerTool, tags=["docker"])
@@ -146,7 +147,11 @@ def update_docker_tool(key: str, payload: DockerToolCreate, settings: Settings =
         if payload.key != key: raise ValueError("Tool key cannot be changed")
         if not isinstance(TOOL_REGISTRY.get(key), CustomToolConfig): raise KeyError(key)
         tool_dir = Path(TOOL_REGISTRY[key].tool_dir)
-        (tool_dir / "tool.json").write_text(json.dumps(payload.model_dump(exclude={"dockerfile", "parser"}), indent=2))
+        metadata = payload.model_dump(exclude={"dockerfile", "parser"})
+        previous = json.loads((tool_dir / "tool.json").read_text())
+        if previous.get("source_metadata"):
+            metadata.update(source_metadata=previous["source_metadata"], dockerfile=previous.get("dockerfile", "Dockerfile"))
+        (tool_dir / "tool.json").write_text(json.dumps(metadata, indent=2))
         (tool_dir / "Dockerfile").write_text(payload.dockerfile)
         (tool_dir / "parser.py").write_text(payload.parser)
         register_custom_tool(str(tool_dir))
@@ -263,4 +268,6 @@ def run_docker_tool(project_id: str, key: str, payload: DockerToolRun, store: Pr
         callback = on_complete
     relative = Path(payload.output_subdir)
     if relative.is_absolute() or ".." in relative.parts: raise HTTPException(status_code=422, detail="Output directory must be relative to the project")
-    return manager.start_tool(key, payload.params, project_dir / relative, service, callback)
+    if not (project_dir / relative).resolve().is_relative_to(project_dir):
+        raise HTTPException(status_code=422, detail="Output directory must stay inside the project")
+    return manager.start_tool(key, payload.params, project_dir / relative / secrets.token_hex(12), service, callback)

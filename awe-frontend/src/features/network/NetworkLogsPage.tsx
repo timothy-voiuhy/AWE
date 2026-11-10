@@ -37,11 +37,13 @@ function progress(job: TransformJob) {
 }
 
 function TransformLogCard({ job, manifest, onCancel }: { job: TransformJob; manifest?: TransformManifest; onCancel: (id: string) => void }) {
+  const { projectId = '' } = useParams()
   const logs = job.logs || []
   const title = manifest?.display_name || job.transform_id
   return <article className={`panel network-log-card log-${job.status}`}>
     <header><div><b>{title}</b><span>{job.status} · {formatDate(job.created_at)}</span></div><em>{manifest?.mode || 'transform'}</em></header>
     <div className="network-log-meta"><span>Job <code>{job.id}</code></span><span>Operation <code>{job.operation_id || 'pending'}</code></span></div>
+    {job.operation_id && <Link className="button-link subtle" to={`/projects/${projectId}/runs/${job.operation_id}`}>Full output, artifacts, and sessions</Link>}
     <div className="transform-progress-track"><span style={{ width: `${progress(job)}%` }} /></div>
     {job.message && <p className={job.status === 'failed' ? 'error' : 'muted'}>{job.message}</p>}
     <details className="docker-card-logs" open>

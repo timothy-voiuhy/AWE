@@ -126,7 +126,7 @@ def _sync_transform_job_from_operation(job: TransformJob, docker_operations: Doc
     if operation.status == "completed" and "ingested_count" in operation.result:
         updated = updated.model_copy(update={
             "outputs_ingested": True,
-            "message": f"Completed and ingested {operation.result.get('ingested_count', 0)} typed outputs",
+            "message": f"Completed and ingested {operation.result['ingested_count']} typed outputs" if operation.result.get('ingested_count') else "Completed—logs available",
         })
     return updated, updated != job
 
@@ -537,6 +537,8 @@ def _complete_graph_transform(
     params: dict, job_id: str, repositories: LegacyRepositoryFactory,
     parsed: list, output_dir: Path,
 ) -> dict:
+    if "structured" not in transform.output_channels:
+        return {"ingested_count": 0, "result_count": 0, "investigation_id": investigation_id}
     result_count, stage_subdomains = _persist_transform_results(project_dir, target, transform, job_id, output_dir, repositories)
     graph_inputs = parsed
     if transform.stages and transform.output_types == ["subdomain"]:
@@ -666,11 +668,11 @@ def get_graph_transform(project_id: str, job_id: str, store: ProjectStore = Depe
             if operation.status != "queued" or job.status == "queued":
                 job = job.model_copy(update={"status": status_map.get(operation.status, "failed"), "message": operation.message or job.message, "completed_at": datetime.now(timezone.utc) if operation.status in {"completed", "failed", "cancelled"} else None, "progress_completed": operation.progress_completed, "progress_total": operation.progress_total, "logs": operation.logs[-100:]})
                 if operation.status == "completed" and not job.outputs_ingested and "ingested_count" in operation.result:
-                    job = job.model_copy(update={"outputs_ingested": True, "message": f"Completed and ingested {operation.result.get('ingested_count', 0)} typed outputs"})
+                    job = job.model_copy(update={"outputs_ingested": True, "message": f"Completed and ingested {operation.result['ingested_count']} typed outputs" if operation.result.get('ingested_count') else "Completed—logs available"})
                 elif operation.status == "completed" and not job.outputs_ingested:
                     try:
                         from containers.parsers import PARSERS
-                        from .projects import ProjectStore
+                        from ..projects import ProjectStore
                         project_store = ProjectStore(settings.workspace_dir)
                         project = project_store.get(project_id); project_dir = project_store.project_dir(project_id)
                         manifest = next((item for item in _graph_transforms(settings, project_dir) if item.id == job.transform_id), None)
@@ -713,6 +715,9 @@ def resume_graph_transform(project_id: str, job_id: str, payload: TransformResum
             _save_project_transform_jobs(project_dir, project_id)
         if job.status not in {"failed", "cancelled"}:
             raise HTTPException(status_code=409, detail="Only failed or cancelled transforms can be resumed")
+        from ..session_service import session_service
+        if any(s["run_id"] == job.operation_id and s["status"] in {"starting", "active", "listening"} for s in session_service().rows.values()):
+            raise HTTPException(status_code=409, detail="Attach to or terminate the existing session before resuming this transform")
         transform = next((item for item in _graph_transforms(settings, project_dir) if item.id == job.transform_id), None)
         if not transform:
             raise HTTPException(status_code=409, detail="The transform definition is no longer available")

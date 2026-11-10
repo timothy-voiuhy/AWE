@@ -31,11 +31,13 @@ import { DockerManagerPage } from './features/operations/DockerManagerPage'
 import { PipelinePage } from './features/pipeline/PipelinePage'
 import { DatabasePage } from './features/operations/DatabasePage'
 import { DocsPage } from './features/docs/DocsPage'
+import { RunWorkspace } from './features/operations/RunWorkspace'
 
 // Heavy, single-use routes are code-split so their deps (novnc, xterm,
 // cytoscape) stay out of the main bundle until the route is visited.
 const BrowserPage = lazy(() => import('./features/browser/BrowserPage').then(m => ({ default: m.BrowserPage })))
 const TerminalPage = lazy(() => import('./features/terminal/TerminalPage').then(m => ({ default: m.TerminalPage })))
+const SessionWorkspace = lazy(() => import('./features/terminal/SessionWorkspace').then(m => ({ default: m.SessionWorkspace })))
 const NetworkGraphPage = lazy(() => import('./features/network/NetworkGraphPage').then(m => ({ default: m.NetworkGraphPage })))
 
 type WorkspaceNavItem = {
@@ -150,6 +152,9 @@ export function App() {
         <Route path="/projects/:projectId/pipeline" element={<PipelinePage />} />
         <Route path="/projects/:projectId/ai" element={<StreamingAIPage />} />
         <Route path="/projects/:projectId/terminal" element={<TerminalPage />} />
+        <Route path="/projects/:projectId/terminal/sessions" element={<SessionWorkspace />} />
+        <Route path="/projects/:projectId/runs" element={<RunWorkspace />} />
+        <Route path="/projects/:projectId/runs/:runId" element={<RunWorkspace />} />
         <Route path="/projects/:projectId/results" element={<ResultsPage />} />
         <Route path="/projects/:projectId/reports" element={<ReportPage />} />
         <Route path="/projects/:projectId/terminal/config" element={<TerminalConfigPage />} />

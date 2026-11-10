@@ -6,6 +6,7 @@ import os
 import secrets
 import shutil
 import threading
+import time
 from dataclasses import asdict, is_dataclass
 from pathlib import Path
 from typing import Callable
@@ -14,6 +15,7 @@ import docker
 
 from .docker_service import DockerService
 from .schemas import DockerOperation
+from .run_outputs import RunOutputs
 
 
 class DockerOperationNotFound(LookupError):
@@ -32,6 +34,7 @@ class DockerOperationManager:
         self._cancelled: set[str] = set()
         self._containers: dict[str, list[object]] = {}
         self._lock = threading.RLock()
+        self._outputs: dict[str, RunOutputs] = {}
         self._load()
 
     def _docker_host_path(self, path: Path) -> Path:
@@ -52,12 +55,16 @@ class DockerOperationManager:
                 return
             for item in rows:
                 operation = DockerOperation.model_validate(item)
-                if operation.status in {"queued", "running", "cancelling"}:
+                if operation.result.get("project_dir"):
+                    self._outputs[operation.id] = RunOutputs(Path(operation.result["project_dir"]), operation.id)
+                if operation.status in {"queued", "running", "cancelling"} and (not operation.result.get("session_id") or operation.kind.startswith("composite.")):
                     operation = operation.model_copy(update={
                         "status": "failed",
                         "message": operation.message or "Operation interrupted by backend restart",
                     })
                     operation.logs = [*operation.logs, "Operation interrupted by backend restart"][-self._max_logs:]
+                    if operation.id in self._outputs:
+                        self._outputs[operation.id].update(status="failed", message="Operation interrupted by backend restart; existing sessions can be attached independently")
                 self._items[operation.id] = operation
         except (OSError, ValueError):
             return
@@ -78,7 +85,26 @@ class DockerOperationManager:
         with self._lock:
             item = self._items.get(operation_id)
             if not item: raise DockerOperationNotFound(operation_id)
+            if item.result.get("session_id") and not item.kind.startswith("composite.") and operation_id in self._outputs:
+                meta = self._outputs[operation_id].metadata()
+                if meta.get("status") in {"completed", "failed", "cancelled"}:
+                    item.status = meta["status"]
+                    item.result.update(exit_code=meta.get("exit_code"))
+                    item.message = "Completed—logs available" if item.status == "completed" else "Session process ended"
             return item.model_copy(deep=True)
+
+    def _register_output(self, oid: str, output_dir: Path, **values):
+        parent = output_dir.resolve()
+        while parent != parent.parent and not (parent / ".awe-project.json").is_file():
+            parent = parent.parent
+        if not (parent / ".awe-project.json").is_file():
+            return  # tests and non-project image operations
+        record = RunOutputs(parent, oid)
+        record.update(kind=self._items[oid].kind, output_dir=str(output_dir), status="running", **values)
+        self._outputs[oid] = record
+        with self._lock:
+            self._items[oid].result.update(project_dir=str(parent), output_dir=str(output_dir), run_id=oid)
+            self._persist_locked()
 
     def recent_tool_runs(self, limit: int = 30) -> list[DockerOperation]:
         with self._lock:
@@ -92,6 +118,13 @@ class DockerOperationManager:
             if item.status in ("queued", "running"):
                 item.status = "cancelling"
                 self._cancelled.add(operation_id)
+                from .session_service import session_service
+                sessions = session_service()
+                if sessions.loop:
+                    import asyncio
+                    for session in list(sessions.rows.values()):
+                        if session["run_id"] == operation_id and session["status"] in {"starting", "listening", "active"}:
+                            asyncio.run_coroutine_threadsafe(sessions.terminate(session["project_id"], session["id"]), sessions.loop)
                 containers = self._containers.get(operation_id, [])
                 for container in containers:
                     try: container.stop(timeout=5)
@@ -223,11 +256,18 @@ class DockerOperationManager:
         with self._lock:
             self._items[oid] = item
             self._persist_locked()
-        threading.Thread(target=target, args=(oid,), daemon=True, name=f"awe-docker-{oid}").start()
+        def worker():
+            try:
+                target(oid)
+            except Exception as exc:
+                self._fail(oid, exc)
+        threading.Thread(target=worker, daemon=True, name=f"awe-docker-{oid}").start()
         return self.get(oid)
 
-    def _log(self, oid: str, line: str) -> None:
+    def _log(self, oid: str, line: str, stream: str = "stdout", stage: str = "") -> None:
         with self._lock:
+            if oid in self._outputs:
+                self._outputs[oid].append(str(line), stream, stage)
             item = self._items[oid]
             item.logs.append(str(line))
             item.logs = item.logs[-self._max_logs:]
@@ -257,6 +297,7 @@ class DockerOperationManager:
     def _run_tool(self, oid: str, key: str, params: dict, output_dir: Path, service: DockerService,
                   on_complete: Callable[[list, Path], dict] | None = None, resume: bool = False,
                   seed_values: list[str] | None = None) -> None:
+        self._register_output(oid, output_dir)
         self._running(oid)
         try:
             signature = self._checkpoint_signature(key, [], params)
@@ -284,13 +325,19 @@ class DockerOperationManager:
                 self._save_checkpoint(output_dir, signature, completed)
             result = {"container_id": container_id, "output_dir": str(output_dir), "parsed_count": len(parsed)}
             if on_complete:
-                result.update(on_complete(parsed, output_dir) or {})
+                try:
+                    if oid not in self._outputs or self._outputs[oid].metadata().get("parsing_status") != "failed":
+                        result.update(on_complete(parsed, output_dir) or {})
+                except Exception as exc:
+                    result["processing_warning"] = str(exc)
+                    self._log(oid, f"Output processing warning: {exc}", "system")
             self._finish(oid, result)
         except Exception as exc: self._fail(oid, exc)
 
     def _run_composite(self, oid: str, key: str, stages: list[dict], params: dict, output_dir: Path, service: DockerService,
                        on_complete: Callable[[list, Path], dict] | None = None, resume: bool = False,
                        seed_values: list[str] | None = None) -> None:
+        self._register_output(oid, output_dir)
         self._running(oid)
         try:
             output_dir.mkdir(parents=True, exist_ok=True)
@@ -333,6 +380,9 @@ class DockerOperationManager:
                         return self._finish(oid, {"output_dir": str(output_dir)})
                     unit = f"{index}:{tool_index}:{tool_key}"
                     tool_dir = output_dir / f"stage_{index + 1}_{tool_key}"
+                    exit_file = tool_dir / ".awe-terminal-exit.json"
+                    if resume and exit_file.is_file() and json.loads(exit_file.read_text()).get("exit_code") == 0:
+                        completed.add(unit)
                     if unit in completed and not self._has_completed_output(tool_dir):
                         self._log(oid, f"[{name}/{tool_key}] Completed output is missing; rerunning tool")
                         completed.remove(unit)
@@ -361,7 +411,11 @@ class DockerOperationManager:
                 self._log(oid, f"[{name}] Produced {len(previous)} deduped result(s)")
             result = {"output_dir": str(output_dir), "parsed_count": len(previous), "stages": len(stages)}
             if on_complete:
-                result.update(on_complete(previous, output_dir) or {})
+                try:
+                    result.update(on_complete(previous, output_dir) or {})
+                except Exception as exc:
+                    result["processing_warning"] = str(exc)
+                    self._log(oid, f"Output processing warning: {exc}", "system")
             self._finish(oid, result)
         except Exception as exc: self._fail(oid, exc)
 
@@ -380,20 +434,28 @@ class DockerOperationManager:
         if tool.output_owner:
             os.chown(output_dir, *tool.output_owner)
         command = tool.build_command(**params)
-        self._log(oid, f"{prefix}Starting {tool.image}: {command}")
+        self._log(oid, f"{prefix}Starting {tool.image}")
         environment = tool.build_environment(**params)
+        environment.update(AWE_SESSION_IDLE_SECONDS=str(tool.session_idle_timeout), AWE_EXECUTION_TIMEOUT=str(tool.execution_timeout))
+        from .config import get_settings
+        environment["AWE_TRANSCRIPT_MAX_BYTES"] = str(get_settings().run_log_max_bytes)
+        if oid in self._outputs:
+            protected = set(tool.credential_fields) | {str(s.get("key")) for s in tool.param_spec() if s.get("type") == "secret"}
+            self._outputs[oid].update(artifact_paths=list(tool.artifact_paths), execution_kind=tool.execution_kind, output_channels=list(tool.output_channels), source_metadata=tool.source_metadata, parsing_status="pending" if "structured" in tool.output_channels else "not_requested", tool_key=key, image=tool.image, parameters={k: "[redacted]" if k in protected else v for k, v in params.items()})
         volumes = {
             str(self._docker_host_path(Path(source))): mount
             for source, mount in tool.get_volumes(str(output_dir), str(input_dir) if input_dir else None).items()
         }
-        container = service._client().containers.run(
+        interactive = tool.execution_kind == "interactive"
+        create = service._client().containers.create if interactive else service._client().containers.run
+        container = create(
             image=tool.image,
-            command=["-c", command],
-            entrypoint=["sh"],
+            command=["serve", "sh", "-c", command] if interactive else ["-c", command],
+            entrypoint=["/tmp/awe-pty-runner"] if interactive else ["sh"],
             name=tool.container_name(),
             volumes=volumes,
             environment=environment or None,
-            labels={"awe.operation_id": oid},
+            labels={"awe.operation_id": oid, "awe.session": "true" if interactive else "false"},
             detach=True,
         )
         with self._lock:
@@ -401,10 +463,59 @@ class DockerOperationManager:
             self._items[oid].result["active_container_id"] = container.id
             self._persist_locked()
         try:
-            for chunk in container.logs(stream=True, follow=True):
-                self._log(oid, f"{prefix}{chunk.decode(errors='replace').rstrip()}")
+            if interactive:
+                from .session_service import session_service
+                if oid not in self._outputs:
+                    raise ValueError("Interactive tools require a project workspace")
+                session = session_service().create_container(self._outputs[oid].project_dir, oid, container, output_dir, tool)
+                with self._lock:
+                    self._items[oid].result["session_id"] = session["id"]
+                    self._persist_locked()
+                self._outputs[oid].update(session_id=session["id"])
+                while True:
+                    container.reload()
+                    if container.status not in {"running", "restarting"}:
+                        break
+                    time.sleep(.3)
+            else:
+                import queue
+                output_queue = queue.Queue(maxsize=128)
+                done = object()
+                def collect_logs(stream):
+                    try:
+                        for chunk in container.logs(stream=True, follow=True, stdout=stream == "stdout", stderr=stream == "stderr"):
+                            output_queue.put((stream, chunk))
+                    except Exception as exc:
+                        output_queue.put(exc)
+                    finally:
+                        output_queue.put(done)
+                for stream in ("stdout", "stderr"):
+                    threading.Thread(target=collect_logs, args=(stream,), daemon=True).start()
+                started = time.monotonic()
+                readers_done = 0
+                while readers_done < 2:
+                    if time.monotonic() - started > tool.execution_timeout:
+                        container.stop(timeout=3)
+                        raise RuntimeError("Tool execution timeout")
+                    try:
+                        chunk = output_queue.get(timeout=.5)
+                    except queue.Empty:
+                        continue
+                    if chunk is done:
+                        readers_done += 1
+                        continue
+                    if isinstance(chunk, Exception):
+                        raise chunk
+                    stream, raw = chunk
+                    self._log(oid, f"{prefix}{raw.decode(errors='replace').rstrip()}", stream, prefix.strip())
             container.reload()
             code = container.attrs.get("State", {}).get("ExitCode", 0)
+            if interactive:
+                exit_file = output_dir / ".awe-terminal-exit.json"
+                if exit_file.exists():
+                    code = json.loads(exit_file.read_text()).get("exit_code", code)
+            if oid in self._outputs:
+                self._outputs[oid].update(exit_code=code)
             if oid in self._cancelled:
                 return [], container.short_id
             if code: raise RuntimeError(f"{key} container exited with code {code}")
@@ -412,9 +523,15 @@ class DockerOperationManager:
             try:
                 from containers.parsers import PARSERS
                 parser = PARSERS.get(key)
-                if parser:
+                if parser and "structured" in tool.output_channels:
                     parsed = parser(str(output_dir)) or []
+                    if oid in self._outputs:
+                        self._outputs[oid].update(parsing_status="completed")
+                elif "structured" in tool.output_channels and oid in self._outputs:
+                    self._outputs[oid].update(parsing_status="not_available")
             except Exception as exc:
+                if oid in self._outputs:
+                    self._outputs[oid].update(parsing_status="failed", parser_error=str(exc))
                 self._log(oid, f"{prefix}Parser warning: {exc}")
             return parsed, container.short_id
         finally:
@@ -422,7 +539,8 @@ class DockerOperationManager:
                 containers = self._containers.get(oid, [])
                 self._containers[oid] = [item for item in containers if item is not container]
             try:
-                container.remove(force=True)
+                if not interactive:
+                    container.remove(force=True)
                 with self._lock:
                     self._items[oid].result.pop("active_container_id", None)
                     self._persist_locked()
@@ -479,13 +597,30 @@ class DockerOperationManager:
         with self._lock:
             item = self._items[oid]
             item.status = "cancelled" if oid in self._cancelled else "completed"
-            item.result = result
-            item.message = "Cancelled" if item.status == "cancelled" else "Completed"
+            item.result.update(result)
+            item.message = "Cancelled" if item.status == "cancelled" else ("Completed" if result.get("parsed_count") else "Completed—logs available")
+            if oid in self._outputs:
+                record = self._outputs[oid]
+                record.update(status=item.status, result=item.result)
+                try:
+                    record.collect(record.metadata().get("artifact_paths"))
+                except (OSError, ValueError) as exc:
+                    record.update(artifact_error=str(exc))
             self._containers.pop(oid, None)
             self._persist_locked()
 
     def _fail(self, oid, exc):
         with self._lock:
             item = self._items[oid]; item.status = "failed"; item.message = str(exc)
+            if oid in self._outputs:
+                if self._outputs[oid].metadata().get("session_status") == "terminated":
+                    item.status = "cancelled"
+                    item.message = "Interactive session terminated"
+                self._outputs[oid].update(status=item.status, message=item.message)
+                self._outputs[oid].append(str(exc), "system")
+                try:
+                    self._outputs[oid].collect()
+                except (OSError, ValueError):
+                    pass
             self._containers.pop(oid, None)
             self._persist_locked()

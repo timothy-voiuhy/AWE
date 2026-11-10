@@ -5,6 +5,8 @@ import { Link, useParams } from 'react-router-dom'
 import { api, type DockerTool, type DockerToolInput } from '../../api/client'
 import { CategoryGroup, groupByCategory } from '../../components/CategoryGroup'
 import { OptionsMenu } from '../../components/OptionsMenu'
+import { ExecutionFields } from '../operations/ExecutionFields'
+import { PocDialog } from '../operations/PocDialog'
 
 const emptyTool: DockerToolInput = {
   key: '', display_name: '', category: 'architecture', image: '', description: '',
@@ -31,7 +33,7 @@ function GraphToolCatalog({ tools, projectId, actions }: { tools: DockerTool[]; 
       return <article className={tool.graph_enabled ? 'graph-catalog-row enabled' : 'graph-catalog-row disabled'} key={tool.key}>
         <div><b>{tool.display_name}</b><span>{tool.category} · {tool.execution_mode} · {tool.source}</span><code>{tool.image}</code></div>
         <strong>{tool.graph_enabled ? 'Graph enabled' : 'Not graph enabled'}</strong>
-        <p>{tool.graph_enabled ? `Accepts ${tool.input_types.join(', ')} and produces ${tool.output_types.join(', ')} via ${tool.relationship_types.join(', ')}.` : gaps.join(' · ')}</p>
+        <p>{tool.graph_enabled ? `Accepts ${tool.input_types.join(', ')} · ${tool.execution_kind || 'batch'} · ${(tool.output_channels || ['logs', 'structured']).join(', ')}${tool.output_types.length ? ` · Entities: ${tool.output_types.join(', ')}` : ''}` : gaps.join(' · ')}</p>
         {tool.graph_enabled && <Link className="button-link subtle" to={`/projects/${projectId}/network/transforms`}>Run transform</Link>}
       </article>
     })}</div></CategoryGroup>)}</div>
@@ -42,6 +44,7 @@ export function GraphToolsPage() {
   const { projectId = '' } = useParams()
   const qc = useQueryClient()
   const dialog = useRef<HTMLDialogElement>(null)
+  const pocDialog = useRef<HTMLDialogElement>(null)
   const [custom, setCustom] = useState<DockerToolInput>(emptyTool)
   const [paramJson, setParamJson] = useState('[]')
   const [notice, setNotice] = useState('')
@@ -77,7 +80,7 @@ export function GraphToolsPage() {
   return <main className="page feature-page graph-tools-page">
     {notice && <p className="success">{notice}</p>}{tools.isError && <p className="error">{tools.error.message}</p>}
     <section className="graph-tools-workbench">
-      <GraphToolCatalog tools={sortedTools} projectId={projectId} actions={<OptionsMenu label="Graph tool options"><button type="button" onClick={() => { setFormError(''); create.reset(); dialog.current?.showModal() }}>Create custom graph tool</button><Link to={`/projects/${projectId}/network/transforms`}>Transforms</Link></OptionsMenu>} />
+      <GraphToolCatalog tools={sortedTools} projectId={projectId} actions={<OptionsMenu label="Graph tool options"><button type="button" onClick={() => { setFormError(''); create.reset(); dialog.current?.showModal() }}>Create custom graph tool</button><button onClick={() => pocDialog.current?.showModal()}>Register PoC</button><Link to={`/projects/${projectId}/runs`}>Tool runs</Link><Link to={`/projects/${projectId}/network/transforms`}>Transforms</Link></OptionsMenu>} />
     </section>
     <dialog ref={dialog} className="graph-tool-dialog" aria-labelledby="graph-tool-dialog-title" onClick={event => { if (event.target === event.currentTarget) dialog.current?.close() }}>
       <section className="panel graph-tool-create">
@@ -96,11 +99,13 @@ export function GraphToolsPage() {
           <label>Credential fields<input value={custom.credential_fields.join(', ')} onChange={event => update('credential_fields', event.target.value.split(',').map(v => v.trim()).filter(Boolean))} /></label>
           <label className="wide">Parameters JSON<textarea value={paramJson} onChange={event => setParamJson(event.target.value)} placeholder='[{"key":"url","label":"Target URL","type":"text"}]' /></label>
           <label className="wide">Dockerfile<textarea value={custom.dockerfile} onChange={event => update('dockerfile', event.target.value)} /></label>
-          <label className="wide">parser.py<textarea value={custom.parser} onChange={event => update('parser', event.target.value)} /></label>
+          <ExecutionFields value={custom} onChange={next => setCustom(current => ({ ...current, ...next }))} />
+          {(!custom.output_channels || custom.output_channels.includes('structured')) && <label className="wide">parser.py<textarea value={custom.parser} onChange={event => update('parser', event.target.value)} /></label>}
         </div>
         {(formError || create.isError) && <p className="error" role="alert">{formError || create.error?.message}</p>}
         <footer><button type="button" className="subtle" onClick={() => dialog.current?.close()}>Cancel</button><button type="button" onClick={submitCustom} disabled={create.isPending || !custom.key || !custom.display_name || !custom.image || !custom.command_template}>{create.isPending ? 'Saving...' : 'Create graph tool'}</button></footer>
       </section>
     </dialog>
+    <PocDialog projectId={projectId} dialog={pocDialog} />
   </main>
 }

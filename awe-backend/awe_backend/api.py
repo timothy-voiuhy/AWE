@@ -37,6 +37,9 @@ from .routes import vault
 from .routes import browser
 from .routes import ai
 from .routes import terminal
+from .routes import run_outputs
+from .routes import sessions
+from .routes import pocs
 
 router = APIRouter()
 
@@ -57,3 +60,6 @@ router.include_router(vault.router)
 router.include_router(browser.router)
 router.include_router(ai.router)
 router.include_router(terminal.router)
+router.include_router(run_outputs.router)
+router.include_router(sessions.router)
+router.include_router(pocs.router)
