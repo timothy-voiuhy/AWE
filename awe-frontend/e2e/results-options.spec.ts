@@ -69,7 +69,13 @@ test('scrolling tabbed results leaves categories in place', async ({ page }) => 
     const table = page.locator('.result-data-table')
     await expect(table.locator('tbody tr')).toHaveCount(80)
     expect((await page.locator('.result-source-tabs').boundingBox())?.height).toBeGreaterThan(30)
+    const workbench = await page.locator('.results-browser').boundingBox()
+    expect(Math.abs((workbench?.y ?? 0) + (workbench?.height ?? 0) - viewport.height)).toBeLessThan(2)
     const categories = page.locator('.result-categories')
+    if (viewport.width > 850) {
+      const rail = await categories.boundingBox()
+      expect(Math.abs((rail?.y ?? 0) + (rail?.height ?? 0) - viewport.height)).toBeLessThan(2)
+    }
     const before = await categories.boundingBox()
     const pageScroll = await page.evaluate(() => window.scrollY)
     await table.hover()
