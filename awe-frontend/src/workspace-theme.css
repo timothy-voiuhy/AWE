@@ -504,3 +504,78 @@ tbody tr:hover { background: #1a2b3d; }
 @media (min-width: 601px) and (max-width: 900px) {
   .page.network-page { padding-top: 12px; }
 }
+
+/* Put page options in the first work row, beside the controls they affect. */
+.browser-toolbar { grid-template-columns: 220px minmax(0, 1fr) auto; align-items: center; padding: 7px 9px; }
+.browser-toolbar .page-options { justify-self: end; }
+.pipeline-commandbar { flex-wrap: wrap; overflow: visible; }
+.pipeline-commandbar-end { display: flex; align-items: center; gap: 7px; margin-left: auto; white-space: nowrap; }
+.ai-sidebar > header { display: flex; min-height: 30px; align-items: center; justify-content: space-between; gap: 8px; }
+.ai-sidebar-header-actions { display: flex; align-items: center; gap: 6px; }
+.results-toolbar { margin-bottom: 8px; }
+.results-toolbar .results-header-actions { margin-left: auto; gap: 7px; white-space: nowrap; }
+.browser-toolbar .page-options > summary,
+.pipeline-commandbar .page-options > summary,
+.ai-sidebar .page-options > summary,
+.results-toolbar .page-options > summary,
+.evidence-toolbar .page-options > summary,
+.network-log-summary .page-options > summary { background: transparent; border-color: transparent; }
+@media (max-width: 800px) {
+  .browser-toolbar { grid-template-columns: minmax(0, 1fr) auto; }
+  .browser-toolbar > select { grid-column: 1; grid-row: 1; }
+  .browser-toolbar > form { grid-column: 1 / -1; grid-row: 2; }
+  .browser-toolbar > .page-options { grid-column: 2; grid-row: 1; }
+}
+@media (max-width: 600px) {
+  .results-toolbar { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px; }
+  .results-toolbar > select { grid-column: 1; grid-row: 1; width: 100%; min-width: 0; }
+  .results-toolbar > input { grid-column: 1 / -1; grid-row: 2; width: 100%; min-width: 0; }
+  .results-toolbar > .results-header-actions { grid-column: 2; grid-row: 1; }
+  .results-toolbar > .result-toggle { grid-column: 1 / -1; }
+}
+.database-metrics { position: relative; }
+.database-metric-alert { position: relative; padding-right: 38px; }
+.database-metric-alert .page-options { position: absolute; top: 7px; right: 7px; }
+.terminal-profile-picker { overflow: visible; }
+.terminal-profile-header-actions { display: flex; align-items: center; gap: 8px; }
+.terminal-profile-header-actions > span { white-space: nowrap; }
+.docker-tabbar { display: flex; align-items: center; gap: 12px; margin-bottom: 10px; border-bottom: 1px solid var(--workspace-line); }
+.docker-tabbar .docker-tabs { min-width: 0; flex: 1; margin-bottom: 0; border-bottom: 0; }
+.docker-tabbar-actions { display: flex; flex: 0 0 auto; align-items: center; gap: 7px; }
+.docker-tabbar-actions .muted { margin: 0; white-space: nowrap; font-size: 10px; }
+.transform-runner-header-actions { display: flex; align-items: center; gap: 7px; }
+.graph-tool-catalog > header, .graph-tool-runner > header { align-items: center; }
+.database-metric-alert .page-options > summary,
+.terminal-profile-picker .page-options > summary,
+.docker-tabbar .page-options > summary,
+.graph-tool-catalog .page-options > summary,
+.graph-tool-runner .page-options > summary { background: transparent; border-color: transparent; }
+@media (max-width: 600px) {
+  .terminal-profile-header-actions { gap: 4px; }
+  .terminal-profile-header-actions .live-dot { display: none; }
+  .docker-tabbar { gap: 4px; }
+  .docker-tabbar-actions > div:first-child { display: none; }
+}
+.editor-panel-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.editor-panel-heading .difference-count { padding: 0; background: transparent; font-size: 10px; letter-spacing: 0; text-transform: none; }
+.intruder-request > header nav { flex-wrap: wrap; justify-content: flex-end; }
+.intruder-request > header .live-dot { white-space: nowrap; }
+.feature-page:not(.network-page), .page.results-page, .page.report-page { padding-top: 10px; }
+.graph-tool-catalog, .transform-catalog { padding-top: 8px; }
+@media (max-width: 600px) {
+  .feature-page:not(.network-page), .page.results-page, .page.report-page { padding-top: 62px; }
+}
+.graph-tool-catalog > header > div, .graph-tool-runner > header > div:first-child { display: grid; min-width: 0; gap: 3px; }
+.graph-tool-catalog > header .page-options, .graph-tool-runner > header .page-options { flex: 0 0 auto; }
+@media (max-width: 600px) {
+  .pipeline-commandbar > button:first-child { order: -2; }
+  .pipeline-commandbar-end { order: -1; margin-left: auto; }
+  .evidence-toolbar { grid-template-columns: minmax(0, 1fr) auto; }
+  .evidence-toolbar > div:first-child { grid-column: 1; grid-row: 1; }
+  .evidence-toolbar > .page-options { grid-column: 2; grid-row: 1; }
+  .evidence-toolbar > input { grid-column: 1 / -1; grid-row: 2; width: 100%; min-width: 0; }
+  .evidence-toolbar > select { grid-column: 1 / -1; grid-row: 3; width: 100%; min-width: 0; }
+  .graph-tool-catalog > header > div > span,
+  .graph-tool-runner > header > div:first-child > span { display: none; }
+}
+.transform-catalog > header > div, .pipeline-parameter-editor > header { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 8px; }

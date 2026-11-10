@@ -138,9 +138,8 @@ export function TerminalPage() {
 
   return <main className={`page feature-page terminal-page${connected ? ' terminal-live' : ''}`}>
     {!connected && <>
-    <header className="page-header"><div><p className="eyebrow">Remote operations</p><h1>Terminal</h1><p className="muted">Interactive SSH session through the AWE backend broker.</p></div><div className="terminal-actions"><span className="live-dot">Disconnected</span><OptionsMenu label="Terminal options"><Link to={`/projects/${projectId}/terminal/config`}>Manage profiles</Link></OptionsMenu></div></header>
     <section className="panel terminal-profile-picker">
-      <header><div><p className="eyebrow">Connections</p><h2>Saved profiles</h2></div><span>{profiles.data?.length || 0} saved</span></header>
+      <header><div><p className="eyebrow">Connections</p><h2>Saved profiles</h2></div><div className="terminal-profile-header-actions"><span>{profiles.data?.length || 0} saved</span><span className="live-dot">Disconnected</span><OptionsMenu label="Terminal options"><Link to={`/projects/${projectId}/terminal/config`}>Manage profiles</Link></OptionsMenu></div></header>
       {profiles.data?.map((item, i) => <article className={`terminal-profile-row${item.id === profile?.id ? ' selected' : ''}`} key={item.id}>
         <button type="button" className="terminal-profile-select" onClick={() => setIndex(i)}><span className="terminal-profile-status" /><span><b>{item.name}</b><small>{item.username}@{item.host}:{item.port}</small></span></button>
         <button type="button" className="terminal-profile-configure" onClick={() => { setIndex(i); setConfiguringId(item.id) }}>Configure profile</button>

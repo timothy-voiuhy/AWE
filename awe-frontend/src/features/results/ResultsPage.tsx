@@ -127,11 +127,11 @@ export function ResultsPage() {
   }
 
   return <main className="page results-page">
-    <header className="page-header results-header"><div><p className="eyebrow">Project intelligence</p><h1>Results</h1><p className="muted">Merged findings from transforms, pipeline runs, and proxy traffic.</p></div><div className="results-header-actions"><span className="result-total">{results.data?.length ?? 0} unique</span><OptionsMenu label="Results options"><button type="button" onClick={() => importDialog.current?.showModal()}>Import subdomains</button><button type="button" onClick={exportCsv} disabled={!filtered.length}>Export CSV</button><button type="button" onClick={() => void queryClient.invalidateQueries({ queryKey: ['projects', projectId, 'results'] })}>Refresh results</button></OptionsMenu></div></header>
     <div className="results-toolbar panel">
       <select aria-label="Result session" value={sessionId} onChange={(event) => setSessionId(event.target.value)}><option value="all">All results</option>{sessions.data?.map((session) => <option value={session.id} key={session.id}>{session.pipeline_name} · {new Date(session.started_at).toLocaleString()}</option>)}</select>
       <input aria-label="Search results" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search the current category…" />
       {(category === 'crawl' || category === 'params') && <label className="result-toggle"><input type="checkbox" checked={hideStatic} onChange={(event) => setHideStatic(event.target.checked)} /> Hide static assets</label>}
+      <div className="results-header-actions"><span className="result-total">{results.data?.length ?? 0} unique</span><OptionsMenu label="Results options"><button type="button" onClick={() => importDialog.current?.showModal()}>Import subdomains</button><button type="button" onClick={exportCsv} disabled={!filtered.length}>Export CSV</button><button type="button" onClick={() => void queryClient.invalidateQueries({ queryKey: ['projects', projectId, 'results'] })}>Refresh results</button></OptionsMenu></div>
     </div>
     <dialog ref={importDialog} className="results-import-dialog" aria-labelledby="results-import-title" onClick={event => { if (event.target === event.currentTarget) importDialog.current?.close() }}>
       <SubdomainImportPanel projectId={projectId} compact headingId="results-import-title" onClose={() => importDialog.current?.close()} />

@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from 'react'
+import { useMemo, useRef, useState, type ReactNode } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useParams } from 'react-router-dom'
 
@@ -23,8 +23,9 @@ function graphToolGaps(tool: DockerTool) {
   return gaps
 }
 
-function GraphToolCatalog({ tools, projectId }: { tools: DockerTool[]; projectId: string }) {
-  return <section className="panel graph-tool-catalog"><header><div><b>Tool catalog</b><span>{tools.length} Docker tools · {tools.filter(item => item.graph_enabled).length} graph enabled</span></div></header>
+function GraphToolCatalog({ tools, projectId, actions }: { tools: DockerTool[]; projectId: string; actions: ReactNode }) {
+  return <section className="panel graph-tool-catalog"><header><div><b>Tool catalog</b><span>{tools.length} Docker tools · {tools.filter(item => item.graph_enabled).length} graph enabled</span></div>{actions}</header>
+    {!tools.length && <div className="empty compact">No Docker tools are registered.</div>}
     <div className="catalog-groups">{groupByCategory(tools).map(group => <CategoryGroup key={group.category} name={group.category} count={group.entries.length}><div className="graph-tool-catalog-grid">{group.entries.map(tool => {
       const gaps = graphToolGaps(tool)
       return <article className={tool.graph_enabled ? 'graph-catalog-row enabled' : 'graph-catalog-row disabled'} key={tool.key}>
@@ -74,10 +75,9 @@ export function GraphToolsPage() {
   }
 
   return <main className="page feature-page graph-tools-page">
-    <header className="page-header graph-tools-header"><div><p className="eyebrow">Graph automation</p><h1>Graph Tools</h1><p className="muted">Review Docker graph compatibility and create custom graph-capable tools.</p></div><OptionsMenu label="Graph tool options"><button type="button" onClick={() => { setFormError(''); create.reset(); dialog.current?.showModal() }}>Create custom graph tool</button><Link to={`/projects/${projectId}/network/transforms`}>Transforms</Link></OptionsMenu></header>
     {notice && <p className="success">{notice}</p>}{tools.isError && <p className="error">{tools.error.message}</p>}
     <section className="graph-tools-workbench">
-      {sortedTools.length > 0 ? <GraphToolCatalog tools={sortedTools} projectId={projectId} /> : <section className="panel empty">No Docker tools are registered.</section>}
+      <GraphToolCatalog tools={sortedTools} projectId={projectId} actions={<OptionsMenu label="Graph tool options"><button type="button" onClick={() => { setFormError(''); create.reset(); dialog.current?.showModal() }}>Create custom graph tool</button><Link to={`/projects/${projectId}/network/transforms`}>Transforms</Link></OptionsMenu>} />
     </section>
     <dialog ref={dialog} className="graph-tool-dialog" aria-labelledby="graph-tool-dialog-title" onClick={event => { if (event.target === event.currentTarget) dialog.current?.close() }}>
       <section className="panel graph-tool-create">

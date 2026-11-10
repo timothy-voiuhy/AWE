@@ -45,15 +45,6 @@ export function DatabasePage() {
 
   return <main className="page feature-page database-page">
     
-    <header className="page-header">
-      <div>
-        <p className="eyebrow">System storage</p>
-        <h1>Database</h1>
-        <p className="muted">Inspect MongoDB usage and reclaim space from captured proxy traffic.</p>
-      </div>
-      <OptionsMenu label="Database options"><button onClick={() => void overview.refetch()} disabled={overview.isFetching}>Refresh</button></OptionsMenu>
-    </header>
-
     {overview.isError && <p className="error">Could not load database statistics: {overview.error.message}</p>}
     {clearTraffic.isError && <p className="error">Could not clear proxy traffic: {clearTraffic.error.message}</p>}
     {clearTraffic.isSuccess && <p className="success">Deleted {clearTraffic.data.deleted_documents.toLocaleString()} captured transactions and released approximately {formatBytes(clearTraffic.data.reclaimed_storage_bytes)}.</p>}
@@ -62,7 +53,7 @@ export function DatabasePage() {
       <article className="panel database-metric"><span>Databases</span><strong>{overview.isPending ? '…' : overview.data?.databases.length ?? 0}</strong><small>Application databases</small></article>
       <article className="panel database-metric"><span>Documents</span><strong>{overview.isPending ? '…' : totals.documents.toLocaleString()}</strong><small>Estimated collection records</small></article>
       <article className="panel database-metric"><span>Storage</span><strong>{overview.isPending ? '…' : formatBytes(totals.storage)}</strong><small>Data plus indexes</small></article>
-      <article className="panel database-metric database-metric-alert"><span>Proxy traffic</span><strong>{overview.isPending ? '…' : traffic ? formatBytes(collectionSize(traffic)) : '0 B'}</strong><small>{traffic ? `${traffic.documents.toLocaleString()} captured transactions` : 'No captured transactions'}</small></article>
+      <article className="panel database-metric database-metric-alert"><span>Proxy traffic</span><strong>{overview.isPending ? '…' : traffic ? formatBytes(collectionSize(traffic)) : '0 B'}</strong><small>{traffic ? `${traffic.documents.toLocaleString()} captured transactions` : 'No captured transactions'}</small><OptionsMenu label="Database options"><button onClick={() => void overview.refetch()} disabled={overview.isFetching}>Refresh</button></OptionsMenu></article>
     </section>
 
     <section className="database-layout">

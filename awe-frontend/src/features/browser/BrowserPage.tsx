@@ -112,10 +112,6 @@ export function BrowserPage() {
   }
 
   return <main className="page feature-page browser-page">
-    <header className="page-header">
-      <div><p className="eyebrow">Controlled browser</p><h1>Browser</h1><p className="muted">Interactive Chromium desktop routed through AWE’s proxy.</p></div>
-      <OptionsMenu label="Browser options"><button onClick={() => create.mutate()} disabled={create.isPending}>{create.isPending ? 'Starting…' : 'New session'}</button>{sessionId && <button className="danger" onClick={() => close.mutate()} disabled={close.isPending}>Close session</button>}</OptionsMenu>
-    </header>
     <section className="browser-toolbar panel">
       <select value={sessionId} onChange={event => { setSessionId(event.target.value); const session = sessions.data?.find(item => item.id === event.target.value); if (session) setUrl(session.url) }}>
         <option value="">Select a session</option>
@@ -125,6 +121,7 @@ export function BrowserPage() {
         <input value={url} onChange={event => { editingUrl.current = true; setUrl(event.target.value) }} placeholder="https://target.example" disabled={!sessionId} />
         <button disabled={!sessionId || navigate.isPending}>{navigate.isPending ? 'Loading…' : 'Go'}</button>
       </form>
+      <OptionsMenu label="Browser options"><button onClick={() => create.mutate()} disabled={create.isPending}>{create.isPending ? 'Starting…' : 'New session'}</button>{sessionId && <button className="danger" onClick={() => close.mutate()} disabled={close.isPending}>Close session</button>}</OptionsMenu>
     </section>
     {(error || create.isError || navigate.isError) && <p className="error">{error || ((create.error || navigate.error) as Error)?.message}</p>}
     {sessionId && <section className="browser-stage panel">

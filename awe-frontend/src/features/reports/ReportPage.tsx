@@ -134,8 +134,6 @@ export function ReportPage() {
   }
 
   return <main className="page report-page">
-    <header className="page-header report-header"><div><p className="eyebrow">Submission package</p><h1>Reports</h1><p className="muted">Build program-ready Markdown from selected workspace findings, evidence, notes, and methodology context.</p></div><span className="result-total">{selectedResultCount + selectedEvidenceCount} attached</span></header>
-
     <section className="report-workbench">
       <form className="panel report-form" onSubmit={(event) => { event.preventDefault(); generate.mutate() }}>
         <header><b>Report Details</b><span>{draft.template}</span></header>

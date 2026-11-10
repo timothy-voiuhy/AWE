@@ -13,8 +13,7 @@ export function ComparerPage() {
 
   return <main className="page feature-page">
     
-    <header className="page-header"><div><p className="eyebrow">Utilities</p><h1>Comparer</h1><p className="muted">Compare requests, responses, tokens, or arbitrary text line by line.</p></div><span className="difference-count">{changed} changed lines</span></header>
-    <section className="editor-grid"><label className="panel editor-panel"><span>Original</span><textarea value={left} onChange={(event) => setLeft(event.target.value)} spellCheck={false} /></label><label className="panel editor-panel"><span>Modified</span><textarea value={right} onChange={(event) => setRight(event.target.value)} spellCheck={false} /></label></section>
+    <section className="editor-grid"><label className="panel editor-panel"><span className="editor-panel-heading"><span>Original</span><span className="difference-count">{changed} changed lines</span></span><textarea value={left} onChange={(event) => setLeft(event.target.value)} spellCheck={false} /></label><label className="panel editor-panel"><span>Modified</span><textarea value={right} onChange={(event) => setRight(event.target.value)} spellCheck={false} /></label></section>
     <section className="panel diff-panel">{comparison.map((line) => <div className={line.same ? 'diff-same' : 'diff-changed'} key={line.index}><b>{line.index}</b><code>{line.left || ' '}</code><code>{line.right || ' '}</code></div>)}</section>
   </main>
 }
