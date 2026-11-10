@@ -3,6 +3,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useParams, useSearchParams } from 'react-router-dom'
 
 import { api, type StoredResult } from '../../api/client'
+import { OptionsMenu } from '../../components/OptionsMenu'
 import { Spinner } from '../../components/Spinner'
 import { SubdomainImportPanel } from './SubdomainImportPanel'
 
@@ -63,6 +64,7 @@ export function ResultsPage() {
   const [search, setSearch] = useState('')
   const [hideStatic, setHideStatic] = useState(true)
   const selectedInitialCategory = useRef(false)
+  const importDialog = useRef<HTMLDialogElement>(null)
 
   const sessions = useQuery({
     queryKey: ['projects', projectId, 'sessions'],
@@ -125,16 +127,15 @@ export function ResultsPage() {
   }
 
   return <main className="page results-page">
-    
-    <header className="page-header results-header"><div><p className="eyebrow">Project intelligence</p><h1>Results</h1><p className="muted">Merged findings from transforms, pipeline runs, and proxy traffic.</p></div><span className="result-total">{results.data?.length ?? 0} unique</span></header>
+    <header className="page-header results-header"><div><p className="eyebrow">Project intelligence</p><h1>Results</h1><p className="muted">Merged findings from transforms, pipeline runs, and proxy traffic.</p></div><div className="results-header-actions"><span className="result-total">{results.data?.length ?? 0} unique</span><OptionsMenu label="Results options"><button type="button" onClick={() => importDialog.current?.showModal()}>Import subdomains</button><button type="button" onClick={exportCsv} disabled={!filtered.length}>Export CSV</button><button type="button" onClick={() => void queryClient.invalidateQueries({ queryKey: ['projects', projectId, 'results'] })}>Refresh results</button></OptionsMenu></div></header>
     <div className="results-toolbar panel">
       <select aria-label="Result session" value={sessionId} onChange={(event) => setSessionId(event.target.value)}><option value="all">All results</option>{sessions.data?.map((session) => <option value={session.id} key={session.id}>{session.pipeline_name} · {new Date(session.started_at).toLocaleString()}</option>)}</select>
       <input aria-label="Search results" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search the current category…" />
       {(category === 'crawl' || category === 'params') && <label className="result-toggle"><input type="checkbox" checked={hideStatic} onChange={(event) => setHideStatic(event.target.checked)} /> Hide static assets</label>}
-      <button className="secondary-button" onClick={() => void queryClient.invalidateQueries({ queryKey: ['projects', projectId, 'results'] })}>Refresh</button>
-      <button onClick={exportCsv} disabled={!filtered.length}>Export CSV</button>
     </div>
-    <SubdomainImportPanel projectId={projectId} />
+    <dialog ref={importDialog} className="results-import-dialog" aria-labelledby="results-import-title" onClick={event => { if (event.target === event.currentTarget) importDialog.current?.close() }}>
+      <SubdomainImportPanel projectId={projectId} compact headingId="results-import-title" onClose={() => importDialog.current?.close()} />
+    </dialog>
     {results.isError && <p className="error">Results could not be loaded. Check the backend and MongoDB connection.</p>}
     <section className="results-browser">
       <aside className="panel result-categories"><b>Categories</b>{categories.map(([key, label]) => <button className={category === key ? 'selected' : ''} onClick={() => setCategory(key)} key={key}><span>{label}</span><em>{counts[key]}</em></button>)}</aside>

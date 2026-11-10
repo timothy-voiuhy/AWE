@@ -169,6 +169,31 @@ button:not(:disabled):hover, .button-link:hover { filter: brightness(1.1); }
   border-bottom: 1px solid var(--workspace-line);
   border-radius: 0;
 }
+.results-header-actions { display: flex; flex: 0 0 auto; align-items: center; gap: 14px; margin-left: auto; }
+.results-header-actions .page-options { margin-left: 0; }
+.results-page .page-options > summary,
+.results-page .page-options > summary:hover,
+.results-page .page-options[open] > summary { background: transparent; border-color: transparent; }
+.results-page .page-options > summary:hover { color: var(--workspace-blue); }
+.results-page .page-options-panel button:disabled { opacity: .5; cursor: not-allowed; }
+.results-import-dialog {
+  width: min(680px, calc(100vw - 32px));
+  max-height: calc(100dvh - 32px);
+  padding: 0;
+  overflow: auto;
+  color: #e1e8f2;
+  background: #151d27;
+  border: 1px solid #405065;
+  box-shadow: 0 24px 70px #0009;
+}
+.results-import-dialog::backdrop { background: rgb(0 0 0 / 70%); }
+.results-import-dialog .subdomain-import-panel { margin: 0; padding: 24px; border: 0; }
+.results-import-dialog .subdomain-import-controls { grid-template-columns: 1fr; }
+.results-import-dialog .subdomain-import-controls input[type=file] { width: 100%; min-width: 0; }
+.subdomain-import-controls { grid-template-columns: minmax(180px, .7fr) auto minmax(220px, 1fr); }
+.subdomain-import-controls input[type=checkbox] { width: auto; flex: 0 0 auto; }
+.subdomain-import-close { flex: 0 0 auto; padding: 2px 8px; color: #b8c5d4; background: transparent; font-size: 22px; line-height: 1; }
+.subdomain-import-close:hover { color: #fff; background: #253142; }
 .pipeline-history, .result-categories, .session-list { padding: 8px 8px 8px 0; border-top: 0; border-right: 1px solid var(--workspace-line); }
 .pipeline-main, .result-content { border-top: 0; }
 .pipeline-history > button.selected, .result-categories > button.selected, .session-list button.selected {
@@ -258,6 +283,7 @@ tbody tr:hover { background: #1a2b3d; }
 
 @media (max-width: 850px) {
   .app-shell { grid-template-columns: 1fr; }
+  .subdomain-import-controls { grid-template-columns: 1fr; }
   .sidebar { padding: 10px 16px; }
   .brand { border-bottom: 0; padding: 0; }
   .page { width: min(100% - 28px, 760px); padding-top: 22px; }
@@ -275,6 +301,9 @@ tbody tr:hover { background: #1a2b3d; }
   h1 { font-size: 26px; }
   .page { width: calc(100% - 24px); padding-top: 62px; }
   .page-header { align-items: flex-start; }
+  .results-header-actions { gap: 4px; }
+  .results-import-dialog { width: calc(100vw - 16px); max-height: calc(100dvh - 16px); }
+  .results-import-dialog .subdomain-import-panel { padding: 18px; }
   .page-header.vault-page-header { display: block; }
   .vault-header-stats { margin-top: 12px; }
   .vault-header-stats > div { padding-left: 10px; }

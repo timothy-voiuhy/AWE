@@ -3,7 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 
 import { api } from '../../api/client'
 
-export function SubdomainImportPanel({ projectId, compact = false }: { projectId: string; compact?: boolean }) {
+export function SubdomainImportPanel({ projectId, compact = false, headingId, onClose }: { projectId: string; compact?: boolean; headingId?: string; onClose?: () => void }) {
   const inputRef = useRef<HTMLInputElement>(null)
   const queryClient = useQueryClient()
   const [fileName, setFileName] = useState('')
@@ -32,11 +32,11 @@ export function SubdomainImportPanel({ projectId, compact = false }: { projectId
   }
 
   return <section className={`panel subdomain-import-panel${compact ? ' compact' : ''}`}>
-    <header><div><p className="eyebrow">Import</p><h2>Subdomains</h2><p className="muted">Load TXT, CSV, or XLSX files into Results and optionally attach them to the Network graph.</p></div></header>
+    <header><div><p className="eyebrow">Import</p><h2 id={headingId}>Subdomains</h2><p className="muted">Load TXT, CSV, or XLSX files into Results and optionally attach them to the Network graph.</p></div>{onClose && <button type="button" className="subdomain-import-close" aria-label="Close import dialog" onClick={onClose}>×</button>}</header>
     <div className="subdomain-import-controls">
-      <input ref={inputRef} type="file" accept=".txt,.list,.csv,.xlsx,text/plain,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" onChange={event => pickFile(event.target.files?.[0])} />
-      <select value={investigationId} onChange={event => setInvestigationId(event.target.value)} disabled={!attachToGraph}><option value="">Default investigation</option>{investigations.data?.map(item => <option value={item.id} key={item.id}>{item.name}</option>)}</select>
+      <select aria-label="Investigation" value={investigationId} onChange={event => setInvestigationId(event.target.value)} disabled={!attachToGraph}><option value="">Default investigation</option>{investigations.data?.map(item => <option value={item.id} key={item.id}>{item.name}</option>)}</select>
       <label><input type="checkbox" checked={attachToGraph} onChange={event => setAttachToGraph(event.target.checked)} /> Attach to graph</label>
+      <input ref={inputRef} aria-label="Subdomain file" type="file" accept=".txt,.list,.csv,.xlsx,text/plain,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" onChange={event => pickFile(event.target.files?.[0])} />
     </div>
     {fileName && <small>Selected: {fileName}</small>}
     {upload.isPending && <p className="muted">Importing subdomains...</p>}
