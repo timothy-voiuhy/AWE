@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test'
+import { devices, expect, test } from '@playwright/test'
 
 test('compact workspaces keep secondary actions available', async ({ page }) => {
   const username = process.env.E2E_USERNAME
@@ -142,7 +142,7 @@ test('secondary workspace pages start at their working controls', async ({ page 
   }
 })
 
-test('page options share the first control row on mobile', async ({ page }) => {
+test('page options share the first control row on narrow desktop', async ({ page }) => {
   const username = process.env.E2E_USERNAME
   const password = process.env.E2E_PASSWORD
   if (!username || !password) throw new Error('Set E2E_USERNAME and E2E_PASSWORD in .env.e2e.local')
@@ -155,6 +155,7 @@ test('page options share the first control row on mobile', async ({ page }) => {
   await expect(page.getByRole('heading', { name: 'Start an engagement' })).toBeVisible()
   const projectId = (await (await page.request.get('/api/v1/projects')).json())[0]?.id as string
   expect(projectId).toBeTruthy()
+  await expect(page.getByRole('button', { name: 'Open navigation sidebar' })).toBeVisible()
 
   for (const [route, row] of [
     ['browser', '.browser-toolbar > select'],
@@ -178,5 +179,27 @@ test('page options share the first control row on mobile', async ({ page }) => {
     }, row)
     expect(offset, route).toBeLessThanOrEqual(24)
     expect(await page.locator('main').evaluate(element => element.scrollWidth - element.clientWidth), route).toBeLessThanOrEqual(1)
+  }
+})
+
+test('touch mobile uses the edge swipe zone without a top navigation button', async ({ browser }) => {
+  const username = process.env.E2E_USERNAME
+  const password = process.env.E2E_PASSWORD
+  if (!username || !password) throw new Error('Set E2E_USERNAME and E2E_PASSWORD in .env.e2e.local')
+
+  const context = await browser.newContext({ ...devices['Pixel 5'] })
+  const page = await context.newPage()
+  try {
+    await page.goto('/projects')
+    await page.getByLabel('Username').fill(username)
+    await page.locator('input[autocomplete="current-password"]').fill(password)
+    await page.getByRole('button', { name: 'Sign in' }).click()
+    await expect(page.getByRole('heading', { name: 'Start an engagement' })).toBeVisible()
+
+    await expect(page.getByRole('button', { name: 'Open navigation sidebar' })).not.toBeVisible()
+    await expect(page.locator('.sidebar-swipe-zone')).toBeVisible()
+    expect(await page.locator('main').evaluate(element => parseFloat(getComputedStyle(element).paddingTop))).toBeLessThanOrEqual(10)
+  } finally {
+    await context.close()
   }
 })

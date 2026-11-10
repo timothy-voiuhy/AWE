@@ -618,3 +618,15 @@ tbody tr:hover { background: #1a2b3d; }
   .result-open-actions { grid-template-columns: 1fr; }
   .result-actions-content > footer { align-items: stretch; flex-direction: column; }
 }
+
+/* Touch devices reveal the navigation with the existing left-edge swipe.
+   Keep the explicit menu button for narrow mouse/trackpad windows only. */
+@media (max-width: 850px) and (pointer: coarse) {
+  .sidebar-menu-button { display: none; }
+}
+@media (max-width: 600px) and (pointer: coarse) {
+  .page,
+  .feature-page:not(.network-page),
+  .page.results-page,
+  .page.report-page { padding-top: 10px; }
+}
