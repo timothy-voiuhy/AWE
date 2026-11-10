@@ -161,7 +161,7 @@ test('page options share the first control row on mobile', async ({ page }) => {
     ['network/evidence', '.evidence-toolbar > div:first-child'],
     ['network/logs', '.network-log-summary > div:first-child'],
     ['network/tools', '.graph-tool-catalog > header'],
-    ['network/transforms', '.graph-tool-runner > header'],
+    ['network/transforms', '.transform-catalog > header'],
     ['terminal', '.terminal-profile-picker > header'],
     ['docker', '.docker-tabs'],
   ]) {

@@ -164,3 +164,35 @@ def test_resume_cleans_up_interrupted_container():
     client.containers.list.assert_called_once_with(all=True, filters={"label": "awe.operation_id=operation-1"})
     container.stop.assert_called_once_with(timeout=5)
     container.remove.assert_called_once_with(force=True)
+
+
+def test_tool_run_mounts_all_selected_graph_outputs_as_input_list(tmp_path):
+    manager = DockerOperationManager()
+    manager._items["operation"] = DockerOperation(id="operation", kind="tool.httpx", status="queued")
+    captured = {}
+
+    def run_tool(_oid, key, params, output_dir, _service, input_dir, *_args):
+        captured.update({"key": key, "params": params, "input_dir": input_dir})
+        output_dir.mkdir(parents=True, exist_ok=True)
+        (output_dir / "httpx_results.txt").write_text("https://one.example.com\n", encoding="utf-8")
+        return [{"url": "https://one.example.com"}], "container"
+
+    with patch.object(manager, "_run_tool_sync", side_effect=run_tool):
+        manager._run_tool(
+            "operation", "httpx", {"target": "example.com"}, tmp_path, Mock(),
+            seed_values=["one.example.com", "two.example.com", "one.example.com"],
+        )
+
+    assert manager.get("operation").status == "completed"
+    assert captured["key"] == "httpx"
+    assert captured["params"]["input_file"] == "/input/input.txt"
+    assert captured["input_dir"] == tmp_path / "_seed_inputs"
+    assert (captured["input_dir"] / "input.txt").read_text(encoding="utf-8") == "one.example.com\ntwo.example.com\n"
+    assert manager._has_completed_output(tmp_path)
+
+
+def test_seed_input_file_is_not_treated_as_completed_tool_output(tmp_path):
+    input_dir = DockerOperationManager._seed_input_dir(tmp_path, ["one.example.com"])
+
+    assert input_dir == tmp_path / "_seed_inputs"
+    assert not DockerOperationManager._has_completed_output(tmp_path)

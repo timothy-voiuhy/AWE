@@ -467,6 +467,7 @@ class TransformJob(BaseModel):
     transform_id: str
     status: Literal["queued", "running", "completed", "failed", "cancelled", "approval_required"]
     entity_ids: list[str] = Field(default_factory=list)
+    source_job_id: str = ""
     operation_id: str = ""
     parameters: dict = Field(default_factory=dict)
     message: str = ""

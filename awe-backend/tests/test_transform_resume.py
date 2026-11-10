@@ -94,3 +94,22 @@ def test_resumed_ingestion_does_not_duplicate_existing_graph_output(tmp_path):
     assert len(store.entities(saved)) == 1
     assert len(store.relationships(saved)) == 1
     assert saved.entity_ids == ["transform:job-1:0"]
+
+
+def test_graph_transform_launch_passes_every_selected_entity_value_as_seed_input(monkeypatch, tmp_path):
+    entities = [
+        SimpleNamespace(id="sub-1", value="one.example.com", label="one.example.com"),
+        SimpleNamespace(id="sub-2", value="two.example.com", label="two.example.com"),
+    ]
+    monkeypatch.setattr(api, "_graph_bundle", lambda *_: SimpleNamespace(entities=entities))
+    manager = Mock()
+    manager.start_tool.return_value = DockerOperation(id="operation", kind="tool.httpx", status="queued")
+    transform = SimpleNamespace(tool_key="httpx", stages=[])
+
+    operation = api._launch_graph_transform_operation(
+        "project-1", tmp_path, "example.com", "investigation-1", transform,
+        ["sub-1", "sub-2"], "sub-1", {}, "job-2", manager, Mock(), Mock(),
+    )
+
+    assert operation.id == "operation"
+    assert manager.start_tool.call_args.kwargs["seed_values"] == ["one.example.com", "two.example.com"]

@@ -2414,13 +2414,20 @@ def _launch_graph_transform_operation(
     prior_logs: list[str] | None = None,
 ) -> DockerOperation:
     output_dir = project_dir / ".awe-transform-runs" / job_id
+    bundle = _graph_bundle(project_id, project_dir, target, repositories, investigation_id)
+    selected = {entity.id: entity for entity in bundle.entities}
+    seed_values = list(dict.fromkeys(
+        str(selected[entity_id].value or selected[entity_id].label).strip()
+        for entity_id in entity_ids
+        if entity_id in selected and str(selected[entity_id].value or selected[entity_id].label).strip()
+    ))
 
     def on_complete(parsed: list, _output_dir: Path) -> dict:
         return _complete_graph_transform(project_id, project_dir, target, investigation_id, transform, entity_ids, source_entity_id, params, job_id, repositories, parsed, _output_dir)
 
     if transform.stages:
-        return docker_operations.start_composite(transform.tool_key, [stage.model_dump() for stage in transform.stages], params, output_dir, docker_service, on_complete, resume=resume, prior_logs=prior_logs)
-    return docker_operations.start_tool(transform.tool_key, params, output_dir, docker_service, on_complete, resume=resume, prior_logs=prior_logs)
+        return docker_operations.start_composite(transform.tool_key, [stage.model_dump() for stage in transform.stages], params, output_dir, docker_service, on_complete, resume=resume, prior_logs=prior_logs, seed_values=seed_values)
+    return docker_operations.start_tool(transform.tool_key, params, output_dir, docker_service, on_complete, resume=resume, prior_logs=prior_logs, seed_values=seed_values)
 
 
 @router.post("/projects/{project_id}/transforms", response_model=TransformJob, status_code=202, tags=["network"])
@@ -2448,7 +2455,7 @@ def start_graph_transform(project_id: str, payload: TransformStart, store: Proje
         operation = _launch_graph_transform_operation(project_id, project_dir, project.target, investigation.id, transform, payload.entity_ids, selected[0].id, params, job_id, docker_operations, docker_service, repositories)
         safe_params, secret_params = _redact_transform_params(transform, params)
         _GRAPH_TRANSFORM_SECRETS[job_id] = secret_params
-        job = TransformJob(id=job_id, project_id=project_id, investigation_id=investigation.id, transform_id=transform.id, status="queued", entity_ids=payload.entity_ids, operation_id=operation.id, parameters=safe_params, created_at=datetime.now(timezone.utc))
+        job = TransformJob(id=job_id, project_id=project_id, investigation_id=investigation.id, transform_id=transform.id, status="queued", entity_ids=payload.entity_ids, source_job_id=payload.source_job_id, operation_id=operation.id, parameters=safe_params, created_at=datetime.now(timezone.utc))
         _GRAPH_TRANSFORM_JOBS[job.id] = job
         _save_project_transform_jobs(project_dir, project_id)
         return job

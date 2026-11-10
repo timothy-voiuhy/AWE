@@ -128,7 +128,22 @@ class DockerOperationManager:
 
     @staticmethod
     def _has_completed_output(output_dir: Path) -> bool:
-        return output_dir.is_dir() and any(path.is_file() and path.name not in {".awe-transform-checkpoint.json", ".awe-tool-complete"} for path in output_dir.rglob("*"))
+        return output_dir.is_dir() and any(
+            path.is_file()
+            and path.name not in {".awe-transform-checkpoint.json", ".awe-tool-complete"}
+            and not {"_seed_inputs", "_stage_inputs"}.intersection(path.relative_to(output_dir).parts)
+            for path in output_dir.rglob("*")
+        )
+
+    @staticmethod
+    def _seed_input_dir(output_dir: Path, values: list[str]) -> Path | None:
+        cleaned = list(dict.fromkeys(str(value).strip() for value in values if str(value).strip()))
+        if not cleaned:
+            return None
+        input_dir = output_dir / "_seed_inputs"
+        input_dir.mkdir(parents=True, exist_ok=True)
+        (input_dir / "input.txt").write_text("\n".join(cleaned) + "\n", encoding="utf-8")
+        return input_dir
 
     @staticmethod
     def _checkpoint_signature(key: str, stages: list[dict], params: dict) -> str:
@@ -178,8 +193,8 @@ class DockerOperationManager:
 
     def start_tool(self, key: str, params: dict, output_dir: Path, service: DockerService,
                    on_complete: Callable[[list, Path], dict] | None = None, *, resume: bool = False,
-                   prior_logs: list[str] | None = None) -> DockerOperation:
-        return self._start(f"tool.{key}", lambda oid: self._run_tool(oid, key, params, output_dir, service, on_complete, resume), prior_logs)
+                   prior_logs: list[str] | None = None, seed_values: list[str] | None = None) -> DockerOperation:
+        return self._start(f"tool.{key}", lambda oid: self._run_tool(oid, key, params, output_dir, service, on_complete, resume, seed_values or []), prior_logs)
 
     def start_composite(
         self,
@@ -191,8 +206,9 @@ class DockerOperationManager:
         on_complete: Callable[[list, Path], dict] | None = None,
         *, resume: bool = False,
         prior_logs: list[str] | None = None,
+        seed_values: list[str] | None = None,
     ) -> DockerOperation:
-        item = self._start(f"composite.{key}", lambda oid: self._run_composite(oid, key, stages, params, output_dir, service, on_complete, resume), prior_logs)
+        item = self._start(f"composite.{key}", lambda oid: self._run_composite(oid, key, stages, params, output_dir, service, on_complete, resume, seed_values or []), prior_logs)
         with self._lock:
             self._items[item.id].progress_total = sum(len(stage.get("tool_keys", [])) for stage in stages)
             self._persist_locked()
@@ -239,7 +255,8 @@ class DockerOperationManager:
         except Exception as exc: self._log(oid, f"ERROR: {exc}"); self._fail(oid, exc)
 
     def _run_tool(self, oid: str, key: str, params: dict, output_dir: Path, service: DockerService,
-                  on_complete: Callable[[list, Path], dict] | None = None, resume: bool = False) -> None:
+                  on_complete: Callable[[list, Path], dict] | None = None, resume: bool = False,
+                  seed_values: list[str] | None = None) -> None:
         self._running(oid)
         try:
             signature = self._checkpoint_signature(key, [], params)
@@ -256,7 +273,11 @@ class DockerOperationManager:
             if "tool" not in completed:
                 if resume and output_dir.exists():
                     shutil.rmtree(output_dir)
-                parsed, container_id = self._run_tool_sync(oid, key, params, output_dir, service)
+                input_dir = self._seed_input_dir(output_dir, seed_values or [])
+                tool_params = {**params, **({"input_file": "/input/input.txt"} if input_dir else {})}
+                if input_dir:
+                    self._log(oid, f"Using {len(seed_values or [])} selected graph output value(s) from /input/input.txt")
+                parsed, container_id = self._run_tool_sync(oid, key, tool_params, output_dir, service, input_dir)
                 if oid in self._cancelled:
                     return self._finish(oid, {"output_dir": str(output_dir)})
                 completed.add("tool")
@@ -268,7 +289,8 @@ class DockerOperationManager:
         except Exception as exc: self._fail(oid, exc)
 
     def _run_composite(self, oid: str, key: str, stages: list[dict], params: dict, output_dir: Path, service: DockerService,
-                       on_complete: Callable[[list, Path], dict] | None = None, resume: bool = False) -> None:
+                       on_complete: Callable[[list, Path], dict] | None = None, resume: bool = False,
+                       seed_values: list[str] | None = None) -> None:
         self._running(oid)
         try:
             output_dir.mkdir(parents=True, exist_ok=True)
@@ -277,6 +299,9 @@ class DockerOperationManager:
             with self._lock:
                 self._items[oid].progress_completed = len(completed)
                 self._persist_locked()
+            seed_input_dir = self._seed_input_dir(output_dir, seed_values or [])
+            if seed_input_dir:
+                self._log(oid, f"Prepared {len(seed_values or [])} selected graph output value(s) as the seed input list")
             previous: list = []
             source_map: dict[str, set[str]] = {}
             for index, stage in enumerate(stages):
@@ -298,6 +323,10 @@ class DockerOperationManager:
                     (input_dir / "input.txt").write_text("\n".join(values) + "\n", encoding="utf-8")
                     stage_params.setdefault("input_file", "/input/input.txt")
                     self._log(oid, f"[{name}] Tunneled {len(values)} value(s) through /input/input.txt")
+                elif seed_input_dir:
+                    input_dir = seed_input_dir
+                    stage_params.setdefault("input_file", "/input/input.txt")
+                    self._log(oid, f"[{name}] Using selected graph output through /input/input.txt")
                 stage_results: list = []
                 for tool_index, tool_key in enumerate(tool_keys):
                     if oid in self._cancelled:

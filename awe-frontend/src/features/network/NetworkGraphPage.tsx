@@ -104,6 +104,7 @@ export function NetworkGraphPage() {
   const [query, setQuery] = useState('')
   const [kind, setKind] = useState('')
   const [selectedTransform, setSelectedTransform] = useState('')
+  const [transformInputSelection, setTransformInputSelection] = useState('')
   const [transformParameters, setTransformParameters] = useState<Record<string, string>>({})
   const [transformJobId, setTransformJobId] = useState('')
   const [aliasValues, setAliasValues] = useState<string[]>([])
@@ -248,8 +249,43 @@ export function NetworkGraphPage() {
   }, [viewSnapshot, viewSnapshotKey])
   const transforms = useQuery({ queryKey: ['projects', projectId, 'transforms'], queryFn: () => api.listGraphTransforms(projectId) })
   const activeTransform = transforms.data?.find(item => item.id === selectedTransform)
+  const transformJobs = useQuery({ queryKey: ['projects', projectId, 'transform-jobs'], queryFn: () => api.listGraphTransformJobs(projectId), enabled: !!investigationId, refetchInterval: query => query.state.data?.some(item => ['queued', 'running', 'approval_required'].includes(item.status)) ? 1000 : 5000 })
   const transformJob = useQuery({ queryKey: ['projects', projectId, 'transform-job', transformJobId], queryFn: () => api.getGraphTransform(projectId, transformJobId), enabled: !!transformJobId, refetchInterval: query => ['queued', 'running'].includes(query.state.data?.status || '') ? 1000 : false })
   const selected = graphView?.entities.find(item => item.id === selectedId) || graphView?.entities[0]
+  const completedTransformOutputs = useMemo(() => (transformJobs.data || [])
+    .filter(job => job.status === 'completed' && job.investigation_id === investigationId)
+    .map(job => ({
+      job,
+      manifest: transforms.data?.find(item => item.id === job.transform_id),
+      entities: (graphView?.entities || []).filter(entity => entity.provenance.some(source => source.transform_job_id === job.id)),
+    }))
+    .filter(output => output.entities.length), [graphView?.entities, investigationId, transformJobs.data, transforms.data])
+  const compatibleTransformOutputs = useMemo(() => activeTransform ? completedTransformOutputs
+    .map(output => ({ ...output, entities: output.entities.filter(entity => activeTransform.input_types.includes(entity.kind)) }))
+    .filter(output => output.entities.length) : [], [activeTransform, completedTransformOutputs])
+  const runnableTransforms = useMemo(() => (transforms.data || []).filter(transform =>
+    Boolean(selected && transform.input_types.includes(selected.kind))
+    || completedTransformOutputs.some(output => output.entities.some(entity => transform.input_types.includes(entity.kind)))
+  ), [completedTransformOutputs, selected, transforms.data])
+  const transformInput = useMemo(() => {
+    if (transformInputSelection.startsWith('job:')) {
+      const output = compatibleTransformOutputs.find(item => item.job.id === transformInputSelection.slice(4))
+      return output ? { entityIds: output.entities.map(entity => entity.id), sourceJobId: output.job.id } : null
+    }
+    if (transformInputSelection.startsWith('entity:') && selected?.id === transformInputSelection.slice(7) && activeTransform?.input_types.includes(selected.kind)) {
+      return { entityIds: [selected.id], sourceJobId: '' }
+    }
+    return null
+  }, [activeTransform, compatibleTransformOutputs, selected, transformInputSelection])
+  useEffect(() => {
+    if (!activeTransform) { setTransformInputSelection(''); return }
+    const selectedValue = selected && activeTransform.input_types.includes(selected.kind) ? `entity:${selected.id}` : ''
+    const outputValue = compatibleTransformOutputs.find(output => `job:${output.job.id}` === transformInputSelection)
+    if ((selectedValue && transformInputSelection === selectedValue) || outputValue) return
+    if (selectedValue) setTransformInputSelection(selectedValue)
+    else if (compatibleTransformOutputs[0]) setTransformInputSelection(`job:${compatibleTransformOutputs[0].job.id}`)
+    else setTransformInputSelection('')
+  }, [activeTransform, compatibleTransformOutputs, selected, transformInputSelection])
   const selectedEvidence = useQuery({ queryKey: ['projects', projectId, 'evidence', 'entity', selected?.id], queryFn: () => api.listEvidence(projectId, { entity_id: selected!.id }), enabled: Boolean(selected?.id), refetchInterval: 5000 })
   useEffect(() => {
     setAliasValues(selected?.aliases || [])
@@ -521,9 +557,14 @@ export function NetworkGraphPage() {
   const deleteEntity = useMutation({ mutationFn: (id: string) => api.deleteGraphEntity(projectId, investigationId, id), onSuccess: () => { setSelectedId(''); void queryClient.invalidateQueries({ queryKey: ['projects', projectId, 'investigation-graph', investigationId] }) } })
   const updateIdentity = useMutation({ mutationFn: () => { if (!selected) throw new Error('Select an entity first'); return api.updateGraphIdentity(projectId, investigationId, selected.id, { canonical_id: selected.canonical_id || selected.id, aliases: aliasValues, confidence: Math.max(0, Math.min(1, Number(confidenceDraft) || 0)) }) }, onSuccess: () => { setNotice('Identity metadata saved.'); void queryClient.invalidateQueries({ queryKey: ['projects', projectId, 'investigation-graph', investigationId] }) } })
   const mergeEntity = useMutation({ mutationFn: (sourceId: string) => { if (!selected) throw new Error('Select a canonical entity first'); return api.mergeGraphEntity(projectId, investigationId, sourceId, selected.id) }, onSuccess: result => { setSelectedId(result.entity.id); selectedIdRef.current = result.entity.id; setNotice(`Merged ${result.merged_entity_ids.length} duplicate entit${result.merged_entity_ids.length === 1 ? 'y' : 'ies'}; rewired ${result.rewired_relationships} relationship${result.rewired_relationships === 1 ? '' : 's'}.`); void queryClient.invalidateQueries({ queryKey: ['projects', projectId, 'investigation-graph', investigationId] }) } })
-  const transform = useMutation({ mutationFn: () => { if (activeTransform?.requires_approval && !window.confirm(`This is an ${activeTransform.mode} transform and may actively interact with the target. Continue?`)) throw new Error('Active transform cancelled by user.'); return api.startGraphTransform(projectId, { transform_id: selectedTransform, entity_ids: selected ? [selected.id] : [], parameters: transformParameters, investigation_id: investigationId, approved: activeTransform?.requires_approval === true }) }, onSuccess: job => { setTransformJobId(job.id); setNotice(`Transform queued: ${activeTransform?.display_name || job.transform_id}.`); setSelectedTransform(''); setTransformParameters({}) } })
+  const transform = useMutation({ mutationFn: () => { if (!transformInput) throw new Error('Choose a compatible entity or previous transform output.'); if (activeTransform?.requires_approval && !window.confirm(`This is an ${activeTransform.mode} transform and may actively interact with the target. Continue?`)) throw new Error('Active transform cancelled by user.'); return api.startGraphTransform(projectId, { transform_id: selectedTransform, entity_ids: transformInput.entityIds, source_job_id: transformInput.sourceJobId, parameters: transformParameters, investigation_id: investigationId, approved: activeTransform?.requires_approval === true }) }, onSuccess: job => { setTransformJobId(job.id); setNotice(`Transform queued: ${activeTransform?.display_name || job.transform_id}.`); setSelectedTransform(''); setTransformInputSelection(''); setTransformParameters({}); void queryClient.invalidateQueries({ queryKey: ['projects', projectId, 'transform-jobs'] }) } })
   const cancelTransform = useMutation({ mutationFn: () => { if (!transformJobId) throw new Error('No transform job is active'); return api.cancelGraphTransform(projectId, transformJobId) }, onSuccess: () => setNotice('Transform cancellation requested.') })
   const retryTransform = useMutation({ mutationFn: () => { const job = transformJob.data; if (!job) throw new Error('No transform job is available'); return api.startGraphTransform(projectId, { transform_id: job.transform_id, entity_ids: job.entity_ids, parameters: job.parameters, investigation_id: job.investigation_id, approved: true, source_job_id: job.id }) }, onSuccess: job => { setTransformJobId(job.id); setNotice(`Retry queued for ${job.transform_id}.`) } })
+  useEffect(() => {
+    if (transformJob.data?.status !== 'completed') return
+    void queryClient.invalidateQueries({ queryKey: ['projects', projectId, 'investigation-graph', investigationId] })
+    void queryClient.invalidateQueries({ queryKey: ['projects', projectId, 'transform-jobs'] })
+  }, [investigationId, projectId, queryClient, transformJob.data?.status])
   const createEntityEvidence = useMutation({
     mutationFn: () => {
       if (!selected) throw new Error('Select an entity first')
@@ -802,8 +843,8 @@ export function NetworkGraphPage() {
           <section className="graph-selected-card">
             <header><div><b>{selected.label}</b><span>{selected.kind} · {selected.source}</span></div><button className="graph-mobile-close" onClick={() => setMobileInspectorOpen(false)} aria-label="Close inspector">×</button><button className="danger" onClick={() => { if (selected.source === 'manual' && confirm('Delete this analyst entity?')) deleteEntity.mutate(selected.id) }}>Delete</button></header>
             <dl className="graph-properties"><dt>Value</dt><dd><code>{selected.value || selected.label}</code></dd><dt>Confidence</dt><dd>{Math.round(selected.confidence * 100)}%</dd><dt>Relationships</dt><dd>{selectedRelationships.length}</dd></dl>
-            <div className="graph-actions"><select value={selectedTransform} onChange={event => { setSelectedTransform(event.target.value); setTransformParameters({}) }}><option value="">Run transform…</option>{transforms.data?.filter(item => item.input_types.includes(selected.kind)).map(item => <option value={item.id} key={item.id}>{item.display_name}{item.requires_approval ? ' · approval' : ''}</option>)}</select><button disabled={!selectedTransform || transform.isPending} onClick={() => transform.mutate()}>Run</button></div>
-            {activeTransform && <div className="transform-parameters"><small>{activeTransform.description || 'Transform parameters'}</small>{activeTransform.parameters.map(parameter => { const key = String(parameter.key || ''); return <label key={key}>{String(parameter.label || key)}<input value={transformParameters[key] || String(parameter.default || '')} onChange={event => setTransformParameters({ ...transformParameters, [key]: event.target.value })} placeholder={key} /></label> })}<span className={`transform-risk risk-${activeTransform.mode}`}>{activeTransform.mode}{activeTransform.requires_approval ? ' · approval required' : ''}</span></div>}
+            <div className="graph-actions"><select value={selectedTransform} onChange={event => { setSelectedTransform(event.target.value); setTransformInputSelection(''); setTransformParameters({}) }}><option value="">Run transform…</option>{runnableTransforms.map(item => <option value={item.id} key={item.id}>{item.display_name}{item.requires_approval ? ' · approval' : ''}</option>)}</select><button disabled={!selectedTransform || !transformInput || transform.isPending} onClick={() => transform.mutate()}>Run</button></div>
+            {activeTransform && <div className="transform-parameters"><small>{activeTransform.description || 'Transform parameters'}</small><label>Input source<select aria-label="Graph transform input source" value={transformInputSelection} onChange={event => setTransformInputSelection(event.target.value)}>{activeTransform.input_types.includes(selected.kind) ? <option value={`entity:${selected.id}`}>{selected.label} · selected {selected.kind}</option> : null}{compatibleTransformOutputs.length ? <optgroup label="Previous transform output">{compatibleTransformOutputs.map(output => <option value={`job:${output.job.id}`} key={output.job.id}>{output.manifest?.display_name || output.job.transform_id} · {output.entities.length} compatible {output.entities.length === 1 ? 'entity' : 'entities'}</option>)}</optgroup> : null}</select></label>{activeTransform.parameters.map(parameter => { const key = String(parameter.key || ''); return <label key={key}>{String(parameter.label || key)}<input value={transformParameters[key] || String(parameter.default || '')} onChange={event => setTransformParameters({ ...transformParameters, [key]: event.target.value })} placeholder={key} /></label> })}<span className={`transform-risk risk-${activeTransform.mode}`}>{activeTransform.mode}{activeTransform.requires_approval ? ' · approval required' : ''}</span></div>}
             <div className="graph-relationships"><b>Relationships</b>{selectedRelationships.map(edge => <span key={edge.id}>{edge.kind}: {edge.source_id === selected.id ? edge.target_id : edge.source_id}</span>)}</div>
             <div className="graph-provenance"><b>Provenance</b>{selected.provenance.length ? selected.provenance.map((item, index) => <span key={`${String(item.source || item.tool_key || 'source')}-${index}`}>{String(item.source || item.tool_key || 'source')}{item.tool_key ? ` · ${String(item.tool_key)}` : ''}{item.transform_job_id ? ` · job ${String(item.transform_job_id)}` : ''}</span>) : <small>No source metadata recorded.</small>}</div>
             <section className="graph-evidence-panel"><header><b>Evidence</b><span>{selectedEvidence.data?.length || 0} linked</span></header>{selectedEvidence.data?.slice(0, 4).map(item => <article key={item.id}><strong>{item.title}</strong><small>{item.kind} · {new Date(item.created_at).toLocaleString()}</small><p>{item.summary || item.source_type}</p></article>)}{!selectedEvidence.isPending && !selectedEvidence.data?.length && <small>No linked evidence yet.</small>}<textarea value={evidenceNote} onChange={event => setEvidenceNote(event.target.value)} placeholder="Add evidence note for this entity..." /><button onClick={() => createEntityEvidence.mutate()} disabled={!evidenceNote.trim() || createEntityEvidence.isPending}>{createEntityEvidence.isPending ? 'Saving...' : 'Save evidence note'}</button>{createEntityEvidence.isError && <p className="error">{createEntityEvidence.error.message}</p>}</section>
