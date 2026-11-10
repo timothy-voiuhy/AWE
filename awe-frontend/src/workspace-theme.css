@@ -298,7 +298,6 @@ tbody tr:hover { background: #1a2b3d; }
 .repeater-tabbar .page-options > summary:hover,
 .repeater-tabbar .page-options[open] > summary { background: transparent; border-color: transparent; }
 .repeater-tabbar .page-options > summary:hover { color: var(--workspace-blue); }
-.repeater-actions { margin-bottom: 8px; padding: 6px 0; border-top: 0; border-radius: 0; }
 .vault-page { width: min(1400px, calc(100% - 64px)); padding-top: 26px; }
 .vault-header-stats > div { background: transparent; border: 0; border-left: 1px solid var(--workspace-line); border-radius: 0; }
 .vault-content-header { background: transparent; border: 0; border-bottom: 1px solid var(--workspace-line); border-radius: 0; padding: 10px 0 18px; }
@@ -420,3 +419,33 @@ tbody tr:hover { background: #1a2b3d; }
 .page > .page-header.network-evidence-header > div:first-child { display: none !important; }
 .page > .page-header.network-logs-header,
 .page > .page-header.network-evidence-header { flex-direction: row; align-items: center; justify-content: flex-end; }
+
+/* Repeater keeps the send action on the tab strip and gives text the available space. */
+.repeater-tabbar { grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; }
+.repeater-tabs { padding-top: 2px; }
+.repeater-tabs > button { min-width: 105px; padding: 5px 9px; font-size: 11px; }
+.repeater-tabbar .repeater-send { min-height: 28px; margin: 2px 4px; padding: 4px 10px; font-size: 11px; white-space: nowrap; }
+.repeater-tabbar .page-options { padding: 0 2px; }
+.repeater-workbench { gap: 8px; min-height: 0; height: clamp(400px, 48dvh, 560px); }
+.repeater-pane > header { min-height: 32px; padding: 3px 9px; }
+.repeater-pane > header > div { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 9px; }
+.repeater-pane > header nav button { padding: 3px 7px; font-size: 11px; }
+.repeater-line { grid-template-columns: 88px minmax(0, 1fr); gap: 6px; padding: 6px 8px; }
+.repeater-line select, .repeater-line input { min-height: 30px; padding: 5px 8px; font-size: 11px; }
+.repeater-pane > label { padding: 0 8px 7px; font-size: 10px; }
+.repeater-pane > label:first-of-type textarea { min-height: 100px; height: 115px; }
+.repeater-pane > label:last-of-type { display: flex; min-height: 0; flex: 1; flex-direction: column; }
+.repeater-pane > label:last-of-type textarea { min-height: 115px; height: 100%; flex: 1; }
+.repeater-pane .raw-http-editor { min-height: 0; flex: 1; }
+.repeater-pane > .raw-http-editor { margin: 8px; width: calc(100% - 16px); }
+.response-pane > pre, .response-pane > .http-code { min-height: 0; height: auto; max-height: none; flex: 1; overflow: auto; }
+.response-pane > iframe { min-height: 0; height: auto; flex: 1; }
+@media (max-width: 850px) {
+  .repeater-workbench { height: auto; }
+  .repeater-pane { min-height: 0; }
+  .repeater-pane.response-pane { min-height: 220px; }
+  .repeater-pane > label:first-of-type textarea { min-height: 82px; height: 92px; }
+  .repeater-pane > label:last-of-type textarea { min-height: 110px; }
+  .repeater-pane .raw-http-editor { min-height: 240px; }
+  .response-pane > pre, .response-pane > .http-code, .response-pane > iframe { min-height: 190px; max-height: 320px; }
+}
