@@ -5,7 +5,7 @@ from unittest.mock import Mock
 import pytest
 from fastapi import HTTPException
 
-from awe_backend import api
+from awe_backend.routes import graph as api
 from awe_backend.graph_store import InvestigationStore
 from awe_backend.schemas import DockerOperation, InvestigationCreate, TransformJob, TransformResume
 

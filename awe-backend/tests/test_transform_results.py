@@ -1,6 +1,6 @@
 from unittest.mock import Mock, patch
 
-from awe_backend import api
+from awe_backend.routes import graph as api
 from awe_backend.evidence_store import EvidenceStore
 from awe_backend.schemas import EvidenceInput, InvestigationCreate, NetworkGraph, TransformManifest
 from awe_backend.graph_store import InvestigationStore

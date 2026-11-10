@@ -72,7 +72,7 @@ def test_graph_enabled_coverage_is_complete():
 
 
 def test_graph_transforms_inherit_tool_categories():
-    from awe_backend.api import _graph_transforms
+    from awe_backend.routes.transform_catalog import _graph_transforms
     from awe_backend.config import Settings
 
     manifests = _graph_transforms(Settings())

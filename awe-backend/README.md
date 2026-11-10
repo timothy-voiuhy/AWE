@@ -2,6 +2,16 @@
 
 The web API and application-service boundary for AWE.
 
+## Source layout
+
+`awe_backend/api.py` composes the feature routers in `awe_backend/routes/`.
+Add endpoints to the corresponding feature module (projects, results, reports,
+traffic, browser, Docker, AI, or terminal). Shared dependency factories live in
+`routes/dependencies.py`; `api.py` re-exports them for dependency overrides.
+Graph construction and transform catalog helpers live in `network_builder.py`
+and `transform_catalog.py`, with graph endpoints and job coordination in `graph.py`.
+Route modules import shared helpers directly and do not import the API composer.
+
 ## Run locally
 
 ```bash
