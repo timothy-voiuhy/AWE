@@ -11,13 +11,13 @@ AWE web has two layers of automation:
 - **Tools** describe something Docker can run.
 - **Transforms** describe how tool output becomes graph entities and relationships.
 
-Use **Graph Tools** when you need to create or inspect a reusable Docker-backed tool. Use **Network Transforms** when you need to run a graph action or chain several tools together.
+Use **Network → Transforms** to run graph actions, chain tools, and manage reusable Docker tools. Switch to **Tools** to inspect registered tools. The shared three-dot menu contains custom tool creation, PoC registration, composite transforms, and run history.
 
 ## The Objects
 
 | Object | Created from | Purpose |
 | --- | --- | --- |
-| Docker tool | Docker Manager or Graph Tools | Runs one command in one Docker image. |
+| Docker tool | Docker Manager or Transforms | Runs one command in one Docker image. |
 | Graph tool | Docker tool with graph contracts | Makes a Docker tool eligible for graph automation. |
 | Normal transform | One graph-enabled Docker tool | Runs one tool against one selected graph entity. |
 | Composite transform | Staged transform definition | Runs multiple tools and tunnels output between stages. |
@@ -146,7 +146,7 @@ This means passive enumeration can collect broadly, but the graph receives only 
 
 Use **Docker Manager** when you need broad Docker image and custom tool management.
 
-Use **Graph Tools** when you are focused on making a tool graph-capable:
+Use the **Tools** catalog and the custom tool dialog on **Network → Transforms** to make a tool graph-capable:
 
 - defining input/output entity types,
 - defining relationships,

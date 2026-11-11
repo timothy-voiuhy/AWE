@@ -23,10 +23,10 @@ test('logs-only runs retain artifacts and interactive consoles detach without ex
     const operation = await response.json()
     await expect.poll(async () => (await (await page.request.get(`/api/v1/projects/${projectId}/runs/${operation.id}`)).json()).status).toBe('completed')
     await page.goto(`/projects/${projectId}/runs/${operation.id}`)
-    await page.getByRole('button', { name: 'Logs', exact: true }).click()
+    await page.getByRole('tab', { name: 'Logs', exact: true }).click()
     await expect(page.locator('.runtime-log')).toContainText('fixture-out')
     await expect(page.locator('.runtime-log')).toContainText('fixture-error')
-    await page.getByRole('button', { name: 'Artifacts', exact: true }).click()
+    await page.getByRole('tab', { name: /^Artifacts/ }).click()
     await expect(page.getByRole('link', { name: 'report.txt', exact: true })).toBeVisible()
     await page.getByRole('button', { name: 'Use as evidence' }).click()
     await page.getByLabel('Researcher interpretation').fill('Harmless fixture reviewed by test researcher.')
@@ -71,8 +71,8 @@ function sourceTar() {
 test('PoC source archives build and register a pinned tool through the dialog', async ({ page }) => {
   const { projectId, headers } = await login(page)
   const key = `e2e_poc_${Date.now()}`
-  await page.goto(`/projects/${projectId}/network/tools`)
-  await page.getByLabel('Graph tool options').click()
+  await page.goto(`/projects/${projectId}/network/transforms`)
+  await page.getByLabel('Transform options').click()
   await page.getByRole('button', { name: 'Register PoC', exact: true }).click()
   const dialog = page.getByRole('dialog', { name: 'Register a PoC' })
   await dialog.getByLabel('Tool key').fill(key)

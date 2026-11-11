@@ -24,8 +24,8 @@ test('register pinned research PoCs through the dialog and validate offline CLI 
 
   for (const name of ['nginx_rift', 'php2shell']) {
     const definition = JSON.parse(readFileSync(new URL(`../../examples/pocs/${name}.json`, import.meta.url), 'utf8'))
-    await page.goto(`/projects/${projectId}/network/tools`)
-    await page.getByLabel('Graph tool options').click()
+    await page.goto(`/projects/${projectId}/network/transforms?view=tools`)
+    await page.getByLabel('Transform options').click()
     await page.getByRole('button', { name: 'Register PoC', exact: true }).click()
     const dialog = page.getByRole('dialog', { name: 'Register a PoC' })
     await dialog.getByLabel('Tool key').fill(definition.key)
@@ -58,7 +58,7 @@ test('register pinned research PoCs through the dialog and validate offline CLI 
     expect(registered.output_channels).toEqual(definition.output_channels)
     expect(registered.execution_mode).toBe('high_risk')
     expect(registered.param_specs).toEqual(definition.param_specs)
-    await page.goto(`/projects/${projectId}/network/tools`)
+    await page.goto(`/projects/${projectId}/network/transforms?view=tools`)
     await page.locator('.catalog-category-toggle').filter({ hasText: 'vuln' }).click()
     const catalogEntry = page.locator('.graph-catalog-row').filter({ has: page.getByText(definition.display_name, { exact: true }) })
     await expect(catalogEntry).toContainText('Graph enabled')

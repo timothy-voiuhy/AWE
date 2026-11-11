@@ -1,0 +1,13 @@
+.transform-workspace-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 14px; }
+.catalog-switch { display: flex; align-items: center; gap: 4px; }
+.catalog-switch button { padding: 9px 12px; background: transparent; color: #a6adc8; border: 1px solid transparent; font-size: 12px; }
+.catalog-switch button[aria-pressed=true] { background: #1e2a3b; border-color: #454f66; color: #89b4fa; }
+.catalog-switch span { display: inline-block; margin-left: 6px; padding: 2px 5px; background: #313244; border-radius: 4px; color: #bac2de; font-size: 10px; }
+.network-transforms-page .graph-tool-catalog { margin-top: 12px; }
+.network-transforms-page .graph-tool-catalog > header > div { display: grid; gap: 5px; }
+.network-transforms-page .graph-catalog-row { font-size: 12px; padding: 14px; gap: 10px; }
+.network-transforms-page .graph-catalog-row b { font-size: 14px; }
+.network-transforms-page .graph-catalog-row span, .network-transforms-page .graph-catalog-row strong { font-size: 11px; }
+.network-transforms-page .graph-catalog-row p { font-size: 12px; line-height: 1.5; }
+.tool-management-notice { position: fixed; bottom: 24px; right: 24px; z-index: 50; max-width: calc(100vw - 48px); margin: 0; padding: 14px 18px; background: #20332c; border: 1px solid #527454; border-radius: 8px; box-shadow: 0 8px 24px #0005; font-size: 12px; }
+@media (max-width: 480px) { .transform-workspace-header { padding: 8px; } .catalog-switch button { padding: 8px; } }

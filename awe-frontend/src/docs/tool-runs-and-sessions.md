@@ -11,7 +11,7 @@ confirmed finding: add your interpretation when promoting output into evidence.
 
 ## Create a tool or PoC
 
-From Network → Graph Tools, open the three-dot menu. Create a custom tool to use an
+From Network → Transforms, open the three-dot menu. Create a custom tool to use an
 existing Docker image, or choose Register PoC to build a source archive or public
 HTTPS Git repository. Git references resolve to a saved commit; archive sources
 retain their SHA-256 checksum. Archives must contain regular files at the source
@@ -28,7 +28,7 @@ For a batch fixture, use `printf 'hello\n' | tee /output/report.txt`.
 
 ## Inspect a run
 
-Open Full output, artifacts, and sessions from a transform log or Docker operation.
+Open Tool runs from the Network sidebar or the Transforms options menu, or follow Full output, artifacts, and sessions from a transform log or Docker operation. Search history by tool, run ID, or message; use the status filters to find active, completed, or failed runs.
 The run workspace separates execution status, logs, parsed Results, artifacts,
 sessions, and evidence. Logs are paginated and searchable; download a full saved
 transcript. Artifact refresh discovers new output files while a process runs.

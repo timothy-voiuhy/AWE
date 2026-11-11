@@ -10,7 +10,7 @@ export interface ExecutionOptions {
 }
 export interface RunEvent { sequence: number; timestamp: string; stream: string; stage: string; data: string }
 export interface RunArtifact { id: string; name: string; size: number; mime_type: string; sha256: string }
-export interface ToolRun { id: string; kind: string; created_at: string; status: string; message?: string; session_id?: string; exit_code?: number; parsing_status?: string; parser_error?: string; logs_truncated?: boolean; artifacts_truncated?: boolean; result?: Record<string, unknown> }
+export interface ToolRun { id: string; kind: string; created_at: string; status: string; message?: string; session_id?: string; exit_code?: number; parsing_status?: string; parser_error?: string; logs_truncated?: boolean; artifacts_truncated?: boolean; result?: Record<string, unknown>; tool_key?: string; image?: string; execution_kind?: string; output_channels?: string[]; last_sequence?: number; parameters?: Record<string, unknown>; source_metadata?: { kind?: string; repository?: string; revision?: string; sha256?: string } }
 export interface ManagedSession { id: string; project_id: string; kind: string; run_id: string; status: string; label: string; host?: string; port?: number; capabilities: string[]; message?: string }
 const base = (project: string) => `/projects/${project}`
 export const runtime = {

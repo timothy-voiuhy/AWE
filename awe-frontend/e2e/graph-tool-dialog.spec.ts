@@ -22,10 +22,10 @@ test('custom graph tool is created from the options dialog', async ({ page }) =>
     await route.fulfill({ json: { display_name: 'Example scanner' } })
   })
 
-  await page.goto(`/projects/${projectId}/network/tools`)
+  await page.goto(`/projects/${projectId}/network/transforms`)
   const dialog = page.getByRole('dialog', { name: 'Create custom graph tool' })
   await expect(dialog).not.toBeVisible()
-  await page.getByLabel('Graph tool options').click()
+  await page.getByLabel('Transform options').click()
   await page.getByRole('button', { name: 'Create custom graph tool' }).click()
   await expect(dialog).toBeVisible()
 

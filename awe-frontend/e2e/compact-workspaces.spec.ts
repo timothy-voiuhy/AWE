@@ -184,8 +184,9 @@ test('page options share the first control row on narrow desktop', async ({ page
     ['results', '.results-toolbar > select'],
     ['network/evidence', '.evidence-toolbar > div:first-child'],
     ['network/logs', '.network-log-summary > div:first-child'],
-    ['network/tools', '.graph-tool-catalog > header'],
-    ['network/transforms', '.transform-catalog > header'],
+    ['network/tools', '.transform-workspace-header'],
+    ['network/transforms', '.transform-workspace-header'],
+    ['runs', '.run-workspace-header'],
     ['terminal', '.terminal-profile-picker > header'],
     ['docker', '.docker-tabs'],
   ]) {

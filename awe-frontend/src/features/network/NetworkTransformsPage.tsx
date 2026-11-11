@@ -1,10 +1,12 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Link, useParams } from 'react-router-dom'
+import { Link, useParams, useSearchParams } from 'react-router-dom'
 
 import { api, type DockerTool, type ToolParamSpec, type TransformDefinitionInput, type TransformJob, type TransformManifest, type TransformStage } from '../../api/client'
 import { CategoryGroup, groupByCategory } from '../../components/CategoryGroup'
 import { OptionsMenu } from '../../components/OptionsMenu'
+import { GraphToolCatalog, ToolManagement } from './ToolManagement'
+import './transform-workspace.css'
 
 function valueFor(spec: ToolParamSpec, values: Record<string, unknown>) {
   if (values[spec.key] !== undefined) return values[spec.key]
@@ -59,7 +61,7 @@ function TransformRunRow({ job, manifest, onResume, onCancel, busy }: { job: Tra
   </article>
 }
 
-function TransformCatalog({ transforms, onRun, onDelete, actions }: { transforms: TransformManifest[]; onRun: (id: string) => void; onDelete: (id: string) => void; actions: ReactNode }) {
+function TransformCatalog({ transforms, onRun, onDelete, actions }: { transforms: TransformManifest[]; onRun: (id: string) => void; onDelete: (id: string) => void; actions?: ReactNode }) {
   const groups = groupByCategory(transforms)
   return <section className="panel transform-catalog"><header><div><b>Transform catalog</b><span>{transforms.length} available graph transforms</span></div>{actions}</header>
     <div className="catalog-groups">{groups.map(group => <CategoryGroup key={group.category} name={group.category} count={group.entries.length}><div className="transform-catalog-grid">{group.entries.map(item => <article key={item.id}>
@@ -100,6 +102,8 @@ function CompositeBuilder({ tools, value, onChange, onSave, onClose, saving, err
 
 export function NetworkTransformsPage() {
   const { projectId = '' } = useParams()
+  const [searchParams, setSearchParams] = useSearchParams()
+  const catalogView = searchParams.get('view') === 'tools' ? 'tools' : 'transforms'
   const qc = useQueryClient()
   const [investigationId, setInvestigationId] = useState('')
   const [transformId, setTransformId] = useState('')
@@ -197,10 +201,17 @@ export function NetworkTransformsPage() {
     }
   }, [investigationId, job.data?.status, projectId, qc])
 
-  return <main className="page feature-page network-transforms-page">
+  return <ToolManagement>{toolActions => <main className="page feature-page network-transforms-page">
+    <header className="panel transform-workspace-header">
+      <nav aria-label="Transform catalogs" className="catalog-switch"><button aria-pressed={catalogView === 'transforms'} onClick={() => setSearchParams({})}>Transforms <span>{transforms.data?.length || 0}</span></button><button aria-pressed={catalogView === 'tools'} onClick={() => setSearchParams({ view: 'tools' })}>Tools <span>{tools.data?.length || 0}</span></button></nav>
+      <OptionsMenu label="Transform options">{toolActions}<button type="button" onClick={() => { saveComposite.reset(); setCompositeOpen(true) }}>Create composite transform</button><button type="button" onClick={() => { resume.reset(); cancelRun.reset(); setRunsOpen(true) }}>View running transforms</button><Link to={`/projects/${projectId}/runs`}>Tool runs</Link><Link to={`/projects/${projectId}/network/logs`}>Live logs</Link></OptionsMenu>
+    </header>
     
     {notice && <p className="success">{notice}</p>}{(run.isError || job.isError || transforms.isError || graph.isError || deleteComposite.isError) && <p className="error">{String((run.error || job.error || transforms.error || graph.error || deleteComposite.error)?.message)}</p>}
-    {transforms.data?.length ? <TransformCatalog transforms={transforms.data} onRun={openRunner} onDelete={id => deleteComposite.mutate(id)} actions={<OptionsMenu label="Transform options"><button type="button" onClick={() => { resume.reset(); cancelRun.reset(); setRunsOpen(true) }}>View running transforms</button><button type="button" onClick={() => { saveComposite.reset(); setCompositeOpen(true) }}>Create composite transform</button><Link to={`/projects/${projectId}/network/tools`}>Tool catalog</Link><Link to={`/projects/${projectId}/network/logs`}>Live logs</Link></OptionsMenu>} /> : null}
+    {tools.isError && <p className="error" role="alert">{tools.error.message}</p>}
+    {catalogView === 'tools' ? <GraphToolCatalog tools={tools.data || []} projectId={projectId} /> : <TransformCatalog transforms={transforms.data || []} onRun={openRunner} onDelete={id => deleteComposite.mutate(id)} />}
+    {(catalogView === 'tools' ? tools.isPending : transforms.isPending) && <p className="muted">Loading catalog…</p>}
+    {catalogView === 'transforms' && !transforms.isPending && !transforms.data?.length && <div className="panel runtime-empty"><b>No transforms yet</b><p>Create a custom tool or register a PoC from the options menu.</p></div>}
     <dialog ref={runDialog} className="transform-dialog transform-run-dialog" aria-labelledby="transform-run-title" onClose={() => setRunOpen(false)}>
       <header><div><b id="transform-run-title">{selected ? `Run ${selected.display_name}` : 'Run graph transform'}</b><span>Choose one graph entity or all compatible output from a previous transform.</span></div><button type="button" className="transform-dialog-close" aria-label="Close run dialog" onClick={() => setRunOpen(false)}>×</button></header>
       <div className="transform-run-workbench"><section className="graph-tool-runner"><header><div><b>Run graph transform</b><span>Outputs are parsed and attached to the selected investigation.</span></div><span className={`transform-risk risk-${selected?.mode || 'passive'}`}>{selected?.mode || 'passive'}</span></header><label>Investigation<select value={investigationId} onChange={event => { setInvestigationId(event.target.value); setInputSelection('') }}>{investigations.data?.map(item => <option value={item.id} key={item.id}>{item.name}</option>)}</select></label><label>Input source<select aria-label="Transform input source" value={inputSelection} onChange={event => setInputSelection(event.target.value)}>{compatibleOutputs.length ? <optgroup label="Previous transform output">{compatibleOutputs.map(item => <option value={`job:${item.job.id}`} key={item.job.id}>{item.manifest?.display_name || item.job.transform_id} · {item.entities.length} compatible {item.entities.length === 1 ? 'entity' : 'entities'}</option>)}</optgroup> : null}<optgroup label="Individual graph entity">{compatibleEntities.map(entity => <option value={`entity:${entity.id}`} key={entity.id}>{entity.label} · {entity.kind}</option>)}</optgroup></select></label>{selected && <><p className="muted">{selected.description}</p><small>Accepts: {selected.input_types.join(', ')} · Produces: {selected.output_types.join(', ')} · Relationships: {selected.relationship_types.join(', ')}</small><ParameterFields specs={selected.parameters} values={parameters} onChange={(key, value) => setParameters(current => ({ ...current, [key]: value }))} /><button onClick={() => run.mutate()} disabled={!selectedInput || run.isPending}>{run.isPending ? 'Starting...' : `Run with ${selectedInput?.entityIds.length || 0} input${selectedInput?.entityIds.length === 1 ? '' : 's'}`}</button></>}</section><section className="graph-tool-status"><header><b>Execution status</b><span>{job.data?.status || 'Ready to run'}</span></header>{job.data ? <><p>{job.data.message || 'Waiting for operation output...'}</p><div className="transform-progress-track"><span style={{ width: `${job.data.progress_total ? Math.round(((job.data.progress_completed || 0) / job.data.progress_total) * 100) : job.data.status === 'completed' ? 100 : 18}%` }} /></div><pre>{job.data.logs?.slice(-30).join('\n') || 'No logs yet.'}</pre><Link className="button-link subtle" to={`/projects/${projectId}/network/logs`}>Open full logs</Link></> : <p className="muted">Execution progress and recent output will appear here after the run starts.</p>}</section></div>
@@ -220,5 +231,5 @@ export function NetworkTransformsPage() {
         <Link className="button-link subtle" to={`/projects/${projectId}/network/logs`} onClick={() => setRunsOpen(false)}>Open full logs</Link>
       </div>
     </dialog>
-  </main>
+  </main>}</ToolManagement>
 }

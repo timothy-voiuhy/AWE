@@ -1,4 +1,4 @@
-import { Navigate, NavLink, Route, Routes, useLocation } from 'react-router-dom'
+import { Navigate, NavLink, Route, Routes, useLocation, useParams } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { lazy, Suspense, useRef, useState, type TouchEvent } from 'react'
 import { Spinner } from './components/Spinner'
@@ -13,7 +13,6 @@ import { GraphqlPage } from './features/utilities/GraphqlPage'
 import { DecoderPage } from './features/utilities/DecoderPage'
 import { JwtPage } from './features/utilities/JwtPage'
 import { HttpHistoryPage, SiteMapPage } from './features/proxy/TrafficPages'
-import { GraphToolsPage } from './features/network/GraphToolsPage'
 import { NetworkLogsPage } from './features/network/NetworkLogsPage'
 import { NetworkTransformsPage } from './features/network/NetworkTransformsPage'
 import { NetworkEvidencePage } from './features/network/NetworkEvidencePage'
@@ -60,7 +59,7 @@ const workspaceNav = [
   { path: '/sitemap', label: 'Site Map', glyph: '◫', icon: '/assets/icons/sitemap.png' },
   { path: '/network', label: 'Network', glyph: '⊗', icon: '/assets/icons/network.png', children: [
     { path: '/network/transforms', label: 'Transforms', glyph: '⚡', icon: '/assets/icons/pipeline.png' },
-    { path: '/network/tools', label: 'Graph Tools', glyph: '⚙', icon: '/assets/icons/docker.png' },
+    { path: '/runs', label: 'Tool runs', glyph: '▤', icon: '/assets/icons/docker.png' },
     { path: '/network/logs', label: 'Logs', glyph: '▤', icon: '/assets/icons/http.png' },
     { path: '/network/evidence', label: 'Evidence', glyph: '◈', icon: '/assets/icons/results.png' },
     { path: '/network/docs', label: 'Docs', glyph: '?', icon: '/assets/icons/notes.png' },
@@ -77,6 +76,11 @@ const workspaceNav = [
   { path: '/vault', label: 'Vault', glyph: '⛁', icon: '/assets/icons/notes.png' },
   { path: '/settings', label: 'Settings', glyph: '⚙', icon: '/assets/icons/settings-512.png' },
 ] satisfies WorkspaceNavItem[]
+
+function LegacyGraphToolsRedirect() {
+  const { projectId } = useParams()
+  return <Navigate to={`/projects/${projectId}/network/transforms?view=tools`} replace />
+}
 
 export function App() {
   const [sidebarOpen, setSidebarOpen] = useState(false)
@@ -166,11 +170,11 @@ export function App() {
         <Route path="/projects/:projectId/sitemap" element={<SiteMapPage />} />
         <Route path="/projects/:projectId/network" element={<NetworkGraphPage />} />
         <Route path="/projects/:projectId/network/transforms" element={<NetworkTransformsPage />} />
-        <Route path="/projects/:projectId/network/tools" element={<GraphToolsPage />} />
+        <Route path="/projects/:projectId/network/tools" element={<LegacyGraphToolsRedirect />} />
         <Route path="/projects/:projectId/network/logs" element={<NetworkLogsPage />} />
         <Route path="/projects/:projectId/network/evidence" element={<NetworkEvidencePage />} />
         <Route path="/projects/:projectId/network/docs" element={<DocsPage />} />
-        <Route path="/projects/:projectId/graph-tools" element={<Navigate to="../network/tools" replace />} />
+        <Route path="/projects/:projectId/graph-tools" element={<LegacyGraphToolsRedirect />} />
         <Route path="/projects/:projectId/repeater" element={<RepeaterPage />} />
         <Route path="/projects/:projectId/intruder" element={<IntruderPage />} />
         <Route path="/projects/:projectId/intercept" element={<InterceptPage />} />

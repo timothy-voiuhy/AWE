@@ -1,10 +1,9 @@
-import { useMemo, useRef, useState, type ReactNode } from 'react'
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useRef, useState, type ReactNode } from 'react'
+import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { Link, useParams } from 'react-router-dom'
 
 import { api, type DockerTool, type DockerToolInput } from '../../api/client'
 import { CategoryGroup, groupByCategory } from '../../components/CategoryGroup'
-import { OptionsMenu } from '../../components/OptionsMenu'
 import { ExecutionFields } from '../operations/ExecutionFields'
 import { PocDialog } from '../operations/PocDialog'
 
@@ -25,8 +24,8 @@ function graphToolGaps(tool: DockerTool) {
   return gaps
 }
 
-function GraphToolCatalog({ tools, projectId, actions }: { tools: DockerTool[]; projectId: string; actions: ReactNode }) {
-  return <section className="panel graph-tool-catalog"><header><div><b>Tool catalog</b><span>{tools.length} Docker tools · {tools.filter(item => item.graph_enabled).length} graph enabled</span></div>{actions}</header>
+export function GraphToolCatalog({ tools, projectId }: { tools: DockerTool[]; projectId: string }) {
+  return <section className="panel graph-tool-catalog"><header><div><b>Tool catalog</b><span>{tools.length} Docker tools · {tools.filter(item => item.graph_enabled).length} graph enabled</span></div></header>
     {!tools.length && <div className="empty compact">No Docker tools are registered.</div>}
     <div className="catalog-groups">{groupByCategory(tools).map(group => <CategoryGroup key={group.category} name={group.category} count={group.entries.length}><div className="graph-tool-catalog-grid">{group.entries.map(tool => {
       const gaps = graphToolGaps(tool)
@@ -40,7 +39,7 @@ function GraphToolCatalog({ tools, projectId, actions }: { tools: DockerTool[]; 
   </section>
 }
 
-export function GraphToolsPage() {
+export function ToolManagement({ children }: { children: (actions: ReactNode) => ReactNode }) {
   const { projectId = '' } = useParams()
   const qc = useQueryClient()
   const dialog = useRef<HTMLDialogElement>(null)
@@ -50,8 +49,6 @@ export function GraphToolsPage() {
   const [notice, setNotice] = useState('')
   const [formError, setFormError] = useState('')
 
-  const tools = useQuery({ queryKey: ['docker', 'tools'], queryFn: api.listDockerTools })
-  const sortedTools = useMemo(() => [...(tools.data || [])].sort((a, b) => Number(b.graph_enabled) - Number(a.graph_enabled) || a.display_name.localeCompare(b.display_name)), [tools.data])
   const create = useMutation({
     mutationFn: (payload: DockerToolInput) => api.createDockerTool(payload),
     onSuccess: item => {
@@ -77,11 +74,9 @@ export function GraphToolsPage() {
     }
   }
 
-  return <main className="page feature-page graph-tools-page">
-    {notice && <p className="success">{notice}</p>}{tools.isError && <p className="error">{tools.error.message}</p>}
-    <section className="graph-tools-workbench">
-      <GraphToolCatalog tools={sortedTools} projectId={projectId} actions={<OptionsMenu label="Graph tool options"><button type="button" onClick={() => { setFormError(''); create.reset(); dialog.current?.showModal() }}>Create custom graph tool</button><button onClick={() => pocDialog.current?.showModal()}>Register PoC</button><Link to={`/projects/${projectId}/runs`}>Tool runs</Link><Link to={`/projects/${projectId}/network/transforms`}>Transforms</Link></OptionsMenu>} />
-    </section>
+  return <>
+    {children(<><button type="button" onClick={() => { setFormError(''); create.reset(); dialog.current?.showModal() }}>Create custom graph tool</button><button onClick={() => pocDialog.current?.showModal()}>Register PoC</button></>)}
+    {notice && <p className="success tool-management-notice" role="status">{notice}</p>}
     <dialog ref={dialog} className="graph-tool-dialog" aria-labelledby="graph-tool-dialog-title" onClick={event => { if (event.target === event.currentTarget) dialog.current?.close() }}>
       <section className="panel graph-tool-create">
         <header><div><b id="graph-tool-dialog-title">Create custom graph tool</b><span>Define the Docker command, parser, graph contract, and safety mode in one place.</span></div><button type="button" className="graph-tool-dialog-close" aria-label="Close graph tool dialog" onClick={() => dialog.current?.close()}>×</button></header>
@@ -107,5 +102,5 @@ export function GraphToolsPage() {
       </section>
     </dialog>
     <PocDialog projectId={projectId} dialog={pocDialog} />
-  </main>
+  </>
 }
