@@ -3,7 +3,10 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useParams, useSearchParams } from 'react-router-dom'
 
 import { api, type DockerTool, type ToolParamSpec, type TransformDefinitionInput, type TransformJob, type TransformManifest, type TransformStage } from '../../api/client'
-import { CategoryGroup, groupByCategory } from '../../components/CategoryGroup'
+import { catalog, type CatalogOrganization } from '../../api/catalog'
+import { CatalogTree } from './CatalogTree'
+import { CatalogOrganizer } from './CatalogOrganizer'
+import { categoryFor, categoryPath, transformCatalogKey } from './catalogOrganization'
 import { OptionsMenu } from '../../components/OptionsMenu'
 import { GraphToolCatalog, ToolManagement } from './ToolManagement'
 import './transform-workspace.css'
@@ -66,17 +69,17 @@ function TransformRunRow({ job, manifest, onResume, onCancel, busy }: { job: Tra
   </article>
 }
 
-function TransformCatalog({ transforms, onRun, onDelete, search = '' }: { transforms: TransformManifest[]; onRun: (id: string) => void; onDelete: (id: string) => void; search?: string }) {
-  const groups = groupByCategory(transforms)
+function TransformCatalog({ transforms, onRun, onDelete, search = '', organization, categoryId, onMove }: { transforms: TransformManifest[]; onRun: (id: string) => void; onDelete: (id: string) => void; search?: string; organization?: CatalogOrganization; categoryId: (item: TransformManifest) => string; onMove: (item: TransformManifest) => void }) {
   return <section className="panel transform-catalog"><header><div><b>Transform catalog</b><span>{transforms.length} available graph transforms</span></div></header>
     {search && !transforms.length && <div className="empty compact">No transforms match your search.</div>}
-    <div className="catalog-groups">{groups.map(group => <CategoryGroup key={`${group.category}:${search}`} name={group.category} count={group.entries.length} defaultExpanded={!!search}><div className="transform-catalog-grid">{group.entries.map(item => <article key={item.id}>
+    <div className="catalog-groups"><CatalogTree organization={organization} items={transforms} categoryId={categoryId} search={search} renderItems={entries => <div className="transform-catalog-grid">{entries.map(item => <article key={item.id}>
       <header><div><b>{item.display_name}</b><span>{item.mode}{item.requires_approval ? ' · approval required' : ''}{item.stages?.length ? ` · ${item.stages.length} stages` : ' · single tool'}</span></div><button type="button" onClick={() => onRun(item.id)}>Run</button></header>
       <p>{item.description || 'No transform description provided.'}</p>
       <dl><dt>Tool</dt><dd><code>{item.tool_key}</code></dd><dt>Execution</dt><dd>{item.execution_kind || 'batch'}</dd><dt>Outputs</dt><dd>{(item.output_channels || ['logs', 'structured']).join(', ')}</dd><dt>Inputs</dt><dd>{item.input_types.join(', ') || 'None declared'}</dd><dt>Entities</dt><dd>{item.output_types.join(', ') || 'Researcher-reviewed output'}</dd><dt>Relationships</dt><dd>{item.relationship_types.join(', ') || 'None declared'}</dd></dl>
       {item.stages?.length ? <ol className="transform-stage-list">{item.stages.map((stage, index) => <li key={`${item.id}-${index}`}><b>{stage.name || `Stage ${index + 1}`}</b><span>{stage.tool_keys.join(', ')} · input: {stage.input_source}</span></li>)}</ol> : null}
+      <button type="button" className="subtle catalog-move-button" aria-label={`Move ${item.display_name} to category`} onClick={() => onMove(item)}>Move category</button>
       {item.id.startsWith('custom:') && <button type="button" className="subtle" onClick={() => onDelete(item.id)}>Delete custom transform</button>}
-    </article>)}</div></CategoryGroup>)}</div>
+    </article>)}</div>} /></div>
   </section>
 }
 
@@ -115,6 +118,9 @@ export function NetworkTransformsPage() {
   const searchInput = useRef<HTMLInputElement>(null)
   const searchButton = useRef<HTMLButtonElement>(null)
   const search = catalogSearch.trim()
+  const [organizerOpen, setOrganizerOpen] = useState(false)
+  const [organizerSelection, setOrganizerSelection] = useState<string[]>([])
+  const openOrganizer = (key?: string) => { setOrganizerSelection(key ? [key] : []); setOrganizerOpen(true) }
   useEffect(() => { if (searchOpen) searchInput.current?.focus() }, [searchOpen, catalogView])
   const closeSearch = () => { setSearchOpen(false); setCatalogSearch(''); searchButton.current?.focus() }
   const qc = useQueryClient()
@@ -147,8 +153,12 @@ export function NetworkTransformsPage() {
   const investigations = useQuery({ queryKey: ['projects', projectId, 'investigations'], queryFn: () => api.listInvestigations(projectId) })
   const transforms = useQuery({ queryKey: ['projects', projectId, 'transforms'], queryFn: () => api.listGraphTransforms(projectId) })
   const tools = useQuery({ queryKey: ['docker', 'tools'], queryFn: api.listDockerTools })
-  const visibleTransforms = (transforms.data || []).filter(item => matchesCatalog(search, [item.display_name, item.id, item.tool_key, item.category, item.description, item.mode, item.execution_kind, item.input_types, item.output_types, item.output_channels, item.stages?.map(stage => stage.tool_keys)]))
-  const visibleTools = (tools.data || []).filter(item => matchesCatalog(search, [item.display_name, item.key, item.category, item.description, item.image, item.execution_kind, item.execution_mode, item.input_types, item.output_types, item.output_channels]))
+  const organization = useQuery({ queryKey: ['catalog-organization', projectId], queryFn: () => catalog.organization(projectId) })
+  const transformKey = (item: TransformManifest) => transformCatalogKey(projectId, item)
+  const transformCategory = (item: TransformManifest) => categoryFor(organization.data, transformKey(item), tools.data?.find(tool => tool.key === item.tool_key) || item)
+  const toolCategory = (item: DockerTool) => categoryFor(organization.data, `tool:${item.key}`, item)
+  const visibleTransforms = (transforms.data || []).filter(item => matchesCatalog(search, [item.display_name, item.id, item.tool_key, item.category, categoryPath(organization.data, transformCategory(item)), item.description, item.mode, item.execution_kind, item.input_types, item.output_types, item.output_channels, item.stages?.map(stage => stage.tool_keys)]))
+  const visibleTools = (tools.data || []).filter(item => matchesCatalog(search, [item.display_name, item.key, item.category, categoryPath(organization.data, toolCategory(item)), item.description, item.image, item.execution_kind, item.execution_mode, item.input_types, item.output_types, item.output_channels]))
   const graph = useQuery({ queryKey: ['projects', projectId, 'investigation-graph', investigationId], queryFn: () => api.getInvestigationGraph(projectId, investigationId, { limit: 5000 }), enabled: !!investigationId })
   const job = useQuery({ queryKey: ['projects', projectId, 'transform-job', jobId], queryFn: () => api.getGraphTransform(projectId, jobId), enabled: !!jobId, refetchInterval: query => ['queued', 'running'].includes(query.state.data?.status || '') ? 1000 : false })
   const jobs = useQuery({ queryKey: ['projects', projectId, 'transform-jobs'], queryFn: () => api.listGraphTransformJobs(projectId), enabled: runsOpen || runOpen, refetchInterval: query => query.state.data?.some(item => activeJobStatuses.has(item.status)) ? 1000 : 4000 })
@@ -189,7 +199,7 @@ export function NetworkTransformsPage() {
   })
   const saveComposite = useMutation({
     mutationFn: () => api.createTransformDefinition(projectId, composite),
-    onSuccess: item => { setNotice(`Saved composite transform ${item.display_name}.`); setTransformId(item.id); setComposite(emptyComposite); setCompositeOpen(false); void qc.invalidateQueries({ queryKey: ['projects', projectId, 'transforms'] }) },
+    onSuccess: item => { setNotice(`Saved composite transform ${item.display_name}.`); setTransformId(item.id); setComposite(emptyComposite); setCompositeOpen(false); void qc.invalidateQueries({ queryKey: ['catalog-organization'] }); void qc.invalidateQueries({ queryKey: ['projects', projectId, 'transforms'] }) },
   })
   const deleteComposite = useMutation({
     mutationFn: (id: string) => api.deleteTransformDefinition(projectId, id),
@@ -221,7 +231,7 @@ export function NetworkTransformsPage() {
       <nav aria-label="Transform catalogs" className="catalog-switch"><button aria-pressed={catalogView === 'transforms'} onClick={() => setSearchParams({})}>Transforms <span>{transforms.data?.length || 0}</span></button><button aria-pressed={catalogView === 'tools'} onClick={() => setSearchParams({ view: 'tools' })}>Tools <span>{tools.data?.length || 0}</span></button></nav>
       <div className="catalog-header-actions">
         <button ref={searchButton} type="button" className="catalog-search-toggle" aria-label={`Search ${catalogView}`} title={`Search ${catalogView}`} aria-expanded={searchOpen} aria-controls="catalog-search" onClick={() => searchOpen ? closeSearch() : setSearchOpen(true)}><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5" /><path d="m16 16 4.5 4.5" /></svg></button>
-        <OptionsMenu label="Transform options">{toolActions}<button type="button" onClick={() => { saveComposite.reset(); setCompositeOpen(true) }}>Create composite transform</button><button type="button" onClick={() => { resume.reset(); cancelRun.reset(); setRunsOpen(true) }}>View running transforms</button><Link to={`/projects/${projectId}/runs`}>Tool runs</Link><Link to={`/projects/${projectId}/network/logs`}>Live logs</Link></OptionsMenu>
+        <OptionsMenu label="Transform options">{toolActions}<button type="button" onClick={() => openOrganizer()}>Manage categories</button><button type="button" onClick={() => { saveComposite.reset(); setCompositeOpen(true) }}>Create composite transform</button><button type="button" onClick={() => { resume.reset(); cancelRun.reset(); setRunsOpen(true) }}>View running transforms</button><Link to={`/projects/${projectId}/runs`}>Tool runs</Link><Link to={`/projects/${projectId}/network/logs`}>Live logs</Link></OptionsMenu>
       </div>
     </header>
     {searchOpen && <section id="catalog-search" className="panel catalog-search-bar" role="search" aria-label={`Search ${catalogView}`} onKeyDown={event => { if (event.key === 'Escape') { event.preventDefault(); closeSearch() } }}>
@@ -229,8 +239,8 @@ export function NetworkTransformsPage() {
       <span role="status">{catalogView === 'tools' ? `${visibleTools.length} of ${tools.data?.length || 0} tools` : `${visibleTransforms.length} of ${transforms.data?.length || 0} transforms`}{search && ' · Matching categories expanded'}</span>
     </section>}
     {notice && <p className="success">{notice}</p>}{(run.isError || job.isError || transforms.isError || graph.isError || deleteComposite.isError) && <p className="error">{String((run.error || job.error || transforms.error || graph.error || deleteComposite.error)?.message)}</p>}
-    {tools.isError && <p className="error" role="alert">{tools.error.message}</p>}
-    {catalogView === 'tools' ? <GraphToolCatalog tools={visibleTools} projectId={projectId} search={search} /> : <TransformCatalog transforms={visibleTransforms} search={search} onRun={openRunner} onDelete={id => deleteComposite.mutate(id)} />}
+    {(tools.isError || organization.isError) && <p className="error" role="alert">{(tools.error || organization.error)?.message}</p>}
+    {catalogView === 'tools' ? <GraphToolCatalog tools={visibleTools} projectId={projectId} search={search} organization={organization.data} categoryId={toolCategory} onMove={item => openOrganizer(`tool:${item.key}`)} /> : <TransformCatalog transforms={visibleTransforms} search={search} onRun={openRunner} onDelete={id => deleteComposite.mutate(id)} organization={organization.data} categoryId={transformCategory} onMove={item => openOrganizer(transformKey(item))} />}
     {(catalogView === 'tools' ? tools.isPending : transforms.isPending) && <p className="muted">Loading catalog…</p>}
     {catalogView === 'transforms' && !transforms.isPending && !transforms.data?.length && <div className="panel runtime-empty"><b>No transforms yet</b><p>Create a custom tool or register a PoC from the options menu.</p></div>}
     <dialog ref={runDialog} className="transform-dialog transform-run-dialog" aria-labelledby="transform-run-title" onClose={() => setRunOpen(false)}>
@@ -252,5 +262,9 @@ export function NetworkTransformsPage() {
         <Link className="button-link subtle" to={`/projects/${projectId}/network/logs`} onClick={() => setRunsOpen(false)}>Open full logs</Link>
       </div>
     </dialog>
+    <CatalogOrganizer projectId={projectId} organization={organization.data} open={organizerOpen} initialSelection={organizerSelection} onClose={() => setOrganizerOpen(false)} entries={[
+      ...(tools.data || []).map(item => ({ key: `tool:${item.key}`, name: item.display_name, categoryId: toolCategory(item), kind: item.graph_enabled ? 'Tool & transform' : 'Tool' })),
+      ...(transforms.data || []).filter(item => !(tools.data || []).some(tool => tool.key === item.tool_key)).map(item => ({ key: transformKey(item), name: item.display_name, categoryId: transformCategory(item), kind: item.stages?.length ? 'Composite transform' : 'Transform' })),
+    ]} />
   </main>}</ToolManagement>
 }

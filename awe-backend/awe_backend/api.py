@@ -40,6 +40,7 @@ from .routes import terminal
 from .routes import run_outputs
 from .routes import sessions
 from .routes import pocs
+from .routes import catalog_organization
 
 router = APIRouter()
 
@@ -63,3 +64,4 @@ router.include_router(terminal.router)
 router.include_router(run_outputs.router)
 router.include_router(sessions.router)
 router.include_router(pocs.router)
+router.include_router(catalog_organization.router)

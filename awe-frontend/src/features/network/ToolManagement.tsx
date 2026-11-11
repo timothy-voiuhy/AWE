@@ -3,7 +3,9 @@ import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { Link, useParams } from 'react-router-dom'
 
 import { api, type DockerTool, type DockerToolInput } from '../../api/client'
-import { CategoryGroup, groupByCategory } from '../../components/CategoryGroup'
+import type { CatalogOrganization } from '../../api/catalog'
+import { CatalogTree } from './CatalogTree'
+import { categoryPath } from './catalogOrganization'
 import { ExecutionFields } from '../operations/ExecutionFields'
 import { PocDialog } from '../operations/PocDialog'
 
@@ -24,18 +26,19 @@ function graphToolGaps(tool: DockerTool) {
   return gaps
 }
 
-export function GraphToolCatalog({ tools, projectId, search = '' }: { tools: DockerTool[]; projectId: string; search?: string }) {
+export function GraphToolCatalog({ tools, projectId, search = '', organization, categoryId, onMove }: { tools: DockerTool[]; projectId: string; search?: string; organization?: CatalogOrganization; categoryId: (item: DockerTool) => string; onMove: (item: DockerTool) => void }) {
   return <section className="panel graph-tool-catalog"><header><div><b>Tool catalog</b><span>{tools.length} Docker tools · {tools.filter(item => item.graph_enabled).length} graph enabled</span></div></header>
     {!tools.length && <div className="empty compact">{search ? 'No tools match your search.' : 'No Docker tools are registered.'}</div>}
-    <div className="catalog-groups">{groupByCategory(tools).map(group => <CategoryGroup key={`${group.category}:${search}`} name={group.category} count={group.entries.length} defaultExpanded={!!search}><div className="graph-tool-catalog-grid">{group.entries.map(tool => {
+    <div className="catalog-groups"><CatalogTree organization={organization} items={tools} categoryId={categoryId} search={search} renderItems={entries => <div className="graph-tool-catalog-grid">{entries.map(tool => {
       const gaps = graphToolGaps(tool)
       return <article className={tool.graph_enabled ? 'graph-catalog-row enabled' : 'graph-catalog-row disabled'} key={tool.key}>
-        <div><b>{tool.display_name}</b><span>{tool.category} · {tool.execution_mode} · {tool.source}</span><code>{tool.image}</code></div>
+        <div><b>{tool.display_name}</b><span>{organization ? categoryPath(organization, categoryId(tool)) : tool.category} · {tool.execution_mode} · {tool.source}</span><code>{tool.image}</code></div>
         <strong>{tool.graph_enabled ? 'Graph enabled' : 'Not graph enabled'}</strong>
         <p>{tool.graph_enabled ? `Accepts ${tool.input_types.join(', ')} · ${tool.execution_kind || 'batch'} · ${(tool.output_channels || ['logs', 'structured']).join(', ')}${tool.output_types.length ? ` · Entities: ${tool.output_types.join(', ')}` : ''}` : gaps.join(' · ')}</p>
+        <button type="button" className="subtle catalog-move-button" aria-label={`Move ${tool.display_name} to category`} onClick={() => onMove(tool)}>Move category</button>
         {tool.graph_enabled && <Link className="button-link subtle" to={`/projects/${projectId}/network/transforms`}>Run transform</Link>}
       </article>
-    })}</div></CategoryGroup>)}</div>
+    })}</div>} /></div>
   </section>
 }
 
@@ -59,6 +62,7 @@ export function ToolManagement({ children }: { children: (actions: ReactNode) =>
       dialog.current?.close()
       void qc.invalidateQueries({ queryKey: ['projects', projectId, 'transforms'] })
       void qc.invalidateQueries({ queryKey: ['docker', 'tools'] })
+      void qc.invalidateQueries({ queryKey: ['catalog-organization'] })
     },
   })
   const update = (key: string, value: unknown) => setCustom(current => ({ ...current, [key]: value } as DockerToolInput))

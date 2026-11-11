@@ -11,7 +11,7 @@ AWE_REGISTER_RESEARCH_POCS=1 npx playwright test e2e/research-poc-registration.s
 
 Use the existing `.env.e2e.local` credentials and optionally set `AWE_POC_PROJECT_ID` to select the project that owns the build history. Otherwise the test creates or reuses a project named `PoC registrations`. Registrations are global and intentionally retained after this opt-in test. Repeating it rebuilds the pinned images and updates those two custom tool keys. It never launches a PoC against a target.
 
-Find the registered tools under **Network → Transforms → Tools**. Execution requires the normal high-risk approval. Set the lab host/URL explicitly; container `127.0.0.1` refers to the runner itself.
+Find the registered tools under **Network → Transforms → Tools → Exploits**. Use **Manage categories** in the shared options menu to create subcategories or move entries; tools and their transforms share the same placement. Execution requires the normal high-risk approval. Set the lab host/URL explicitly; container `127.0.0.1` refers to the runner itself.
 
 - **Nginx Rift** runs the upstream `Nginx-Rift/poc.py` command mode, retaining its console output. The upstream reproducer assumes its supplied lab layout and disabled ASLR. This registration does not configure callback networking or the other PoCs in that repository.
 - **php2shell** offers Chains A and C and opens their upstream interactive console as a managed AWE session. These require the LFI/session handler/gadget conditions described upstream. Chain E uses `docker exec` to plant its session in the upstream lab and is not offered by this runner, which has no Docker socket. Transcripts are retained; files must be written to `/output` to become artifacts.

@@ -8,6 +8,7 @@ test('catalog search reveals collapsed matches and follows the active catalog', 
   await expect(page.getByLabel('Dashboard options')).toBeVisible()
   const projectId = (await (await page.request.get('/api/v1/projects')).json())[0].id
   const common = { category: 'vuln', input_types: ['url'], output_types: [], relationship_types: [], output_channels: ['logs'], execution_kind: 'batch', description: '', parameters: [], requires_approval: false, mode: 'passive', stages: [] }
+  await page.route(`**/api/v1/projects/${projectId}/catalog/organization`, route => route.fulfill({ json: { categories: [{ id: 'vuln', name: 'vuln', parent_id: null }], assignments: {}, defaults: { vuln: 'vuln' } } }))
   await page.route(`**/api/v1/projects/${projectId}/transforms`, route => route.fulfill({ json: [
     { ...common, id: 'docker:nginx_rift', tool_key: 'nginx_rift', display_name: 'Nginx Rift' },
     { ...common, id: 'docker:php2shell', tool_key: 'php2shell', display_name: 'php2shell' },

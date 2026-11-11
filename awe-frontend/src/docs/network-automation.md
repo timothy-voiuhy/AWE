@@ -15,6 +15,25 @@ Use **Network → Transforms** to run graph actions, chain tools, and manage reu
 
 ## The Objects
 
+### Organize the catalog
+
+Open **Manage categories** from the Transforms three-dot menu to create, rename,
+or nest categories. In **Placement**, select tools or transforms and choose their
+destination. Each catalog card also offers **Move category**. Built-in tools,
+custom tools, PoCs, and composite transforms can all be organized this way.
+
+Tools and their graph transforms share a placement across projects. Composite
+transform placement belongs to its project. Categories persist across restarts;
+their names do not change output entity types, parsers, or execution approvals.
+PoC sources initially appear under **Exploits**. Search includes the full category
+path and expands matching branches.
+
+Deleting a category moves its items into its parent (or Uncategorized), and keeps
+its child categories at the deleted category's former level. Uncategorized is the
+fallback and cannot be deleted. Empty categories remain available in the manager.
+
+### Catalog objects
+
 | Object | Created from | Purpose |
 | --- | --- | --- |
 | Docker tool | Docker Manager or Transforms | Runs one command in one Docker image. |

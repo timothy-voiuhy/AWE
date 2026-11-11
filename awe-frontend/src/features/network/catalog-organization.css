@@ -1,0 +1,32 @@
+.catalog-subcategories { display: grid; gap: 10px; }
+.catalog-subcategories:not(:empty) { margin: 10px 0 4px 16px; padding-left: 12px; border-left: 1px solid #45475a; }
+.catalog-subcategories .catalog-category { min-width: 0; }
+.catalog-move-button { justify-self: start; }
+.catalog-organizer { width: min(720px, calc(100vw - 24px)); padding: 0; }
+.catalog-organizer > header { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; padding: 20px; border-bottom: 1px solid #45475a; }
+.catalog-organizer > header b { font-size: 17px; }
+.catalog-organizer > header p { margin: 6px 0 0; color: #a6adc8; font-size: 12px; line-height: 1.6; }
+.catalog-organizer-tabs { display: flex; gap: 5px; padding: 12px 20px; border-bottom: 1px solid #313244; }
+.catalog-organizer-tabs button { color: #a6adc8; background: transparent; font-size: 12px; }
+.catalog-organizer-tabs button[aria-pressed=true] { color: #89b4fa; background: #1e2a3b; }
+.catalog-organizer-content { display: grid; gap: 14px; padding: 20px; }
+.catalog-organizer-content form, .catalog-placement { display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; }
+.catalog-organizer-content p { margin: 0; font-size: 11px; line-height: 1.6; }
+.catalog-organizer input, .catalog-organizer select { min-width: 0; width: 100%; font-size: 12px; }
+.catalog-organizer footer { display: flex; justify-content: flex-end; gap: 10px; }
+.catalog-organizer button { font-size: 12px; }
+.catalog-placement-destination { display: flex; align-items: end; gap: 12px; }
+.catalog-placement-destination label { flex: 1; min-width: 0; }
+.catalog-select-all, .catalog-placement-list label { display: flex; align-items: center; gap: 10px; }
+.catalog-select-all input, .catalog-placement-list input { width: 16px; height: 16px; flex: 0 0 auto; }
+.catalog-placement-list { max-height: 320px; overflow-y: auto; border: 1px solid #313244; border-radius: 7px; }
+.catalog-placement-list label { padding: 12px; border-bottom: 1px solid #313244; cursor: pointer; }
+.catalog-placement-list label > span { display: grid; gap: 5px; min-width: 0; overflow-wrap: anywhere; }
+.catalog-placement-list small { color: #7f849c; font-size: 10px; }
+.catalog-placement-list > p { padding: 16px; }
+@media (max-width: 480px) {
+  .catalog-organizer > header, .catalog-organizer-content { padding: 14px; }
+  .catalog-organizer-tabs { padding: 10px 14px; }
+  .catalog-placement-destination { align-items: stretch; flex-direction: column; }
+  .catalog-subcategories:not(:empty) { margin-left: 6px; padding-left: 6px; }
+}
