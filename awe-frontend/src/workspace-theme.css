@@ -128,10 +128,12 @@ button:not(:disabled):hover, .button-link:hover { filter: brightness(1.1); }
 .projects-dashboard-header {
   display: flex;
   align-items: center;
-  justify-content: flex-end;
+  justify-content: space-between;
+  gap: 12px;
   min-height: 28px;
   padding: 0 0 5px;
 }
+.projects-dashboard-header h1 { margin: 0; font-size: 15px; font-weight: 600; line-height: 28px; letter-spacing: 0; }
 .projects-dashboard-actions { display: flex; flex: 0 0 auto; align-items: center; gap: 9px; }
 .projects-dashboard-actions .live-dot { color: var(--workspace-muted); font-size: 10px; white-space: nowrap; }
 .projects-dashboard-actions .page-options { margin-left: 0; }

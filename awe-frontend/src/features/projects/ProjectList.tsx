@@ -67,6 +67,7 @@ export function ProjectList() {
   return (
     <main className="page projects-dashboard-page">
       <header className="projects-dashboard-header">
+        <h1>AWE Dashboard</h1>
         <div className="projects-dashboard-actions"><span className="live-dot active">Workspace online</span><OptionsMenu label="Dashboard options"><button type="button" onClick={openCreate}>New project</button><button type="button" onClick={() => void dashboard.refetch()}>Refresh dashboard</button><Link to="/vault">Open vault</Link><Link to="/database">Database health</Link></OptionsMenu></div>
       </header>
 
