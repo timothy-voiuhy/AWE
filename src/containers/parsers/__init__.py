@@ -136,3 +136,10 @@ PARSERS: dict[str, callable] = {
     "cloudflare_audit": parse_cloudflare_audit,
     "oidc_probe":    parse_oidc_probe,
 }
+
+from containers.parsers.awe_validation import parse_validation
+from config.config import RUNDIR
+import json
+from pathlib import Path
+for _profile in json.loads((Path(RUNDIR) / "dockerfiles/awe_validation/profiles.json").read_text()):
+    PARSERS[_profile["id"]] = parse_validation

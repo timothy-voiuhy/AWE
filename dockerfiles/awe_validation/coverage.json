@@ -1,0 +1,919 @@
+{
+  "schema_version": 1,
+  "suite_version": "1",
+  "verification_note": "fixture_verified means the detector was exercised against controlled vulnerable/protected fixtures, not that every target is covered or every finding is confirmed. adapter_only means an adapter exists without equivalent fixtures in this suite. manual_required marks material gaps or application-specific work.",
+  "rows": [
+    {
+      "id": "security_headers",
+      "area": "Review browser security headers",
+      "family": "HTTP configuration",
+      "tool_keys": [
+        "awe_security_headers"
+      ],
+      "verification": "fixture_verified",
+      "inputs": [
+        "URL / endpoint",
+        "Optional authenticated request context"
+      ],
+      "limitations": "Missing defensive headers are posture candidates; this does not prove an exploit.",
+      "cwe": [
+        "CWE-693"
+      ],
+      "fixture": "tests/test_validation_suite.py"
+    },
+    {
+      "id": "session_cookies",
+      "area": "Validate session cookie attributes",
+      "family": "Session management",
+      "tool_keys": [
+        "awe_session_cookies"
+      ],
+      "verification": "fixture_verified",
+      "inputs": [
+        "URL / endpoint",
+        "Optional authenticated request context",
+        "Session cookie names"
+      ],
+      "limitations": "Only explicitly named session cookies are evaluated. Application use still needs review.",
+      "cwe": [
+        "CWE-614",
+        "CWE-1004",
+        "CWE-1275"
+      ],
+      "fixture": "tests/test_validation_suite.py"
+    },
+    {
+      "id": "cors",
+      "area": "Validate credentialed CORS policy",
+      "family": "HTTP configuration",
+      "tool_keys": [
+        "awe_cors"
+      ],
+      "verification": "fixture_verified",
+      "inputs": [
+        "URL / endpoint",
+        "Optional authenticated request context"
+      ],
+      "limitations": "Confirms response policy behavior, not browser access to every resource.",
+      "cwe": [
+        "CWE-942"
+      ],
+      "fixture": "tests/test_validation_suite.py"
+    },
+    {
+      "id": "open_redirect",
+      "area": "Validate external redirects",
+      "family": "Input validation",
+      "tool_keys": [
+        "awe_open_redirect"
+      ],
+      "verification": "fixture_verified",
+      "inputs": [
+        "URL / endpoint",
+        "Optional authenticated request context",
+        "Query parameter"
+      ],
+      "limitations": "Requires the redirect parameter. Redirects are inspected without following them.",
+      "cwe": [
+        "CWE-601"
+      ],
+      "fixture": "tests/test_validation_suite.py"
+    },
+    {
+      "id": "crlf",
+      "area": "Validate response header injection",
+      "family": "Input validation",
+      "tool_keys": [
+        "awe_crlf"
+      ],
+      "verification": "fixture_verified",
+      "inputs": [
+        "URL / endpoint",
+        "Optional authenticated request context",
+        "Query parameter"
+      ],
+      "limitations": "Tests one parameter with a harmless custom header; other parser/proxy paths are not covered.",
+      "cwe": [
+        "CWE-113"
+      ],
+      "fixture": "tests/test_validation_suite.py"
+    },
+    {
+      "id": "host_header",
+      "area": "Validate Host header redirect handling",
+      "family": "HTTP configuration",
+      "tool_keys": [
+        "awe_host_header"
+      ],
+      "verification": "fixture_verified",
+      "inputs": [
+        "URL / endpoint",
+        "Optional authenticated request context"
+      ],
+      "limitations": "Only Host-derived external redirects are checked, not complete reset/cache poisoning chains.",
+      "cwe": [
+        "CWE-346"
+      ],
+      "fixture": "tests/test_validation_suite.py"
+    },
+    {
+      "id": "http_methods",
+      "area": "Review HTTP methods and TRACE reflection",
+      "family": "HTTP configuration",
+      "tool_keys": [
+        "awe_http_methods"
+      ],
+      "verification": "fixture_verified",
+      "inputs": [
+        "URL / endpoint",
+        "Optional authenticated request context"
+      ],
+      "limitations": "Advertised methods are observations. TRACE echo is not proof of browser credential theft.",
+      "cwe": [
+        "CWE-200"
+      ],
+      "fixture": "tests/test_validation_suite.py"
+    },
+    {
+      "id": "directory_listing",
+      "area": "Detect exposed directory listings",
+      "family": "Information exposure",
+      "tool_keys": [
+        "awe_directory_listing"
+      ],
+      "verification": "fixture_verified",
+      "inputs": [
+        "URL / endpoint",
+        "Optional authenticated request context"
+      ],
+      "limitations": "Intentional public indexes require researcher interpretation.",
+      "cwe": [
+        "CWE-548"
+      ],
+      "fixture": "tests/test_validation_suite.py"
+    },
+    {
+      "id": "debug_errors",
+      "area": "Detect detailed error disclosure",
+      "family": "Information exposure",
+      "tool_keys": [
+        "awe_debug_errors"
+      ],
+      "verification": "fixture_verified",
+      "inputs": [
+        "URL / endpoint",
+        "Optional authenticated request context"
+      ],
+      "limitations": "Detects known stack-trace/error signatures; absence does not prove safe error handling.",
+      "cwe": [
+        "CWE-209"
+      ],
+      "fixture": "tests/test_validation_suite.py"
+    },
+    {
+      "id": "git_exposure",
+      "area": "Validate exposed Git HEAD metadata",
+      "family": "Information exposure",
+      "tool_keys": [
+        "awe_git_exposure"
+      ],
+      "verification": "fixture_verified",
+      "inputs": [
+        "URL / endpoint",
+        "Optional authenticated request context"
+      ],
+      "limitations": "Reads HEAD and a negative control only; does not reconstruct repositories.",
+      "cwe": [
+        "CWE-552"
+      ],
+      "fixture": "tests/test_validation_suite.py"
+    },
+    {
+      "id": "backup_exposure",
+      "area": "Review exposed source backup variants",
+      "family": "Information exposure",
+      "tool_keys": [
+        "awe_backup_exposure"
+      ],
+      "verification": "fixture_verified",
+      "inputs": [
+        "URL / endpoint",
+        "Optional authenticated request context"
+      ],
+      "limitations": "Checks three filename suffixes for source/secret signatures, without saving response bodies.",
+      "cwe": [
+        "CWE-530"
+      ],
+      "fixture": "tests/test_validation_suite.py"
+    },
+    {
+      "id": "source_maps",
+      "area": "Review published source maps",
+      "family": "Information exposure",
+      "tool_keys": [
+        "awe_source_maps"
+      ],
+      "verification": "fixture_verified",
+      "inputs": [
+        "URL / endpoint",
+        "Optional authenticated request context"
+      ],
+      "limitations": "Published sources can be intentional. Only same-origin sourcesContent is assessed.",
+      "cwe": [
+        "CWE-540"
+      ],
+      "fixture": "tests/test_validation_suite.py"
+    },
+    {
+      "id": "csrf_forms",
+      "area": "Review form anti-CSRF indicators",
+      "family": "Session management",
+      "tool_keys": [
+        "awe_csrf_forms"
+      ],
+      "verification": "fixture_verified",
+      "inputs": [
+        "URL / endpoint",
+        "Optional authenticated request context"
+      ],
+      "limitations": "Missing form token fields are candidates; SameSite, Origin checks, and workflow behavior require manual validation.",
+      "cwe": [
+        "CWE-352"
+      ],
+      "fixture": "tests/test_validation_suite.py"
+    },
+    {
+      "id": "mixed_content",
+      "area": "Review HTTPS pages for HTTP resources",
+      "family": "HTTP configuration",
+      "tool_keys": [
+        "awe_mixed_content"
+      ],
+      "verification": "fixture_verified",
+      "inputs": [
+        "URL / endpoint",
+        "Optional authenticated request context"
+      ],
+      "limitations": "Only static script, iframe, stylesheet and media references are inspected, not browser runtime behavior.",
+      "cwe": [
+        "CWE-319"
+      ],
+      "fixture": "tests/test_validation_suite.py"
+    },
+    {
+      "id": "graphql_introspection",
+      "area": "Check GraphQL schema introspection",
+      "family": "API security",
+      "tool_keys": [
+        "awe_graphql_introspection"
+      ],
+      "verification": "fixture_verified",
+      "inputs": [
+        "URL / endpoint",
+        "Optional authenticated request context"
+      ],
+      "limitations": "Schema availability is an exposure candidate and can be intentional.",
+      "cwe": [
+        "CWE-200"
+      ],
+      "fixture": "tests/test_validation_suite.py"
+    },
+    {
+      "id": "graphql_batching",
+      "area": "Check bounded GraphQL query batching",
+      "family": "API security",
+      "tool_keys": [
+        "awe_graphql_batching"
+      ],
+      "verification": "fixture_verified",
+      "inputs": [
+        "URL / endpoint",
+        "Optional authenticated request context"
+      ],
+      "limitations": "Two read-only queries establish batching support only, not a rate-limit or resource-exhaustion bypass.",
+      "cwe": [
+        "CWE-770"
+      ],
+      "fixture": "tests/test_validation_suite.py"
+    },
+    {
+      "id": "authz_horizontal",
+      "area": "Validate horizontal authorization boundaries",
+      "family": "Authorization",
+      "tool_keys": [
+        "awe_authz_horizontal"
+      ],
+      "verification": "fixture_verified",
+      "inputs": [
+        "URL / endpoint",
+        "Optional authenticated request context",
+        "Distinct peer / isolated context",
+        "Private success/canary marker"
+      ],
+      "limitations": "Requires distinct owner/peer credentials and a private response marker for an object the peer must not access.",
+      "cwe": [
+        "CWE-639"
+      ],
+      "fixture": "tests/test_validation_suite.py"
+    },
+    {
+      "id": "authz_vertical",
+      "area": "Validate vertical authorization boundaries",
+      "family": "Authorization",
+      "tool_keys": [
+        "awe_authz_vertical"
+      ],
+      "verification": "fixture_verified",
+      "inputs": [
+        "URL / endpoint",
+        "Optional authenticated request context",
+        "Distinct peer / isolated context",
+        "Private success/canary marker"
+      ],
+      "limitations": "Requires privileged/unprivileged credentials and an explicit private marker. Roles are supplied, not inferred.",
+      "cwe": [
+        "CWE-863"
+      ],
+      "fixture": "tests/test_validation_suite.py"
+    },
+    {
+      "id": "authz_tenant",
+      "area": "Validate tenant isolation boundaries",
+      "family": "Authorization",
+      "tool_keys": [
+        "awe_authz_tenant"
+      ],
+      "verification": "fixture_verified",
+      "inputs": [
+        "URL / endpoint",
+        "Optional authenticated request context",
+        "Distinct peer / isolated context",
+        "Private success/canary marker"
+      ],
+      "limitations": "Requires credentials from distinct tenants and an explicit private marker; tenant ownership is supplied.",
+      "cwe": [
+        "CWE-863"
+      ],
+      "fixture": "tests/test_validation_suite.py"
+    },
+    {
+      "id": "anonymous_access",
+      "area": "Validate authenticated resource protection",
+      "family": "Authorization",
+      "tool_keys": [
+        "awe_anonymous_access"
+      ],
+      "verification": "fixture_verified",
+      "inputs": [
+        "URL / endpoint",
+        "Optional authenticated request context",
+        "Private success/canary marker",
+        "Negative-control URL"
+      ],
+      "limitations": "Requires a private marker and a credentialed baseline; removes standard and declared credential headers for control.",
+      "cwe": [
+        "CWE-862"
+      ],
+      "fixture": "tests/test_validation_suite.py"
+    },
+    {
+      "id": "cache_isolation",
+      "area": "Review cross-identity private response isolation",
+      "family": "Authorization",
+      "tool_keys": [
+        "awe_cache_isolation"
+      ],
+      "verification": "fixture_verified",
+      "inputs": [
+        "URL / endpoint",
+        "Optional authenticated request context",
+        "Distinct peer / isolated context",
+        "Private success/canary marker"
+      ],
+      "limitations": "Demonstrates cross-identity exposure; cache causation requires cache-specific investigation.",
+      "cwe": [
+        "CWE-525"
+      ],
+      "fixture": "tests/test_validation_suite.py"
+    },
+    {
+      "id": "logout_replay",
+      "area": "Review server-side logout invalidation",
+      "family": "Session management",
+      "tool_keys": [
+        "awe_logout_replay"
+      ],
+      "verification": "fixture_verified",
+      "inputs": [
+        "URL / endpoint",
+        "Optional authenticated request context",
+        "Private success/canary marker",
+        "Explicit logout request"
+      ],
+      "limitations": "Requires an explicit logout request, private marker, and state-change permission. Logout policy still requires review.",
+      "cwe": [
+        "CWE-613"
+      ],
+      "fixture": "tests/test_validation_suite.py"
+    },
+    {
+      "id": "ssti",
+      "area": "Validate server-side arithmetic evaluation",
+      "family": "Input validation",
+      "tool_keys": [
+        "awe_ssti"
+      ],
+      "verification": "fixture_verified",
+      "inputs": [
+        "URL / endpoint",
+        "Optional authenticated request context",
+        "Query parameter"
+      ],
+      "limitations": "Uses two random arithmetic canaries; does not execute commands or prove arbitrary code execution.",
+      "cwe": [
+        "CWE-1336"
+      ],
+      "fixture": "tests/test_validation_suite.py"
+    },
+    {
+      "id": "canary_traversal",
+      "area": "Validate traversal to a researcher canary",
+      "family": "Input validation",
+      "tool_keys": [
+        "awe_canary_traversal"
+      ],
+      "verification": "fixture_verified",
+      "inputs": [
+        "URL / endpoint",
+        "Optional authenticated request context",
+        "Private success/canary marker",
+        "Query parameter",
+        "Researcher canary filename"
+      ],
+      "limitations": "Requires a researcher-controlled canary filename and private content marker; never defaults to system files.",
+      "cwe": [
+        "CWE-22"
+      ],
+      "fixture": "tests/test_validation_suite.py"
+    },
+    {
+      "id": "ssrf_callback",
+      "area": "Validate SSRF with independent callback evidence",
+      "family": "Input validation",
+      "tool_keys": [
+        "awe_ssrf_callback"
+      ],
+      "verification": "fixture_verified",
+      "inputs": [
+        "URL / endpoint",
+        "Optional authenticated request context",
+        "Query parameter",
+        "Owned callback + independent token monitor"
+      ],
+      "limitations": "Requires an owned callback and independent monitor. No metadata/internal-address payload list is supplied.",
+      "cwe": [
+        "CWE-918"
+      ],
+      "fixture": "tests/test_validation_suite.py"
+    },
+    {
+      "id": "xxe_callback",
+      "area": "Validate XML external-entity callback behavior",
+      "family": "Input validation",
+      "tool_keys": [
+        "awe_xxe_callback"
+      ],
+      "verification": "fixture_verified",
+      "inputs": [
+        "URL / endpoint",
+        "Optional authenticated request context",
+        "Owned callback + independent token monitor"
+      ],
+      "limitations": "Requires an XML endpoint, an owned callback/monitor, and state-change permission. No local file retrieval.",
+      "cwe": [
+        "CWE-611"
+      ],
+      "fixture": "tests/test_validation_suite.py"
+    },
+    {
+      "id": "jwt_signature",
+      "area": "Validate JWT signature enforcement",
+      "family": "Authorization",
+      "tool_keys": [
+        "awe_jwt_signature"
+      ],
+      "verification": "fixture_verified",
+      "inputs": [
+        "URL / endpoint",
+        "Optional authenticated request context",
+        "Private success/canary marker",
+        "Signed bearer JWT"
+      ],
+      "limitations": "Requires a bearer token, private marker, and an anonymous negative control. Tests one payload mutation.",
+      "cwe": [
+        "CWE-347"
+      ],
+      "fixture": "tests/test_validation_suite.py"
+    },
+    {
+      "id": "jwt_none",
+      "area": "Validate rejection of unsigned JWTs",
+      "family": "Authorization",
+      "tool_keys": [
+        "awe_jwt_none"
+      ],
+      "verification": "fixture_verified",
+      "inputs": [
+        "URL / endpoint",
+        "Optional authenticated request context",
+        "Private success/canary marker",
+        "Signed bearer JWT"
+      ],
+      "limitations": "Requires a bearer token and private marker. Tests alg:none acceptance with other credential headers removed.",
+      "cwe": [
+        "CWE-347"
+      ],
+      "fixture": "tests/test_validation_suite.py"
+    },
+    {
+      "id": "workflow_invariants",
+      "area": "Validate researcher-defined workflow invariants",
+      "family": "Business logic",
+      "tool_keys": [
+        "awe_workflow_invariants"
+      ],
+      "verification": "fixture_verified",
+      "inputs": [
+        "URL / endpoint",
+        "Optional authenticated request context",
+        "Distinct peer / isolated context",
+        "Private success/canary marker",
+        "Explicit valid and invalid step sequences"
+      ],
+      "limitations": "Requires explicit valid/invalid request sequences and a forbidden-outcome marker. No invariant or business impact is inferred.",
+      "cwe": [
+        "CWE-841"
+      ],
+      "fixture": "tests/test_validation_suite.py"
+    },
+    {
+      "id": "sql_injection",
+      "area": "SQL injection",
+      "family": "Input validation",
+      "tool_keys": [
+        "sqlmap",
+        "nuclei"
+      ],
+      "verification": "adapter_only",
+      "inputs": [
+        "Adapter-specific target and credentials"
+      ],
+      "limitations": "Authenticated URL/raw-request support varies by adapter; no SQLi exploit validation was added to this suite.",
+      "cwe": []
+    },
+    {
+      "id": "xss",
+      "area": "Reflected/stored/DOM XSS",
+      "family": "Client-side security",
+      "tool_keys": [
+        "dalfox",
+        "kxss",
+        "gxss",
+        "nuclei"
+      ],
+      "verification": "adapter_only",
+      "inputs": [
+        "Adapter-specific target and credentials"
+      ],
+      "limitations": "Reflection is not XSS proof. Stored and DOM/browser-context behavior needs dedicated application/browser fixtures.",
+      "cwe": []
+    },
+    {
+      "id": "known_cves",
+      "area": "Known CVEs and product misconfigurations",
+      "family": "Platform security",
+      "tool_keys": [
+        "nuclei"
+      ],
+      "verification": "adapter_only",
+      "inputs": [
+        "Adapter-specific target and credentials"
+      ],
+      "limitations": "Coverage depends on selected installed templates and exact product/version; scanner registration is not tested CVE coverage.",
+      "cwe": []
+    },
+    {
+      "id": "tls",
+      "area": "TLS protocols and cryptographic configuration",
+      "family": "Transport security",
+      "tool_keys": [
+        "testssl",
+        "tlsx"
+      ],
+      "verification": "adapter_only",
+      "inputs": [
+        "Adapter-specific target and credentials"
+      ],
+      "limitations": "Existing adapters; protocol-specific positive/negative labs were not added in this implementation.",
+      "cwe": []
+    },
+    {
+      "id": "cms",
+      "area": "WordPress and Drupal component risks",
+      "family": "Platform security",
+      "tool_keys": [
+        "wpscan",
+        "droopescan"
+      ],
+      "verification": "adapter_only",
+      "inputs": [
+        "Adapter-specific target and credentials"
+      ],
+      "limitations": "Scanner databases and target context determine coverage; authenticated plugin/business logic remains outside this claim.",
+      "cwe": []
+    },
+    {
+      "id": "cloud",
+      "area": "Cloud IAM, bucket and configuration risks",
+      "family": "Cloud security",
+      "tool_keys": [
+        "prowler",
+        "s3scanner",
+        "cloudflare_audit"
+      ],
+      "verification": "adapter_only",
+      "inputs": [
+        "Adapter-specific target and credentials"
+      ],
+      "limitations": "Provider permissions, identities and account context are required; this does not prove all IAM attack paths.",
+      "cwe": []
+    },
+    {
+      "id": "containers",
+      "area": "Kubernetes, container and dependency risks",
+      "family": "Cloud security",
+      "tool_keys": [
+        "kubescape",
+        "trivy"
+      ],
+      "verification": "adapter_only",
+      "inputs": [
+        "Adapter-specific target and credentials"
+      ],
+      "limitations": "Existing audit/dependency adapters; runtime isolation, admission controls and supply-chain paths require separate validation.",
+      "cwe": []
+    },
+    {
+      "id": "secrets",
+      "area": "Repository and client-side secret exposure",
+      "family": "Information exposure",
+      "tool_keys": [
+        "gitleaks",
+        "secretfinder"
+      ],
+      "verification": "adapter_only",
+      "inputs": [
+        "Adapter-specific target and credentials"
+      ],
+      "limitations": "Matches need validation and revocation context; a string match does not prove a live credential.",
+      "cwe": []
+    },
+    {
+      "id": "takeover",
+      "area": "Subdomain takeover",
+      "family": "Platform security",
+      "tool_keys": [
+        "subzy",
+        "nuclei"
+      ],
+      "verification": "adapter_only",
+      "inputs": [
+        "Adapter-specific target and credentials"
+      ],
+      "limitations": "Fingerprints are provider-specific candidates and require ownership-safe confirmation.",
+      "cwe": []
+    },
+    {
+      "id": "oidc_discovery",
+      "area": "OIDC discovery and identity surface",
+      "family": "Authorization",
+      "tool_keys": [
+        "oidc_probe"
+      ],
+      "verification": "adapter_only",
+      "inputs": [
+        "Adapter-specific target and credentials"
+      ],
+      "limitations": "Discovery only; OAuth/OIDC flow security is not established.",
+      "cwe": []
+    },
+    {
+      "id": "nosql",
+      "area": "Generic NoSQL injection",
+      "family": "Input validation",
+      "tool_keys": [
+        "nuclei"
+      ],
+      "verification": "manual_required",
+      "inputs": [
+        "Researcher-defined application context"
+      ],
+      "limitations": "No dedicated generic detector; template matches cover only their exact cases.",
+      "cwe": []
+    },
+    {
+      "id": "ldap_xpath",
+      "area": "LDAP and XPath injection",
+      "family": "Input validation",
+      "tool_keys": [],
+      "verification": "manual_required",
+      "inputs": [
+        "Researcher-defined application context"
+      ],
+      "limitations": "No dedicated protocol/data-store fixtures or generic detector.",
+      "cwe": []
+    },
+    {
+      "id": "command_execution",
+      "area": "Generic command injection / arbitrary RCE",
+      "family": "Input validation",
+      "tool_keys": [
+        "nuclei"
+      ],
+      "verification": "manual_required",
+      "inputs": [
+        "Researcher-defined application context"
+      ],
+      "limitations": "Arithmetic/callback checks do not establish command execution; exact PoCs or application-specific validation are required.",
+      "cwe": []
+    },
+    {
+      "id": "deserialization",
+      "area": "Unsafe deserialization and gadget chains",
+      "family": "Input validation",
+      "tool_keys": [
+        "nuclei"
+      ],
+      "verification": "manual_required",
+      "inputs": [
+        "Researcher-defined application context"
+      ],
+      "limitations": "No generic gadget execution workflow or runtime-specific fixtures.",
+      "cwe": []
+    },
+    {
+      "id": "file_upload",
+      "area": "File upload validation and execution boundaries",
+      "family": "Input validation",
+      "tool_keys": [],
+      "verification": "manual_required",
+      "inputs": [
+        "Researcher-defined application context"
+      ],
+      "limitations": "Requires application-specific upload, retrieval and execution policy fixtures.",
+      "cwe": []
+    },
+    {
+      "id": "smuggling",
+      "area": "HTTP request smuggling and protocol desynchronization",
+      "family": "HTTP configuration",
+      "tool_keys": [],
+      "verification": "manual_required",
+      "inputs": [
+        "Researcher-defined application context"
+      ],
+      "limitations": "The normalized HTTP client is not a raw multi-hop protocol tester.",
+      "cwe": []
+    },
+    {
+      "id": "cache_poisoning",
+      "area": "Web cache poisoning/deception",
+      "family": "HTTP configuration",
+      "tool_keys": [],
+      "verification": "manual_required",
+      "inputs": [
+        "Researcher-defined application context"
+      ],
+      "limitations": "Host redirects and cross-identity markers do not establish cache poisoning or cache-key behavior.",
+      "cwe": []
+    },
+    {
+      "id": "race_conditions",
+      "area": "Race conditions / concurrent transaction invariants",
+      "family": "Business logic",
+      "tool_keys": [
+        "awe_workflow_invariants"
+      ],
+      "verification": "manual_required",
+      "inputs": [
+        "Researcher-defined application context"
+      ],
+      "limitations": "Sequential workflow checks do not establish concurrency safety or a race condition.",
+      "cwe": []
+    },
+    {
+      "id": "mfa_recovery",
+      "area": "MFA, account recovery and login flow bypasses",
+      "family": "Authorization",
+      "tool_keys": [
+        "awe_workflow_invariants"
+      ],
+      "verification": "manual_required",
+      "inputs": [
+        "Researcher-defined application context"
+      ],
+      "limitations": "Explicit sequences can assist review, but domain-specific invariants, clean state and dynamic tokens require researcher validation.",
+      "cwe": []
+    },
+    {
+      "id": "session_fixation",
+      "area": "Session fixation, rotation and lifecycle completeness",
+      "family": "Session management",
+      "tool_keys": [
+        "awe_session_cookies",
+        "awe_logout_replay"
+      ],
+      "verification": "manual_required",
+      "inputs": [
+        "Researcher-defined application context"
+      ],
+      "limitations": "Cookie flags and logout replay do not cover login rotation, fixation, expiry, or every revocation policy.",
+      "cwe": []
+    },
+    {
+      "id": "oauth_flows",
+      "area": "OAuth/OIDC redirect, state, nonce and PKCE security",
+      "family": "Authorization",
+      "tool_keys": [
+        "oidc_probe",
+        "awe_workflow_invariants"
+      ],
+      "verification": "manual_required",
+      "inputs": [
+        "Researcher-defined application context"
+      ],
+      "limitations": "Discovery and configured sequences are helpers, not a validated general OAuth/OIDC test suite.",
+      "cwe": []
+    },
+    {
+      "id": "dos_limits",
+      "area": "Rate limits and denial-of-service resistance",
+      "family": "API security",
+      "tool_keys": [
+        "awe_graphql_batching"
+      ],
+      "verification": "manual_required",
+      "inputs": [
+        "Researcher-defined application context"
+      ],
+      "limitations": "A two-query batch is an observation; no stress test or resource-exhaustion proof is included.",
+      "cwe": []
+    },
+    {
+      "id": "business_domains",
+      "area": "Payment, inventory, pricing and approval logic",
+      "family": "Business logic",
+      "tool_keys": [
+        "awe_workflow_invariants"
+      ],
+      "verification": "manual_required",
+      "inputs": [
+        "Researcher-defined application context"
+      ],
+      "limitations": "The researcher must supply valid/invalid sequences, isolated starting state and an explicit forbidden outcome.",
+      "cwe": []
+    },
+    {
+      "id": "nginx_rift_poc",
+      "area": "Nginx Rift pinned PoC",
+      "family": "Specific exploits",
+      "tool_keys": [
+        "nginx_rift"
+      ],
+      "verification": "adapter_only",
+      "inputs": [
+        "Registered pinned source image",
+        "Matching controlled target environment"
+      ],
+      "limitations": "Optional researcher-registered PoC. Packaging/help was checked; exploitation and applicability were not validated by this suite. It does not establish generic RCE coverage.",
+      "cwe": [],
+      "optional": true
+    },
+    {
+      "id": "php2shell_poc",
+      "area": "php2shell pinned PoC",
+      "family": "Specific exploits",
+      "tool_keys": [
+        "php2shell"
+      ],
+      "verification": "adapter_only",
+      "inputs": [
+        "Registered pinned source image",
+        "Matching controlled target environment"
+      ],
+      "limitations": "Optional researcher-registered PoC. Packaging/help was checked; exploitation and applicability were not validated by this suite. It does not establish generic RCE coverage.",
+      "cwe": [],
+      "optional": true
+    }
+  ]
+}

@@ -63,10 +63,11 @@ def test_resume_reuses_job_and_rejects_duplicate_active_run(monkeypatch, tmp_pat
     assert launch.call_count == 1
 
 
-def test_resume_requires_lost_secret_after_restart(monkeypatch, tmp_path):
+@pytest.mark.parametrize('spec', [{"key": "token", "type": "secret"}, {"key": "token", "type": "text", "sensitive": True}])
+def test_resume_requires_lost_secret_after_restart(monkeypatch, tmp_path, spec):
     store, manager, launch = setup_resume(
         monkeypatch, tmp_path, parameters={"domain": "example.com", "token": "[redacted]"},
-        secret_specs=[{"key": "token", "type": "secret"}],
+        secret_specs=[spec],
     )
 
     with pytest.raises(HTTPException) as exc:

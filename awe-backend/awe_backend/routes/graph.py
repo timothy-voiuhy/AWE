@@ -614,7 +614,10 @@ def start_graph_transform(project_id: str, payload: TransformStart, store: Proje
         job_id = secrets.token_hex(12)
         params = dict(payload.parameters)
         if payload.source_job_id:
-            params = {**_GRAPH_TRANSFORM_SECRETS.get(payload.source_job_id, {}), **params}
+            # Credentials may carry into a chained transform, but routing values
+            # must come from its newly selected graph input (or explicit input).
+            inherited = {key: value for key, value in _GRAPH_TRANSFORM_SECRETS.get(payload.source_job_id, {}).items() if key not in {"domain", "host", "url", "endpoint", "input_file"}}
+            params = {**inherited, **params}
         for parameter in ("domain", "host", "url", "endpoint"):
             params.setdefault(parameter, _transform_seed(selected[0], parameter))
         operation = _launch_graph_transform_operation(project_id, project_dir, project.target, investigation.id, transform, payload.entity_ids, selected[0].id, params, job_id, docker_operations, docker_service, repositories)
@@ -723,7 +726,7 @@ def resume_graph_transform(project_id: str, job_id: str, payload: TransformResum
             raise HTTPException(status_code=409, detail="The transform definition is no longer available")
         if transform.requires_approval and not payload.approved:
             raise HTTPException(status_code=409, detail="This transform requires explicit approval")
-        secret_keys = {str(item.get("key")) for item in transform.parameters if item.get("type") == "secret" or item.get("default") == "secret"}
+        secret_keys = {str(item.get("key")) for item in transform.parameters if item.get("type") == "secret" or item.get("default") == "secret" or item.get("sensitive") is True}
         if set(payload.parameters) - secret_keys:
             raise HTTPException(status_code=422, detail="Only secret parameters may be supplied when resuming")
         supplied = {key: value for key, value in payload.parameters.items() if value not in (None, "")}

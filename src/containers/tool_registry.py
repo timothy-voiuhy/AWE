@@ -1829,6 +1829,9 @@ TOOL_REGISTRY: dict[str, ToolConfig] = {
     ]
 }
 
+from containers.validation_tools import validation_tools
+TOOL_REGISTRY.update(validation_tools())
+
 # Tools grouped by category (used by the Docker Manager UI)
 TOOL_CATEGORIES: dict[str, list[str]] = {}
 for _k, _v in TOOL_REGISTRY.items():

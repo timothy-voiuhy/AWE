@@ -1,0 +1,294 @@
+[
+  {
+    "id": "awe_security_headers",
+    "slug": "security_headers",
+    "name": "Review browser security headers",
+    "family": "HTTP configuration",
+    "cwe": [
+      "CWE-693"
+    ],
+    "limitations": "Missing defensive headers are posture candidates; this does not prove an exploit."
+  },
+  {
+    "id": "awe_session_cookies",
+    "slug": "session_cookies",
+    "name": "Validate session cookie attributes",
+    "family": "Session management",
+    "cwe": [
+      "CWE-614",
+      "CWE-1004",
+      "CWE-1275"
+    ],
+    "limitations": "Only explicitly named session cookies are evaluated. Application use still needs review."
+  },
+  {
+    "id": "awe_cors",
+    "slug": "cors",
+    "name": "Validate credentialed CORS policy",
+    "family": "HTTP configuration",
+    "cwe": [
+      "CWE-942"
+    ],
+    "limitations": "Confirms response policy behavior, not browser access to every resource."
+  },
+  {
+    "id": "awe_open_redirect",
+    "slug": "open_redirect",
+    "name": "Validate external redirects",
+    "family": "Input validation",
+    "cwe": [
+      "CWE-601"
+    ],
+    "limitations": "Requires the redirect parameter. Redirects are inspected without following them."
+  },
+  {
+    "id": "awe_crlf",
+    "slug": "crlf",
+    "name": "Validate response header injection",
+    "family": "Input validation",
+    "cwe": [
+      "CWE-113"
+    ],
+    "limitations": "Tests one parameter with a harmless custom header; other parser/proxy paths are not covered."
+  },
+  {
+    "id": "awe_host_header",
+    "slug": "host_header",
+    "name": "Validate Host header redirect handling",
+    "family": "HTTP configuration",
+    "cwe": [
+      "CWE-346"
+    ],
+    "limitations": "Only Host-derived external redirects are checked, not complete reset/cache poisoning chains."
+  },
+  {
+    "id": "awe_http_methods",
+    "slug": "http_methods",
+    "name": "Review HTTP methods and TRACE reflection",
+    "family": "HTTP configuration",
+    "cwe": [
+      "CWE-200"
+    ],
+    "limitations": "Advertised methods are observations. TRACE echo is not proof of browser credential theft."
+  },
+  {
+    "id": "awe_directory_listing",
+    "slug": "directory_listing",
+    "name": "Detect exposed directory listings",
+    "family": "Information exposure",
+    "cwe": [
+      "CWE-548"
+    ],
+    "limitations": "Intentional public indexes require researcher interpretation."
+  },
+  {
+    "id": "awe_debug_errors",
+    "slug": "debug_errors",
+    "name": "Detect detailed error disclosure",
+    "family": "Information exposure",
+    "cwe": [
+      "CWE-209"
+    ],
+    "limitations": "Detects known stack-trace/error signatures; absence does not prove safe error handling."
+  },
+  {
+    "id": "awe_git_exposure",
+    "slug": "git_exposure",
+    "name": "Validate exposed Git HEAD metadata",
+    "family": "Information exposure",
+    "cwe": [
+      "CWE-552"
+    ],
+    "limitations": "Reads HEAD and a negative control only; does not reconstruct repositories."
+  },
+  {
+    "id": "awe_backup_exposure",
+    "slug": "backup_exposure",
+    "name": "Review exposed source backup variants",
+    "family": "Information exposure",
+    "cwe": [
+      "CWE-530"
+    ],
+    "limitations": "Checks three filename suffixes for source/secret signatures, without saving response bodies."
+  },
+  {
+    "id": "awe_source_maps",
+    "slug": "source_maps",
+    "name": "Review published source maps",
+    "family": "Information exposure",
+    "cwe": [
+      "CWE-540"
+    ],
+    "limitations": "Published sources can be intentional. Only same-origin sourcesContent is assessed."
+  },
+  {
+    "id": "awe_csrf_forms",
+    "slug": "csrf_forms",
+    "name": "Review form anti-CSRF indicators",
+    "family": "Session management",
+    "cwe": [
+      "CWE-352"
+    ],
+    "limitations": "Missing form token fields are candidates; SameSite, Origin checks, and workflow behavior require manual validation."
+  },
+  {
+    "id": "awe_mixed_content",
+    "slug": "mixed_content",
+    "name": "Review HTTPS pages for HTTP resources",
+    "family": "HTTP configuration",
+    "cwe": [
+      "CWE-319"
+    ],
+    "limitations": "Only static script, iframe, stylesheet and media references are inspected, not browser runtime behavior."
+  },
+  {
+    "id": "awe_graphql_introspection",
+    "slug": "graphql_introspection",
+    "name": "Check GraphQL schema introspection",
+    "family": "API security",
+    "cwe": [
+      "CWE-200"
+    ],
+    "limitations": "Schema availability is an exposure candidate and can be intentional."
+  },
+  {
+    "id": "awe_graphql_batching",
+    "slug": "graphql_batching",
+    "name": "Check bounded GraphQL query batching",
+    "family": "API security",
+    "cwe": [
+      "CWE-770"
+    ],
+    "limitations": "Two read-only queries establish batching support only, not a rate-limit or resource-exhaustion bypass."
+  },
+  {
+    "id": "awe_authz_horizontal",
+    "slug": "authz_horizontal",
+    "name": "Validate horizontal authorization boundaries",
+    "family": "Authorization",
+    "cwe": [
+      "CWE-639"
+    ],
+    "limitations": "Requires distinct owner/peer credentials and a private response marker for an object the peer must not access."
+  },
+  {
+    "id": "awe_authz_vertical",
+    "slug": "authz_vertical",
+    "name": "Validate vertical authorization boundaries",
+    "family": "Authorization",
+    "cwe": [
+      "CWE-863"
+    ],
+    "limitations": "Requires privileged/unprivileged credentials and an explicit private marker. Roles are supplied, not inferred."
+  },
+  {
+    "id": "awe_authz_tenant",
+    "slug": "authz_tenant",
+    "name": "Validate tenant isolation boundaries",
+    "family": "Authorization",
+    "cwe": [
+      "CWE-863"
+    ],
+    "limitations": "Requires credentials from distinct tenants and an explicit private marker; tenant ownership is supplied."
+  },
+  {
+    "id": "awe_anonymous_access",
+    "slug": "anonymous_access",
+    "name": "Validate authenticated resource protection",
+    "family": "Authorization",
+    "cwe": [
+      "CWE-862"
+    ],
+    "limitations": "Requires a private marker and a credentialed baseline; removes standard and declared credential headers for control."
+  },
+  {
+    "id": "awe_cache_isolation",
+    "slug": "cache_isolation",
+    "name": "Review cross-identity private response isolation",
+    "family": "Authorization",
+    "cwe": [
+      "CWE-525"
+    ],
+    "limitations": "Demonstrates cross-identity exposure; cache causation requires cache-specific investigation."
+  },
+  {
+    "id": "awe_logout_replay",
+    "slug": "logout_replay",
+    "name": "Review server-side logout invalidation",
+    "family": "Session management",
+    "cwe": [
+      "CWE-613"
+    ],
+    "limitations": "Requires an explicit logout request, private marker, and state-change permission. Logout policy still requires review."
+  },
+  {
+    "id": "awe_ssti",
+    "slug": "ssti",
+    "name": "Validate server-side arithmetic evaluation",
+    "family": "Input validation",
+    "cwe": [
+      "CWE-1336"
+    ],
+    "limitations": "Uses two random arithmetic canaries; does not execute commands or prove arbitrary code execution."
+  },
+  {
+    "id": "awe_canary_traversal",
+    "slug": "canary_traversal",
+    "name": "Validate traversal to a researcher canary",
+    "family": "Input validation",
+    "cwe": [
+      "CWE-22"
+    ],
+    "limitations": "Requires a researcher-controlled canary filename and private content marker; never defaults to system files."
+  },
+  {
+    "id": "awe_ssrf_callback",
+    "slug": "ssrf_callback",
+    "name": "Validate SSRF with independent callback evidence",
+    "family": "Input validation",
+    "cwe": [
+      "CWE-918"
+    ],
+    "limitations": "Requires an owned callback and independent monitor. No metadata/internal-address payload list is supplied."
+  },
+  {
+    "id": "awe_xxe_callback",
+    "slug": "xxe_callback",
+    "name": "Validate XML external-entity callback behavior",
+    "family": "Input validation",
+    "cwe": [
+      "CWE-611"
+    ],
+    "limitations": "Requires an XML endpoint, an owned callback/monitor, and state-change permission. No local file retrieval."
+  },
+  {
+    "id": "awe_jwt_signature",
+    "slug": "jwt_signature",
+    "name": "Validate JWT signature enforcement",
+    "family": "Authorization",
+    "cwe": [
+      "CWE-347"
+    ],
+    "limitations": "Requires a bearer token, private marker, and an anonymous negative control. Tests one payload mutation."
+  },
+  {
+    "id": "awe_jwt_none",
+    "slug": "jwt_none",
+    "name": "Validate rejection of unsigned JWTs",
+    "family": "Authorization",
+    "cwe": [
+      "CWE-347"
+    ],
+    "limitations": "Requires a bearer token and private marker. Tests alg:none acceptance with other credential headers removed."
+  },
+  {
+    "id": "awe_workflow_invariants",
+    "slug": "workflow_invariants",
+    "name": "Validate researcher-defined workflow invariants",
+    "family": "Business logic",
+    "cwe": [
+      "CWE-841"
+    ],
+    "limitations": "Requires explicit valid/invalid request sequences and a forbidden-outcome marker. No invariant or business impact is inferred."
+  }
+]

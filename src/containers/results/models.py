@@ -256,6 +256,9 @@ class VulnFinding(BaseResult):
     matched: str = ""
     description: str = ""
     tags: list[str] = field(default_factory=list)
+    verification: str = ""
+    evidence: dict = field(default_factory=dict)
+    value: str = ""
 
     @property
     def key(self) -> str:

@@ -53,7 +53,7 @@ const activeJobStatuses = new Set<TransformJob['status']>(['queued', 'running', 
 
 function TransformRunRow({ job, manifest, onResume, onCancel, busy }: { job: TransformJob; manifest?: TransformManifest; onResume: (job: TransformJob, parameters: Record<string, unknown>, manifest?: TransformManifest) => void; onCancel: (id: string) => void; busy: boolean }) {
   const [secrets, setSecrets] = useState<Record<string, string>>({})
-  const secretSpecs = (manifest?.parameters || []).map(spec => spec as unknown as ToolParamSpec).filter(spec => spec.type === 'secret' || spec.default === 'secret')
+  const secretSpecs = (manifest?.parameters || []).map(spec => spec as unknown as ToolParamSpec).filter(spec => spec.type === 'secret' || spec.default === 'secret' || spec.sensitive === true)
   const name = manifest?.display_name || job.transform_id
   const progress = job.progress_total
     ? Math.min(100, Math.round(((job.progress_completed || 0) / job.progress_total) * 100))
@@ -113,8 +113,8 @@ export function NetworkTransformsPage() {
   const { projectId = '' } = useParams()
   const [searchParams, setSearchParams] = useSearchParams()
   const catalogView = searchParams.get('view') === 'tools' ? 'tools' : 'transforms'
-  const [searchOpen, setSearchOpen] = useState(false)
-  const [catalogSearch, setCatalogSearch] = useState('')
+  const [searchOpen, setSearchOpen] = useState(!!searchParams.get('find'))
+  const [catalogSearch, setCatalogSearch] = useState(searchParams.get('find') || '')
   const searchInput = useRef<HTMLInputElement>(null)
   const searchButton = useRef<HTMLButtonElement>(null)
   const search = catalogSearch.trim()
@@ -231,7 +231,7 @@ export function NetworkTransformsPage() {
       <nav aria-label="Transform catalogs" className="catalog-switch"><button aria-pressed={catalogView === 'transforms'} onClick={() => setSearchParams({})}>Transforms <span>{transforms.data?.length || 0}</span></button><button aria-pressed={catalogView === 'tools'} onClick={() => setSearchParams({ view: 'tools' })}>Tools <span>{tools.data?.length || 0}</span></button></nav>
       <div className="catalog-header-actions">
         <button ref={searchButton} type="button" className="catalog-search-toggle" aria-label={`Search ${catalogView}`} title={`Search ${catalogView}`} aria-expanded={searchOpen} aria-controls="catalog-search" onClick={() => searchOpen ? closeSearch() : setSearchOpen(true)}><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5" /><path d="m16 16 4.5 4.5" /></svg></button>
-        <OptionsMenu label="Transform options">{toolActions}<button type="button" onClick={() => openOrganizer()}>Manage categories</button><button type="button" onClick={() => { saveComposite.reset(); setCompositeOpen(true) }}>Create composite transform</button><button type="button" onClick={() => { resume.reset(); cancelRun.reset(); setRunsOpen(true) }}>View running transforms</button><Link to={`/projects/${projectId}/runs`}>Tool runs</Link><Link to={`/projects/${projectId}/network/logs`}>Live logs</Link></OptionsMenu>
+        <OptionsMenu label="Transform options">{toolActions}<button type="button" onClick={() => openOrganizer()}>Manage categories</button><button type="button" onClick={() => { saveComposite.reset(); setCompositeOpen(true) }}>Create composite transform</button><button type="button" onClick={() => { resume.reset(); cancelRun.reset(); setRunsOpen(true) }}>View running transforms</button><Link to={`/projects/${projectId}/network/coverage`}>Coverage matrix</Link><Link to={`/projects/${projectId}/network/docs?doc=validation-transforms`}>Validation guide</Link><Link to={`/projects/${projectId}/runs`}>Tool runs</Link><Link to={`/projects/${projectId}/network/logs`}>Live logs</Link></OptionsMenu>
       </div>
     </header>
     {searchOpen && <section id="catalog-search" className="panel catalog-search-bar" role="search" aria-label={`Search ${catalogView}`} onKeyDown={event => { if (event.key === 'Escape') { event.preventDefault(); closeSearch() } }}>

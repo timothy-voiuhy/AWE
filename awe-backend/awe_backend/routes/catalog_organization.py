@@ -30,7 +30,7 @@ def context(project_id: str, store: ProjectStore = Depends(get_project_store), s
     if source not in sys.path:
         sys.path.insert(0, source)
     from containers.tool_registry import TOOL_REGISTRY
-    items = {f"tool:{key}": "Exploits" if getattr(tool, "source_metadata", {}).get("kind") in {"git", "archive"} else (tool.category or "Other") for key, tool in TOOL_REGISTRY.items()}
+    items = {f"tool:{key}": "Exploits" if getattr(tool, "source_metadata", {}).get("kind") in {"git", "archive"} else (getattr(tool, "source_metadata", {}).get("catalog_category") or tool.category or "Other") for key, tool in TOOL_REGISTRY.items()}
     for manifest in _graph_transforms(settings, project_dir):
         key = f"tool:{manifest.tool_key}" if manifest.tool_key in TOOL_REGISTRY else f"transform:{project_id}:{manifest.id}"
         items.setdefault(key, manifest.category or "Other")

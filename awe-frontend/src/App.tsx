@@ -38,6 +38,7 @@ const BrowserPage = lazy(() => import('./features/browser/BrowserPage').then(m =
 const TerminalPage = lazy(() => import('./features/terminal/TerminalPage').then(m => ({ default: m.TerminalPage })))
 const SessionWorkspace = lazy(() => import('./features/terminal/SessionWorkspace').then(m => ({ default: m.SessionWorkspace })))
 const NetworkGraphPage = lazy(() => import('./features/network/NetworkGraphPage').then(m => ({ default: m.NetworkGraphPage })))
+const CoveragePage = lazy(() => import('./features/network/CoveragePage').then(m => ({ default: m.CoveragePage })))
 
 type WorkspaceNavItem = {
   path: string
@@ -170,6 +171,7 @@ export function App() {
         <Route path="/projects/:projectId/sitemap" element={<SiteMapPage />} />
         <Route path="/projects/:projectId/network" element={<NetworkGraphPage />} />
         <Route path="/projects/:projectId/network/transforms" element={<NetworkTransformsPage />} />
+        <Route path="/projects/:projectId/network/coverage" element={<CoveragePage />} />
         <Route path="/projects/:projectId/network/tools" element={<LegacyGraphToolsRedirect />} />
         <Route path="/projects/:projectId/network/logs" element={<NetworkLogsPage />} />
         <Route path="/projects/:projectId/network/evidence" element={<NetworkEvidencePage />} />

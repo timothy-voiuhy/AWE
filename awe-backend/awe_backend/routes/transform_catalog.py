@@ -235,7 +235,7 @@ def _normalise_composite_results(manifest: TransformManifest, parsed: list) -> l
 
 
 def _redact_transform_params(manifest: TransformManifest, params: dict) -> tuple[dict, dict]:
-    secret_keys = {str(item.get("key")) for item in manifest.parameters if item.get("type") == "secret" or item.get("default") == "secret"}
+    secret_keys = {str(item.get("key")) for item in manifest.parameters if item.get("type") == "secret" or item.get("default") == "secret" or item.get("sensitive") is True}
     return (
         {key: ("[redacted]" if key in secret_keys else value) for key, value in params.items()},
         {key: value for key, value in params.items() if key in secret_keys and value not in (None, "", "[redacted]")},

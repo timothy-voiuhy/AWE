@@ -176,7 +176,7 @@ export interface ProjectSettings { default_threads:number;default_rate_limit:num
 export interface ProxyInfo { host:string;port:number;certificate_url:string;scheme:string;username:string;password_configured:boolean }
 export interface DockerContainer { id:string;name:string;image:string;status:string;created:string;is_service:boolean }
 export interface DockerImage { id:string;tags:string[];size_mb:number }
-export interface ToolParamSpec { key:string;label?:string;type?:'text'|'check'|'combo'|'secret';default?:unknown;options?:string[] }
+export interface ToolParamSpec { key:string;label?:string;type?:'text'|'check'|'combo'|'secret';default?:unknown;options?:string[];sensitive?:boolean }
 export interface DockerTool extends ExecutionOptions { key:string;display_name:string;category:string;image:string;description:string;param_specs:ToolParamSpec[];source:'build'|'hub';image_present:boolean;is_custom:boolean;status:string;command_template:string;dockerfile:string;parser:string;input_types:string[];output_types:string[];relationship_types:string[];execution_mode:'passive'|'safe_active'|'active'|'high_risk';credential_fields:string[];graph_enabled:boolean }
 export interface DockerOperation { id:string;kind:string;status:'queued'|'running'|'completed'|'failed'|'cancelling'|'cancelled';progress_completed:number;progress_total:number;message:string;logs:string[];result:Record<string,unknown> }
 export interface DockerToolInput extends ExecutionOptions {

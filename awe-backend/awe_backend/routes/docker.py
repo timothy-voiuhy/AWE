@@ -236,6 +236,8 @@ def run_docker_tool(project_id: str, key: str, payload: DockerToolRun, store: Pr
         raise HTTPException(status_code=404, detail="Tool not found")
     if getattr(tool, "execution_mode", "passive") in {"active", "high_risk"} and not payload.approved:
         raise HTTPException(status_code=409, detail="This tool requires explicit approval before execution")
+    protected = set(tool.credential_fields) | {str(spec.get("key")) for spec in tool.param_spec() if spec.get("type") == "secret"}
+    safe_parameters = {name: "[redacted]" if name in protected else value for name, value in payload.params.items()}
     callback = None
     if payload.ingest_to_graph:
         investigation_id = payload.investigation_id
@@ -261,7 +263,7 @@ def run_docker_tool(project_id: str, key: str, payload: DockerToolRun, store: Pr
                     "output_dir": str(_output_dir),
                     "parsed_count": len(parsed),
                     "ingested_count": count,
-                    "parameters": payload.params,
+                    "parameters": safe_parameters,
                 },
             ))
             return {"ingested_count": count, "investigation_id": investigation_id, "evidence_id": evidence.id if evidence else ""}
