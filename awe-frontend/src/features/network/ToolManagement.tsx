@@ -24,10 +24,10 @@ function graphToolGaps(tool: DockerTool) {
   return gaps
 }
 
-export function GraphToolCatalog({ tools, projectId }: { tools: DockerTool[]; projectId: string }) {
+export function GraphToolCatalog({ tools, projectId, search = '' }: { tools: DockerTool[]; projectId: string; search?: string }) {
   return <section className="panel graph-tool-catalog"><header><div><b>Tool catalog</b><span>{tools.length} Docker tools · {tools.filter(item => item.graph_enabled).length} graph enabled</span></div></header>
-    {!tools.length && <div className="empty compact">No Docker tools are registered.</div>}
-    <div className="catalog-groups">{groupByCategory(tools).map(group => <CategoryGroup key={group.category} name={group.category} count={group.entries.length}><div className="graph-tool-catalog-grid">{group.entries.map(tool => {
+    {!tools.length && <div className="empty compact">{search ? 'No tools match your search.' : 'No Docker tools are registered.'}</div>}
+    <div className="catalog-groups">{groupByCategory(tools).map(group => <CategoryGroup key={`${group.category}:${search}`} name={group.category} count={group.entries.length} defaultExpanded={!!search}><div className="graph-tool-catalog-grid">{group.entries.map(tool => {
       const gaps = graphToolGaps(tool)
       return <article className={tool.graph_enabled ? 'graph-catalog-row enabled' : 'graph-catalog-row disabled'} key={tool.key}>
         <div><b>{tool.display_name}</b><span>{tool.category} · {tool.execution_mode} · {tool.source}</span><code>{tool.image}</code></div>

@@ -9,8 +9,8 @@ export function groupByCategory<T extends { category: string }>(items: T[]) {
   return [...groups].sort(([a], [b]) => a.localeCompare(b)).map(([category, entries]) => ({ category, entries }))
 }
 
-export function CategoryGroup({ name, count, children }: { name: string; count: number; children: ReactNode }) {
-  const [expanded, setExpanded] = useState(false)
+export function CategoryGroup({ name, count, children, defaultExpanded = false }: { name: string; count: number; children: ReactNode; defaultExpanded?: boolean }) {
+  const [expanded, setExpanded] = useState(defaultExpanded)
   return <section className="catalog-category">
     <button type="button" className="catalog-category-toggle" aria-expanded={expanded} onClick={() => setExpanded(value => !value)}>
       <span className="catalog-category-chevron" aria-hidden="true">{expanded ? '▾' : '▸'}</span>
