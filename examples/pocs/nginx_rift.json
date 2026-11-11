@@ -1,0 +1,18 @@
+{
+  "key": "nginx_rift",
+  "display_name": "Nginx Rift",
+  "repository": "https://github.com/depthfirstdisclosures/nginx-rift",
+  "revision": "b9045c32af035d2d6638c29e4822c7da0aab5ade",
+  "command_template": "python -u /poc/Nginx-Rift/poc.py --host '{target}' --port '{port}' --cmd '{command}'",
+  "dockerfile": "FROM python:3.12-slim\nWORKDIR /poc\nCOPY . /poc\nRUN python -m compileall -q Nginx-Rift && mkdir -p /output\nENV PYTHONUNBUFFERED=1\n",
+  "param_specs": [
+    {"key": "target", "label": "Lab host", "type": "text", "default": ""},
+    {"key": "port", "label": "Lab port", "type": "text", "default": "19321"},
+    {"key": "command", "label": "Command", "type": "text", "default": "id"}
+  ],
+  "execution_kind": "batch",
+  "output_channels": ["logs", "artifacts"],
+  "artifact_paths": ["**/*"],
+  "execution_timeout": 3600,
+  "session_idle_timeout": 3600
+}
