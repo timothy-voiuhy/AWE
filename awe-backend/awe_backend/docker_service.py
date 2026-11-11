@@ -39,10 +39,12 @@ class DockerService:
         container.remove(force=True)
 
     def images(self, managed_tags: set[str] | None = None) -> list[dict]:
+        from .image_readiness import canonical_reference
+        managed = {canonical_reference(tag) for tag in managed_tags} if managed_tags is not None else None
         result = []
         for image in self._client().images.list():
             tags = image.tags or ["<none>:<none>"]
-            if managed_tags is not None and not (set(tags) & managed_tags): continue
+            if managed is not None and not ({canonical_reference(tag) for tag in tags} & managed): continue
             result.append({"id": image.short_id, "tags": tags, "size_mb": round(image.attrs.get("Size", 0) / 1048576, 1)})
         return result
 
@@ -97,12 +99,15 @@ class DockerService:
         client = self._client()
         if progress:
             for item in client.api.pull(image, stream=True, decode=True):
+                if item.get("error"): raise RuntimeError(item["error"])
                 status = item.get("status", "")
                 detail = item.get("progress", "")
                 if status: progress(f"{status}{' ' + detail if detail else ''}")
             pulled = client.images.get(image)
         else:
             pulled = client.images.pull(image)
+        from .image_readiness import invalidate_image
+        invalidate_image(image)
         return {"id": pulled.short_id, "tags": pulled.tags or [image]}
 
     def build_image(self, dockerfile: str, tag: str) -> dict:
@@ -118,17 +123,19 @@ class DockerService:
 
     def build_image_path(self, dockerfile_path: str, tag: str, progress=None) -> dict:
         from pathlib import Path
+        from .image_readiness import BUILD_LABEL, context_fingerprint
         path = Path(dockerfile_path)
         client = self._client()
+        labels = {BUILD_LABEL: context_fingerprint(dockerfile_path)}
         if progress:
             output = []
-            for item in client.api.build(path=str(path.parent), dockerfile=path.name, tag=tag, rm=True, decode=True):
+            for item in client.api.build(path=str(path.parent), dockerfile=path.name, tag=tag, rm=True, decode=True, labels=labels, pull=True):
                 line = item.get("stream", "").strip()
                 if line: output.append(line); progress(line)
                 if item.get("error"): raise RuntimeError(item["error"])
             image = client.images.get(tag)
             return {"id": image.short_id, "tags": image.tags, "logs": output}
-        image, logs = client.images.build(path=str(path.parent), dockerfile=path.name, tag=tag, rm=True)
+        image, logs = client.images.build(path=str(path.parent), dockerfile=path.name, tag=tag, rm=True, labels=labels, pull=True)
         return {"id": image.short_id, "tags": image.tags, "logs": [x.get("stream", "").strip() for x in logs if x.get("stream")]}
 
     def prune(self) -> int:

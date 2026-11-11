@@ -1,0 +1,15 @@
+.image-filter-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 12px 0 6px; flex-wrap: wrap; }
+.image-filter-toolbar [role="group"] { display: flex; flex-wrap: wrap; gap: 4px; }
+.image-filter-toolbar button { display: inline-flex; align-items: center; gap: 6px; padding: 5px 9px; font-size: 11px; }
+.image-filter-toolbar button[aria-pressed="true"] { background: #313244; color: #cba6f7; border-color: #cba6f7; }
+.image-filter-toolbar button[aria-pressed="false"] { background: transparent; color: #a6adc8; border-color: #313244; }
+.image-filter-toolbar button span { color: #a6adc8; font-size: 10px; }
+.image-filter-hint { color: #7f849c; font-size: 11px; line-height: 1.6; margin: 6px 0 12px; }
+.tool-preflight { display: grid; gap: 8px; margin: 12px 0; padding: 12px; border: 1px solid #45475a; border-radius: 8px; font-size: 12px; min-width: 0; }
+.tool-preflight header { display: flex; gap: 8px; justify-content: space-between; align-items: center; }
+.tool-preflight article { padding: 8px; background: #11111b; border-radius: 5px; overflow-wrap: anywhere; }
+.tool-preflight p { margin: 6px 0; line-height: 1.5; }
+.tool-preflight code { font-size: 11px; }
+.tool-preflight pre { max-height: 160px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
+.tool-preflight nav { display: flex; flex-wrap: wrap; gap: 6px; }
+.tool-preflight button, .tool-preflight a { font-size: 11px; }

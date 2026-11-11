@@ -104,7 +104,9 @@ def build_poc(project_dir: Path, run_id: str, payload, raw: bytes | None, settin
         record.update(source_metadata=metadata, image=image)
         record.append(f"Building {image}", "system")
         client = DockerService()._client()
-        for event in client.api.build(path=str(snapshot), tag=image, rm=True, decode=True):
+        from .image_readiness import BUILD_LABEL, context_fingerprint
+        labels = {BUILD_LABEL: context_fingerprint(str(snapshot / "Dockerfile"))}
+        for event in client.api.build(path=str(snapshot), tag=image, rm=True, decode=True, labels=labels, pull=True):
             if event.get("error"):
                 raise RuntimeError(event["error"])
             if event.get("stream"):

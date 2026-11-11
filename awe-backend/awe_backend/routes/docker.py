@@ -28,6 +28,7 @@ from .graph import _ensure_investigation, _ingest_graph_results
 from .stores import _create_evidence_record
 from .transform_catalog import _graph_transforms
 from .transform_catalog import execution_options
+from ..image_readiness import image_state, check_updates, tool_preflight, require_ready
 from fastapi import APIRouter
 
 router = APIRouter()
@@ -191,14 +192,37 @@ def list_docker_tools(settings: Settings = Depends(get_settings), service: Docke
     if source not in sys.path: sys.path.insert(0,source)
     try:
         from containers.tool_registry import TOOL_REGISTRY
-        local = {tag for item in service.images() for tag in item["tags"]}
         result = []
-        for key, tool in TOOL_REGISTRY.items():
+        states = {}
+        for key, tool in list(TOOL_REGISTRY.items()):
             item = _docker_tool_detail(key)
-            item.image_present = tool.image in local or any(tag.split(":")[0] == tool.image.split(":")[0] for tag in local)
+            if tool.image not in states:
+                states[tool.image] = image_state(tool, service)
+            for name, value in states[tool.image].items():
+                if name != "image": setattr(item, name, value)
             result.append(item)
         return result
     except Exception as exc: raise HTTPException(status_code=503, detail=f"Tool registry unavailable: {exc}") from exc
+
+
+@router.post("/docker/images/check-updates", response_model=list[dict], tags=["docker"])
+def check_tool_image_updates(service: DockerService = Depends(get_docker_service)) -> list[dict]:
+    source = str(get_settings().legacy_src_dir.resolve())
+    if source not in sys.path: sys.path.insert(0, source)
+    from containers.tool_registry import TOOL_REGISTRY
+    try:
+        return check_updates(list(TOOL_REGISTRY.values()), service)
+    except docker.errors.DockerException as exc:
+        raise HTTPException(status_code=503, detail="Docker is unavailable") from exc
+
+
+@router.get("/docker/tools/{key}/preflight", response_model=dict, tags=["docker"])
+def get_tool_preflight(key: str, service: DockerService = Depends(get_docker_service)) -> dict:
+    source = str(get_settings().legacy_src_dir.resolve())
+    if source not in sys.path: sys.path.insert(0, source)
+    from containers.tool_registry import TOOL_REGISTRY
+    if key not in TOOL_REGISTRY: raise HTTPException(status_code=404, detail="Tool not found")
+    return tool_preflight([key], service)
 
 
 @router.get("/docker/status", response_model=dict, tags=["docker"])
@@ -236,6 +260,7 @@ def run_docker_tool(project_id: str, key: str, payload: DockerToolRun, store: Pr
         raise HTTPException(status_code=404, detail="Tool not found")
     if getattr(tool, "execution_mode", "passive") in {"active", "high_risk"} and not payload.approved:
         raise HTTPException(status_code=409, detail="This tool requires explicit approval before execution")
+    require_ready(tool_preflight([key], service))
     protected = set(tool.credential_fields) | {str(spec.get("key")) for spec in tool.param_spec() if spec.get("type") == "secret"}
     safe_parameters = {name: "[redacted]" if name in protected else value for name, value in payload.params.items()}
     callback = None

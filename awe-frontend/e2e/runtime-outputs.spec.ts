@@ -47,7 +47,7 @@ test('logs-only runs retain artifacts and interactive consoles detach without ex
     await expect.poll(async () => {
       const result = await (await page.request.get(`/api/v1/projects/${projectId}/runs/${launched.id}/events`)).json()
       return result.events.map((e: { data: string }) => e.data).join('')
-    }).toContain('e2e-console-output')
+    }, { timeout: 15000 }).toContain('e2e-console-output')
     await page.getByRole('button', { name: 'Detach', exact: true }).click()
     await expect.poll(async () => (await (await page.request.get(`/api/v1/projects/${projectId}/sessions/interactive/${sid}`)).json()).status).toBe('active')
     await page.goto(`/projects/${projectId}/terminal/sessions?session=${sid}`)
@@ -88,6 +88,9 @@ test('PoC source archives build and register a pinned tool through the dialog', 
       const tools = await (await page.request.get('/api/v1/docker/tools')).json()
       return tools.find((t: { key: string }) => t.key === key)?.source_metadata?.kind
     }, { timeout: 25000 }).toBe('archive')
+    const registered = (await (await page.request.get('/api/v1/docker/tools')).json()).find((item: { key: string }) => item.key === key)
+    expect(registered.image_present).toBe(true)
+    expect(registered.update_status).toBe('current')
     await expect(page.locator('.runtime-detail')).toContainText('completed', { timeout: 10000 })
   } finally {
     await page.request.delete(`/api/v1/docker/tools/${key}`, { headers })

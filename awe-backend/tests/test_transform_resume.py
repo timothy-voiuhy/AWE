@@ -63,6 +63,23 @@ def test_resume_reuses_job_and_rejects_duplicate_active_run(monkeypatch, tmp_pat
     assert launch.call_count == 1
 
 
+def test_resume_preflight_blocks_before_checkpoint_cleanup_or_new_operation(monkeypatch, tmp_path):
+    import docker
+    from awe_backend.docker_service import DockerService
+    store, manager, launch = setup_resume(monkeypatch, tmp_path)
+    client = Mock()
+    client.images.get.side_effect = docker.errors.ImageNotFound("required version missing")
+    service = DockerService()
+    service._client = lambda: client
+    with pytest.raises(HTTPException) as error:
+        api.resume_graph_transform("project-1", "job-1", TransformResume(), store=store, settings=Mock(), docker_operations=manager, docker_service=service, repositories=Mock())
+    assert error.value.status_code == 409
+    assert "Preflight failed" in error.value.detail
+    launch.assert_not_called()
+    manager.validate_checkpoint.assert_not_called()
+    manager.cleanup_interrupted_container.assert_not_called()
+
+
 @pytest.mark.parametrize('spec', [{"key": "token", "type": "secret"}, {"key": "token", "type": "text", "sensitive": True}])
 def test_resume_requires_lost_secret_after_restart(monkeypatch, tmp_path, spec):
     store, manager, launch = setup_resume(

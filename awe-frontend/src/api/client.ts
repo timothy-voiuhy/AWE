@@ -177,7 +177,10 @@ export interface ProxyInfo { host:string;port:number;certificate_url:string;sche
 export interface DockerContainer { id:string;name:string;image:string;status:string;created:string;is_service:boolean }
 export interface DockerImage { id:string;tags:string[];size_mb:number }
 export interface ToolParamSpec { key:string;label?:string;type?:'text'|'check'|'combo'|'secret';default?:unknown;options?:string[];sensitive?:boolean }
-export interface DockerTool extends ExecutionOptions { key:string;display_name:string;category:string;image:string;description:string;param_specs:ToolParamSpec[];source:'build'|'hub';image_present:boolean;is_custom:boolean;status:string;command_template:string;dockerfile:string;parser:string;input_types:string[];output_types:string[];relationship_types:string[];execution_mode:'passive'|'safe_active'|'active'|'high_risk';credential_fields:string[];graph_enabled:boolean }
+export interface ImageReadiness { image:string;image_present:boolean;update_status:'unchecked'|'unknown'|'current'|'outdated';update_message:string;update_checked_at:string }
+export interface PreflightIssue { code:string;message:string;action:'build'|'pull'|'edit'|'retry';warning?:boolean }
+export interface PreflightReport { ready:boolean;tools:Array<Partial<ImageReadiness> & {tool_key:string;ready:boolean;issues:PreflightIssue[]}> }
+export interface DockerTool extends ExecutionOptions, ImageReadiness { key:string;display_name:string;category:string;image:string;description:string;param_specs:ToolParamSpec[];source:'build'|'hub';is_custom:boolean;status:string;command_template:string;dockerfile:string;parser:string;input_types:string[];output_types:string[];relationship_types:string[];execution_mode:'passive'|'safe_active'|'active'|'high_risk';credential_fields:string[];graph_enabled:boolean }
 export interface DockerOperation { id:string;kind:string;status:'queued'|'running'|'completed'|'failed'|'cancelling'|'cancelled';progress_completed:number;progress_total:number;message:string;logs:string[];result:Record<string,unknown> }
 export interface DockerToolInput extends ExecutionOptions {
   key:string; display_name:string; category:string; image:string; description:string;
@@ -356,6 +359,9 @@ export const api = {
   pruneDocker:()=>request<{removed:number}>('/docker/prune',{method:'POST'}),
   containerLogs:(id:string)=>request<string[]>(`/docker/containers/${id}/logs`),
   listDockerTools:()=>request<DockerTool[]>('/docker/tools'),
+  checkImageUpdates:()=>request<ImageReadiness[]>('/docker/images/check-updates',{method:'POST'}),
+  toolPreflight:(key:string)=>request<PreflightReport>(`/docker/tools/${encodeURIComponent(key)}/preflight`),
+  transformPreflight:(projectId:string,id:string)=>request<PreflightReport>(`/projects/${projectId}/transform-preflight?transform_id=${encodeURIComponent(id)}`),
   dockerStatus:()=>request<{available:boolean;version:string;message:string}>('/docker/status'),
   dockerOperation:(id:string)=>request<DockerOperation>(`/docker/operations/${id}`),
   recentDockerToolRuns:()=>request<DockerOperation[]>('/docker/operations'),

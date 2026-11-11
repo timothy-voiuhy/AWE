@@ -595,6 +595,18 @@ def _launch_graph_transform_operation(
     return docker_operations.start_tool(transform.tool_key, params, output_dir, docker_service, on_complete, resume=resume, prior_logs=prior_logs, seed_values=seed_values)
 
 
+@router.get("/projects/{project_id}/transform-preflight", response_model=dict, tags=["network"])
+def get_transform_preflight(project_id: str, transform_id: str, store: ProjectStore = Depends(get_project_store), settings: Settings = Depends(get_settings), docker_service: DockerService = Depends(get_docker_service)) -> dict:
+    from ..image_readiness import transform_preflight
+    try:
+        store.get(project_id)
+    except ProjectNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Project not found") from exc
+    transform = next((item for item in _graph_transforms(settings, store.project_dir(project_id)) if item.id == transform_id), None)
+    if not transform: raise HTTPException(status_code=404, detail="Transform not found")
+    return transform_preflight(transform, docker_service)
+
+
 @router.post("/projects/{project_id}/transforms", response_model=TransformJob, status_code=202, tags=["network"])
 def start_graph_transform(project_id: str, payload: TransformStart, store: ProjectStore = Depends(get_project_store), settings: Settings = Depends(get_settings), docker_operations: DockerOperationManager = Depends(get_docker_operation_manager), docker_service: DockerService = Depends(get_docker_service), repositories: LegacyRepositoryFactory = Depends(get_repository_factory)) -> TransformJob:
     try:
@@ -611,6 +623,8 @@ def start_graph_transform(project_id: str, payload: TransformStart, store: Proje
             raise HTTPException(status_code=422, detail="Transform input types do not match the selected entities")
         if transform.requires_approval and not payload.approved:
             raise HTTPException(status_code=409, detail="This transform requires explicit approval")
+        from ..image_readiness import transform_preflight, require_ready
+        require_ready(transform_preflight(transform, docker_service))
         job_id = secrets.token_hex(12)
         params = dict(payload.parameters)
         if payload.source_job_id:
@@ -746,6 +760,8 @@ def resume_graph_transform(project_id: str, job_id: str, payload: TransformResum
         for parameter in ("domain", "host", "url", "endpoint"):
             params.setdefault(parameter, _transform_seed(selected[0], parameter))
         output_dir = project_dir / ".awe-transform-runs" / job_id
+        from ..image_readiness import transform_preflight, require_ready
+        require_ready(transform_preflight(transform, docker_service))
         try:
             docker_operations.validate_checkpoint(output_dir, transform.tool_key, [stage.model_dump() for stage in transform.stages], params)
             if job.operation_id:

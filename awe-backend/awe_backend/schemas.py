@@ -598,6 +598,9 @@ class DockerTool(ToolExecutionOptions):
     param_specs: list[dict] = Field(default_factory=list)
     source: str = "hub"
     image_present: bool = False
+    update_status: Literal["unchecked", "unknown", "current", "outdated"] = "unchecked"
+    update_message: str = "Not checked for updates."
+    update_checked_at: str = ""
     is_custom: bool = False
     status: str = "ok"
     command_template: str = ""
