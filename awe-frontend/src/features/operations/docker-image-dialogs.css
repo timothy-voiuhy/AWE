@@ -1,0 +1,21 @@
+.docker-image-dialog { width: min(560px, calc(100vw - 24px)); max-height: calc(100dvh - 32px); padding: 0; overflow-y: auto; color: #cdd6f4; background: #181825; border: 1px solid #45475a; border-radius: 10px; }
+.docker-image-dialog::backdrop { background: #000a; }
+.docker-inline-build-dialog { width: min(720px, calc(100vw - 24px)); }
+.docker-image-dialog > header { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; padding: 18px 20px; border-bottom: 1px solid #313244; }
+.docker-image-dialog header b { font-size: 16px; }
+.docker-image-dialog header p { margin: 7px 0 0; color: #a6adc8; font-size: 12px; line-height: 1.6; }
+.docker-image-dialog > form { display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; padding: 20px; }
+.docker-image-dialog label { min-width: 0; }
+.docker-image-dialog input, .docker-image-dialog textarea { font-size: 12px; }
+.docker-image-dialog textarea { min-height: 220px; border: 1px solid #45475a; border-radius: 6px; }
+.docker-image-dialog footer { display: flex; justify-content: flex-end; gap: 8px; }
+.docker-image-dialog button { font-size: 12px; }
+.docker-image-dialog .error, .docker-image-dialog .success { margin: 0; font-size: 12px; overflow-wrap: anywhere; }
+.docker-inline-build-output { min-width: 0; font-size: 12px; }
+.docker-inline-build-output summary { color: #a6adc8; cursor: pointer; }
+.docker-inline-build-output pre { max-height: 240px; margin: 10px 0 0; padding: 12px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; background: #0d0d15; border-radius: 6px; font: 11px/1.6 ui-monospace, monospace; }
+.docker-installed-images { margin-top: 18px; }
+.docker-installed-images > header { display: grid; gap: 7px; margin-bottom: 14px; }
+.docker-installed-images > header b { font-size: 14px; }
+.docker-installed-images > header p { margin: 0; color: #7f849c; font-size: 12px; line-height: 1.6; }
+@media (max-width: 480px) { .docker-image-dialog > header, .docker-image-dialog > form { padding: 14px; } }
