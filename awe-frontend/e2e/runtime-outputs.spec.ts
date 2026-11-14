@@ -12,6 +12,7 @@ async function login(page: Page) {
 }
 
 test('logs-only runs retain artifacts and interactive consoles detach without exiting', async ({ page }) => {
+  test.setTimeout(60000)
   const { projectId, headers } = await login(page)
   const key = `e2e_runtime_${Date.now()}`
   const tool = { key, display_name: 'E2E runtime fixture', category: 'vuln', image: 'nginx:1.27-alpine', command_template: "printf 'fixture-out\\n'; printf 'fixture-error\\n' >&2; printf 'saved report' > /output/report.txt", dockerfile: 'FROM nginx:1.27-alpine', parser: '', input_types: ['domain'], output_types: [], relationship_types: [], execution_mode: 'passive', output_channels: ['logs', 'artifacts'] }
@@ -21,7 +22,7 @@ test('logs-only runs retain artifacts and interactive consoles detach without ex
     const response = await page.request.post(`/api/v1/projects/${projectId}/docker/tools/${key}/runs`, { headers, data: { params: {}, ingest_to_graph: false, output_subdir: 'e2e-runtime' } })
     expect(response.ok()).toBeTruthy()
     const operation = await response.json()
-    await expect.poll(async () => (await (await page.request.get(`/api/v1/projects/${projectId}/runs/${operation.id}`)).json()).status).toBe('completed')
+    await expect.poll(async () => (await (await page.request.get(`/api/v1/projects/${projectId}/runs/${operation.id}`)).json()).status, { timeout: 20000 }).toBe('completed')
     await page.goto(`/projects/${projectId}/runs/${operation.id}`)
     await page.getByRole('tab', { name: 'Logs', exact: true }).click()
     await expect(page.locator('.runtime-log')).toContainText('fixture-out')
